@@ -55,6 +55,7 @@ const SEED=[
 ];
 
 const REJECTABLE=["fitAppr","artAppr","soAppr","labAppr","ppAppr"]; // approval stages that can be rejected
+const APPR_OF_SEND={ fitSend:"fitAppr", artwork:"artAppr", strikeOff:"soAppr", labDip:"labAppr", ppSample:"ppAppr" }; // send/make stage -> the approval that can reject it
 const applicableStages=(s)=> STAGES.filter(st=> st.flag===null || s[st.flag]);
 
 function computeStyle(s){
@@ -67,11 +68,11 @@ function computeStyle(s){
     let p;
     if(st.cutoff){ const base=s.labDipReq?(eff["labAppr"]||eff["labDip"]||ordRec):ordRec; p=s.labDipReq?new Date(Math.max(addWorkdays(base,15)?.getTime()||0, cutoff.getTime())):cutoff; }
     else { let predEff; if(st.key==="prodFile") predEff = s.ppBypass ? eff["fabricIH"] : eff["ppAppr"]; else predEff = st.pred==="__ord"?ordRec:eff[st.pred]; p=addWorkdays(predEff||ordRec, st.lead); }
-    const rj=rejOf(st.key);
-    if(rj && REJECTABLE.includes(st.key) && !actualOf(st.key) && !revOf(st.key)) p=addWorkdays(rj, st.lead); // rejected: rework buffer pushes plan out, cascades downstream
-    plan[st.key]=p; eff[st.key]=actualOf(st.key)||revOf(st.key)||p;
+    const apprK=APPR_OF_SEND[st.key]; const inRework = !!(apprK && rejOf(apprK) && !actualOf(apprK));
+    if(inRework){ p=addWorkdays(rejOf(apprK), st.lead); plan[st.key]=p; eff[st.key]=revOf(st.key)||p; } // redo send from rejection date; approval cascades off this
+    else { plan[st.key]=p; eff[st.key]=actualOf(st.key)||revOf(st.key)||p; }
   });
-  const stages=applicableStages(s).map(st=>({ ...st, actual:actualOf(st.key), rev:revOf(st.key), reject:rejOf(st.key), rejected: REJECTABLE.includes(st.key)&&!!rejOf(st.key)&&!actualOf(st.key), plan:plan[st.key], done:!!actualOf(st.key) }));
+  const stages=applicableStages(s).map(st=>{ const apprK=APPR_OF_SEND[st.key]; const rework=!!(apprK&&rejOf(apprK)&&!actualOf(apprK)); const rejected=REJECTABLE.includes(st.key)&&!!rejOf(st.key)&&!actualOf(st.key); return { ...st, actual:actualOf(st.key), rev:revOf(st.key), reject: rework?rejOf(apprK):(rejected?rejOf(st.key):null), rework, rejected, plan:plan[st.key], done: rework?false:!!actualOf(st.key) }; });
   let nextPending=null, lastActual=null;
   stages.forEach(r=>{ if(r.actual&&(!lastActual||r.actual>lastActual)) lastActual=r.actual; if(!r.done&&!nextPending) nextPending=r; });
   const released=stages.every(r=>r.done);
@@ -495,16 +496,22 @@ export default function App(){
                   const k=cellKey(s.id,st.key);
                   if(!applies){ const bg=bgFor(s.id,st.key,"#f3f1ec"); return <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} style={{ border:"1px solid #ddd", background:bg, color:"#ccc", textAlign:"center", padding:"6px 9px", boxShadow:ringFor(s.id,st.key), position:"relative", overflow:"hidden" }}>—<NoteTri k={k}/></td>; }
                   const hasRev=cs&&cs.rev&&!cs.done;
-                  const bg=bgFor(s.id,st.key,cs&&cs.rejected?"#fcecea":(isNext?"#fff7ec":"#fff"));
+                  const bg=bgFor(s.id,st.key,(cs&&(cs.rework||cs.rejected))?"#fcecea":(isNext?"#fff7ec":"#fff"));
                   return (
                     <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} onDoubleClick={(e)=>{ e.stopPropagation(); if(editable) beginDate(s.id,st.key,"actual"); }}
                       style={{ border:"1px solid #ddd", padding:0, position:"relative", overflow:(editing&&editing.id===s.id&&editing.col===st.key)?"visible":"hidden", background:bg, boxShadow:ringFor(s.id,st.key)||(isNext?"inset 0 0 0 2px #d97706":null), cursor:editable?"cell":"default" }}>
                       <div style={{ minHeight:38, padding:"4px 8px", fontSize:11, color:cs.actual?"#1a1a1a":"#bbb" }}>
-                        {cs.actual ? (<span style={{ display:"flex", alignItems:"center", gap:4 }}><Check size={11} color={OWNER_COLOR[st.owner]}/>{fmt(cs.actual)}</span>) : cs.rejected ? (
+                        {cs.rework ? (
                           <span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}>
-                            <span style={{ fontSize:9, color:"#b03020", fontWeight:700, display:"flex", alignItems:"center", gap:3 }}><X size={9}/>REWORK</span>
+                            <span style={{ fontSize:9, color:"#b03020", fontWeight:700, display:"flex", alignItems:"center", gap:3 }}><X size={9}/>REDO &amp; RESEND</span>
                             <span style={{ fontSize:9, color:"#b03020" }}>rej {fmt(cs.reject)}</span>
                             <span style={{ fontSize:9, color:"#7a560f" }}>{hasRev?"→ rev ":"→ "}{fmt(cs.rev||cs.plan)}</span>
+                          </span>
+                        ) : cs.actual ? (<span style={{ display:"flex", alignItems:"center", gap:4 }}><Check size={11} color={OWNER_COLOR[st.owner]}/>{fmt(cs.actual)}</span>) : cs.rejected ? (
+                          <span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}>
+                            <span style={{ fontSize:9, color:"#b03020", fontWeight:700, display:"flex", alignItems:"center", gap:3 }}><X size={9}/>REJECTED</span>
+                            <span style={{ fontSize:9, color:"#b03020" }}>rej {fmt(cs.reject)}</span>
+                            <span style={{ fontSize:9, color:"#7a560f" }}>re-appr → {fmt(cs.rev||cs.plan)}</span>
                           </span>
                         ) : (
                           <span style={{ display:"flex", flexDirection:"column", lineHeight:1.2 }}>
@@ -513,8 +520,8 @@ export default function App(){
                           </span>
                         )}
                       </div>
-                      {editable && !cs.actual && (<button title="set revised plan date" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"rev"); }} style={{ position:"absolute", top:1, right:1, border:"none", background:"transparent", cursor:"pointer", padding:1, lineHeight:0 }}><RotateCcw size={10} color="#6d4aab"/></button>)}
-                      {editable && !cs.actual && REJECTABLE.includes(st.key) && (<button title="mark REJECTED (log rejection date)" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"reject"); }} style={{ position:"absolute", top:1, right:16, border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:0, color:"#b03020", fontSize:11, fontWeight:800 }}>✕</button>)}
+                      {editable && !cs.actual && (<button title="set revised plan date" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"rev"); }} style={{ position:"absolute", top:3, right:3, border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:1, display:"flex" }}><RotateCcw size={11} color="#6d4aab"/></button>)}
+                      {editable && !cs.actual && REJECTABLE.includes(st.key) && (<button title="mark REJECTED (log rejection date)" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"reject"); }} style={{ position:"absolute", top:3, right:20, border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:1, display:"flex" }}><X size={11} color="#b03020"/></button>)}
                       {editing&&editing.id===s.id&&editing.col===st.key&&editable && dateEditor(s.id,st.key,editing.mode)}
                       <NoteTri k={k}/><FillHandle id={s.id} col={st.key}/>
                     </td>
