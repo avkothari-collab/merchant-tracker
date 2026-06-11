@@ -6,6 +6,7 @@ import { supabase } from "./supabaseClient";
 
 const FONT = `@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;800&family=JetBrains+Mono:wght@400;500;700&display=swap');`;
 const REL_GATE_DAYS = 30, FABRIC_CUTOFF_DAYS = 35, STYLE_W = 190;
+const UPCOMING_DEFAULT = { fitSend:4, artwork:2, strikeOff:3, ppSample:4, fabricIH:15 }; // working days before a stage that it becomes "upcoming" in the To-Do list
 
 const STAGES = [
   { key:"techpack",  label:"Techpack",     lead:3, owner:"Merchant", flag:null, pred:"__ord" },
@@ -23,6 +24,7 @@ const STAGES = [
   { key:"prodFile",  label:"Prod File",    lead:3, owner:"Merchant", flag:null, pred:"ppAppr" },
 ];
 const STAGE_KEYS = STAGES.map(s=>s.key);
+const DEFAULT_CFG = { leads:Object.fromEntries(STAGES.map(s=>[s.key,s.lead])), rework:{...{ fitSend:4, artwork:2, strikeOff:3, labDip:7, ppSample:4 }}, fabricCutoff:FABRIC_CUTOFF_DAYS, relGate:REL_GATE_DAYS, upcoming:{...UPCOMING_DEFAULT} };
 const OWNER_COLOR = { Merchant:"#1f6f54", CAD:"#2563a6", Buyer:"#b4531a", Designer:"#6d4aab", Mill:"#7a5a1e", Tamal:"#1f6f54", Rina:"#6d4aab" };
 
 const ONE_DAY = 86400000;
@@ -59,19 +61,20 @@ const APPR_OF_SEND={ fitSend:"fitAppr", artwork:"artAppr", strikeOff:"soAppr", l
 const REWORK_DAYS={ fitSend:4, artwork:2, strikeOff:3, labDip:7, ppSample:4 }; // working days added on rejection (redo+resend)
 const applicableStages=(s)=> STAGES.filter(st=> st.flag===null || s[st.flag]);
 
-function computeStyle(s){
+function computeStyle(s, cfg){
   const ordRec=parse(s.ordRec), delivery=parse(s.delivery);
-  const cutoff=addWorkdays(delivery,-FABRIC_CUTOFF_DAYS);
+  const leadOf=(st)=>{ const v=cfg&&cfg.leads&&cfg.leads[st.key]; return v==null?st.lead:v; }; const rwOf=(st)=>{ const v=cfg&&cfg.rework&&cfg.rework[st.key]; return v==null?(REWORK_DAYS[st.key]||st.lead):v; }; const CUTD=(cfg&&cfg.fabricCutoff!=null)?cfg.fabricCutoff:FABRIC_CUTOFF_DAYS; const GATED=(cfg&&cfg.relGate!=null)?cfg.relGate:REL_GATE_DAYS;
+  const cutoff=addWorkdays(delivery,-CUTD);
   const eff={}, plan={};
   const applies=(k)=>{ const st=STAGES.find(x=>x.key===k); return st.flag===null||s[st.flag]; };
   const actualOf=(k)=>parse(s.actuals[k]); const revOf=(k)=>parse(s.revs?.[k]); const rejOf=(k)=>parse(s.rejects?.[k]);
   STAGES.forEach(st=>{
     let p;
     if(st.cutoff){ const base=s.labDipReq?(eff["labAppr"]||eff["labDip"]||ordRec):ordRec; p=s.labDipReq?new Date(Math.max(addWorkdays(base,15)?.getTime()||0, cutoff.getTime())):cutoff; }
-    else { let predEff; if(st.key==="prodFile") predEff = s.ppBypass ? eff["fabricIH"] : eff["ppAppr"]; else predEff = st.pred==="__ord"?ordRec:eff[st.pred]; if((st.key==="ppSample"||st.key==="prodFile") && s.fitReq && eff["fitAppr"]) predEff = new Date(Math.max((predEff&&predEff.getTime())||0, eff["fitAppr"].getTime())); p=addWorkdays(predEff||ordRec, st.lead); }
+    else { let predEff; if(st.key==="prodFile") predEff = s.ppBypass ? eff["fabricIH"] : eff["ppAppr"]; else predEff = st.pred==="__ord"?ordRec:eff[st.pred]; if((st.key==="ppSample"||st.key==="prodFile") && s.fitReq && eff["fitAppr"]) predEff = new Date(Math.max((predEff&&predEff.getTime())||0, eff["fitAppr"].getTime())); p=addWorkdays(predEff||ordRec, leadOf(st)); }
     const apprK=APPR_OF_SEND[st.key]; const rejAppr = !!(apprK && rejOf(apprK) && !actualOf(apprK));
     const selfRej = REJECTABLE.includes(st.key) && rejOf(st.key) && !actualOf(st.key);
-    if(rejAppr){ const rjd=rejOf(apprK); const auto=addWorkdays(rjd, REWORK_DAYS[st.key]||st.lead); const a=actualOf(st.key); const rv=revOf(st.key); plan[st.key]=auto;
+    if(rejAppr){ const rjd=rejOf(apprK); const auto=addWorkdays(rjd, rwOf(st)); const a=actualOf(st.key); const rv=revOf(st.key); plan[st.key]=auto;
       if(a && a>=rjd) eff[st.key]=a; else if(rv && rv>=rjd) eff[st.key]=rv; else eff[st.key]=auto; } // redo: re-sent actual wins, else fresh revised, else rejection+rework days
     else if(selfRej){ const rjd=rejOf(st.key); const rv=revOf(st.key); plan[st.key]=p; eff[st.key]=(rv && rv>=rjd)?rv:p; } // rejected approval cascades off redone send
     else { plan[st.key]=p; eff[st.key]=actualOf(st.key)||revOf(st.key)||p; }
@@ -105,18 +108,19 @@ function computeStyle(s){
   let prodFileBranch;
   { const pfA=actualOf("prodFile"); const pfP=eff["prodFile"]; const pfDue=pfP?`due ${fmt(pfP)}`:"";
     if(pfA){ prodFileBranch=bs(`Released ${fmt(pfA)}`,"ok"); }
-    else { const prodGate=addWorkdays(delivery,-FABRIC_CUTOFF_DAYS); const overdue=pfP&&pfP<TODAY; const pastGate=pfP&&prodGate&&pfP>prodGate; const tn=(overdue||pastGate)?"late":"warn";
+    else { const prodGate=addWorkdays(delivery,-CUTD); const overdue=pfP&&pfP<TODAY; const pastGate=pfP&&prodGate&&pfP>prodGate; const tn=(overdue||pastGate)?"late":"warn";
       if(s.ppBypass){ const ready=fabricInHouse||done("fabricIH"); prodFileBranch=ready?bs(`Bypass · ready ${pfDue}`,tn):bs(`Bypass · awaiting fabric`,tn); }
       else { const ready=done("ppAppr"); prodFileBranch=ready?bs(`Ready ${pfDue}`,tn):bs(`Awaiting PP appr`,tn); } } }
   let fabricCountdown;
   if(fabricInHouse) fabricCountdown={txt:"in-house",n:9e9,tone:"ok"}; else if(fabPlan){ const n=netWorkdays(TODAY,fabPlan); fabricCountdown={txt:n<0?`${-n}d over`:`${n}d`,n,tone:n<0?"late":n<=7?"warn":"ok"}; } else fabricCountdown={txt:"—",n:null,tone:"na"};
-  const releaseGate=addWorkdays(delivery,-REL_GATE_DAYS);
+  const releaseGate=addWorkdays(delivery,-GATED);
   let projRelease;
   if(released) projRelease=lastActual;
-  else { let cur=eff["fabricIH"]; const chain = s.ppBypass ? ["prodFile"] : ["ppSample","ppAppr","prodFile"]; chain.forEach(k=>{ if(!applies(k)) return; const a=actualOf(k), r=revOf(k); const st=STAGES.find(x=>x.key===k); if(a) cur=a; else if(r) cur=r; else cur=addWorkdays(cur,st.lead); }); projRelease=cur; }
+  else { let cur=eff["fabricIH"]; const chain = s.ppBypass ? ["prodFile"] : ["ppSample","ppAppr","prodFile"]; chain.forEach(k=>{ if(!applies(k)) return; const a=actualOf(k), r=revOf(k); const st=STAGES.find(x=>x.key===k); if(a) cur=a; else if(r) cur=r; else cur=addWorkdays(cur,leadOf(st)); }); projRelease=cur; }
   const gateGap=projRelease&&releaseGate?Math.round((releaseGate-projRelease)/ONE_DAY):null;
   const releaseOnTrack=projRelease&&releaseGate?projRelease<=releaseGate:true;
   const projTone=released?"done":(!releaseOnTrack?"late":(gateGap!=null&&gateGap<=5?"warn":"ok"));
+  if(!released){ if(!releaseOnTrack){ if(!String(status).startsWith("Overdue")) status="Delivery risk"; tone="late"; } else if(tone==="ok" && gateGap!=null && gateGap<=5){ status=`Tight · ${gateGap}d`; tone="warn"; } }
   const total=stages.length, doneCount=stages.filter(r=>r.done).length;
   const pct=total?Math.round((doneCount/total)*100):0;
   const ownerToChase=released?"—":nextPending.owner;
@@ -127,7 +131,8 @@ function computeStyle(s){
   const chaseCount={};
   if(!released) STAGES.forEach(st=>{ if(appl(st.key)&&!done(st.key)&&predDone(st)) chaseCount[st.owner]=(chaseCount[st.owner]||0)+1; });
   const chaseOwners=Object.entries(chaseCount).map(([owner,count])=>({owner,count}));
-  const frontier=new Set(); Object.values(BRANCH_STAGES).forEach(keys=>{ const nx=keys.find(k=>applies(k)&&!done(k)); if(nx) frontier.add(nx); });
+  const frontierReady=(k)=>{ if(k==="ppSample") return fabricInHouse && (!s.fitReq || done("fitAppr")); if(k==="prodFile"){ const base = s.ppBypass ? fabricInHouse : done("ppAppr"); return base && (!s.fitReq || done("fitAppr")); } return true; };
+  const frontier=new Set(); Object.values(BRANCH_STAGES).forEach(keys=>{ const nx=keys.find(k=>applies(k)&&!done(k)); if(nx && frontierReady(nx)) frontier.add(nx); });
   return { stages, frontier, nextPending, lastActual, lastActualKey, status, tone, idle, float, released, fitBranch, printBranch, fabricBranch, ppBranch, prodFileBranch, fabricCountdown, projRelease, projTone, releaseGate, releaseOnTrack, pct, ownerToChase, chaseOwners };
 }
 
@@ -221,6 +226,8 @@ export default function App(){
   const [noteText,setNoteText]=useState("");
   const [clip,setClip]=useState(null);     // {values:2D,h,w}
   const [showAux,setShowAux]=useState(false); // toggle: reveal underlying auto/plan + revised dates in cells
+  const [cfg,setCfg]=useState(DEFAULT_CFG); // editable calculation numbers (Settings tab)
+  const [tab,setTab]=useState("tracker"); // tracker | dashboard | todo | settings
   const [colFilters,setColFilters]=useState({}); // col -> array of allowed display values
   const [filterCol,setFilterCol]=useState(null); // which header filter is open
   const [past,setPast]=useState([]); const [future,setFuture]=useState([]);
@@ -252,6 +259,7 @@ export default function App(){
     appStyles.forEach(s=>{ SR.sty[s.id]=JSON.stringify(styleToRow(s)); STAGE_KEYS.forEach(k=>{ SR.stg[s.id+":"+k]=JSON.stringify({ style_id:s.id, stage:k, revised_date:(s.revs&&s.revs[k])||null, actual_date:s.actuals[k]||null, reject_date:(s.rejects&&s.rejects[k])||null }); }); });
     (cmRes.data||[]).forEach(r=>{ if(r.fill||r.note) SR.meta[r.style_id+":"+r.col]=JSON.stringify({ style_id:r.style_id, col:r.col, fill:r.fill||null, note:r.note||null }); });
     savedRef.current=SR;
+    try{ const cfgRes=await supabase.from("app_settings").select("data").eq("id","global").maybeSingle(); if(cfgRes&&cfgRes.data&&cfgRes.data.data){ const d=cfgRes.data.data; setCfg({ ...DEFAULT_CFG, ...d, leads:{...DEFAULT_CFG.leads,...(d.leads||{})}, rework:{...DEFAULT_CFG.rework,...(d.rework||{})}, upcoming:{...DEFAULT_CFG.upcoming,...(d.upcoming||{})} }); } }catch(e){ /* settings table optional */ }
     const f={}, n={}; (cmRes.data||[]).forEach(r=>{ if(r.fill) f[`${r.style_id}:${r.col}`]=r.fill; if(r.note) n[`${r.style_id}:${r.col}`]=r.note; });
     setFills(f); setNotes(n); loadedRef.current=true; flash();
   }catch(e){ console.error("load failed",e); } };
@@ -276,6 +284,7 @@ export default function App(){
   }catch(e){ console.error("save failed",e); setSaveState("error"); } },700); return ()=>clearTimeout(t); },[styles,fills,notes]);
 
   const [saveState,setSaveState]=useState("idle"); // idle | saving | saved | error
+  useEffect(()=>{ if(!loadedRef.current) return; const t=setTimeout(()=>{ supabase.from("app_settings").upsert({ id:"global", data:cfg }).then(()=>{}).catch(()=>{}); },600); return ()=>clearTimeout(t); },[cfg]);
   const [remoteChanged,setRemoteChanged]=useState(false); // another user wrote data
   const flash=()=>{ setSaved(true); clearTimeout(savedTimer.current); savedTimer.current=setTimeout(()=>setSaved(false),1200); };
   const setField=(id,field,val)=>{ pushHistory(); setStyles(prev=>prev.map(s=>{ if(s.id!==id) return s; if(STAGE_KEYS.includes(field)) return { ...s, actuals:{ ...s.actuals, [field]: val||undefined } }; if(field==="qty") return { ...s, qty:Number(val)||0 }; return { ...s, [field]:val }; })); flash(); };
@@ -284,7 +293,8 @@ export default function App(){
   const toggleFlag=(id,flag)=>{ pushHistory(); setStyles(prev=>prev.map(s=>s.id===id?{...s,[flag]:!s[flag]}:s)); flash(); };
   const deleteStyle=async(id)=>{ if(!window.confirm("Delete this style row? This removes it for everyone and cannot be undone.")) return; pushHistory(); setStyles(prev=>prev.filter(s=>s.id!==id)); flash(); try{ await supabase.from("stage_dates").delete().eq("style_id",id); await supabase.from("cell_meta").delete().eq("style_id",id); await supabase.from("styles").delete().eq("id",id); }catch(e){ console.error("delete failed",e); } };
 
-  const computed=useMemo(()=>styles.map(s=>({s,c:computeStyle(s)})),[styles]);
+  const computed=useMemo(()=>styles.map(s=>({s,c:computeStyle(s,cfg)})),[styles,cfg]);
+  const todoItems=useMemo(()=>{ const out=[]; const fabByCol={}; computed.forEach(({s,c})=>{ if(c.released) return; Object.entries(cfg.upcoming||{}).forEach(([key,win])=>{ const r=(c.stages||[]).find(x=>x.key===key); if(!r||r.done) return; const exp=r.rev||r.plan; if(!exp) return; const du=netWorkdays(TODAY,exp); const overdue=TODAY>exp; if(!(overdue||du<=win)) return; if(key==="fabricIH"){ const cols=String(s.colour||"").split(/[,/]/).map(x=>x.trim()).filter(Boolean); (cols.length?cols:["(no colour)"]).forEach(col=>{ let cur=fabByCol[col]; if(!cur){ cur=fabByCol[col]={ colour:col, key, label:r.label, owner:r.owner, exp, du, overdue, anyStyle:s.id, count:0 }; } cur.count++; if(exp<cur.exp){ cur.exp=exp; cur.du=du; cur.overdue=overdue; cur.anyStyle=s.id; } }); } else { out.push({ id:s.id, styleNo:s.styleNo, colour:s.colour, key, label:r.label, owner:r.owner, exp, du, overdue }); } }); }); Object.values(fabByCol).forEach(f=> out.push({ id:f.anyStyle, styleNo:f.colour, colour:f.colour, key:f.key, label:f.label, owner:f.owner, exp:f.exp, du:f.du, overdue:f.overdue, isColour:true, count:f.count })); out.sort((a,b)=> (a.overdue!==b.overdue)?(a.overdue?-1:1):((a.exp&&b.exp)?(a.exp-b.exp):0)); return out; },[computed,cfg]);
   const valueFor=(s,cc,col)=>{
     if(col==="__style") return s.styleNo||"";
     if(["orderNo","sampleFit","family","colour","owner","setId","setRole","remarks"].includes(col)) return s[col]||"(Blanks)";
@@ -301,7 +311,8 @@ export default function App(){
     if(STAGE_KEYS.includes(col)){ const a=s.actuals[col]; return a?fmt(parse(a)):"(Blanks)"; }
     return "";
   };
-  const filtered=computed.filter(({s,c})=>{ const q=search.toLowerCase(); const ownerMatch=(c.chaseOwners||[]).some(o=>o.owner.toLowerCase().includes(q)); const matchQ=!q||s.styleNo.toLowerCase().includes(q)||s.colour.toLowerCase().includes(q)||s.family.toLowerCase().includes(q)||s.sampleFit.toLowerCase().includes(q)||s.orderNo.toLowerCase().includes(q)||ownerMatch; const matchS=statusFilter==="All"||(statusFilter==="At Risk"&&(c.tone==="late"||c.tone==="warn"))||(statusFilter==="On Track"&&c.tone==="ok")||(statusFilter==="Released"&&c.released); const matchF=Object.entries(colFilters).every(([col,allowed])=> !allowed || allowed.length===0 || allowed.includes(valueFor(s,c,col))); return matchQ&&matchS&&matchF; });
+  const passCol=(s,c,col,allowed)=>{ if(!allowed||allowed.length===0) return true; if(col==="chase"){ const owners=(c.chaseOwners||[]).map(o=>o.owner); if(owners.length===0) return allowed.includes("(Blanks)"); return owners.some(o=>allowed.includes(o)); } return allowed.includes(valueFor(s,c,col)); };
+  const filtered=computed.filter(({s,c})=>{ const q=search.toLowerCase(); const ownerMatch=(c.chaseOwners||[]).some(o=>o.owner.toLowerCase().includes(q)); const matchQ=!q||s.styleNo.toLowerCase().includes(q)||s.colour.toLowerCase().includes(q)||s.family.toLowerCase().includes(q)||s.sampleFit.toLowerCase().includes(q)||s.orderNo.toLowerCase().includes(q)||ownerMatch; const matchS=statusFilter==="All"||(statusFilter==="At Risk"&&(c.tone==="late"||c.tone==="warn"))||(statusFilter==="On Track"&&c.tone==="ok")||(statusFilter==="Released"&&c.released); const matchF=Object.entries(colFilters).every(([col,allowed])=> passCol(s,c,col,allowed)); return matchQ&&matchS&&matchF; });
   const toneRank={ late:0, warn:1, ok:2, done:3, na:4 };
   const fitNum=(s)=>{ const m=String(s.sampleFit).match(/\d+/); return m?Number(m[0]):Infinity; };
   const sortVal=(col,{s,c})=>{ switch(col){ case "__style": return s.styleNo.toLowerCase(); case "orderNo": return (s.orderNo||"~").toLowerCase(); case "sampleFit": return fitNum(s); case "family": return s.family.toLowerCase(); case "colour": return s.colour.toLowerCase(); case "owner": return (s.owner||"").toLowerCase(); case "setId": return (s.setId||"~").toLowerCase(); case "setRole": return (s.setRole||"").toLowerCase(); case "qty": return s.qty; case "ordRec": return s.ordRec?new Date(s.ordRec).getTime():Infinity; case "delivery": return s.delivery?new Date(s.delivery).getTime():Infinity; case "overall": return toneRank[c.tone]; case "fit": return toneRank[c.fitBranch.tone]; case "print": return toneRank[c.printBranch.tone]; case "fabric": return toneRank[c.fabricBranch.tone]; case "pp": return toneRank[c.ppBranch.tone]; case "prod": return toneRank[c.prodFileBranch.tone]; case "fabricCD": return c.fabricCountdown.n==null?Infinity:c.fabricCountdown.n; case "proj": return c.projRelease?c.projRelease.getTime():Infinity; case "pct": return c.pct; case "chase": return (c.chaseOwners||[]).length; case "float": return c.float==null?Infinity:c.float; case "idle": return c.idle==null?-1:c.idle; case "remarks": return (s.remarks||"~").toLowerCase(); default: { const a=s.actuals[col]; return a?new Date(a).getTime():Infinity; } } };
@@ -390,7 +401,7 @@ export default function App(){
   const saveNote=()=>{ if(!sel) return; pushHistory(); setNotes(p=>{ const n={...p}; const k=cellKey(sel.id,sel.col); if(noteText.trim()==="") delete n[k]; else n[k]=noteText.trim(); return n; }); setNoteEditing(false); setNoteText(""); flash(); };
   const beginNote=()=>{ if(!sel) return; setNoteText(notes[cellKey(sel.id,sel.col)]||""); setNoteEditing(true); };
 
-  const distinctFor=(col)=>{ const set=new Set(); computed.forEach(({s,c})=>{ const passOthers=Object.entries(colFilters).every(([cc,allowed])=> cc===col || !allowed || allowed.length===0 || allowed.includes(valueFor(s,c,cc))); if(passOthers) set.add(valueFor(s,c,col)); }); return [...set].sort((a,b)=> a==="(Blanks)"?1:b==="(Blanks)"?-1:(a>b?1:a<b?-1:0)); };
+  const distinctFor=(col)=>{ const set=new Set(); computed.forEach(({s,c})=>{ const passOthers=Object.entries(colFilters).every(([cc,allowed])=> cc===col || passCol(s,c,cc,allowed)); if(!passOthers) return; if(col==="chase"){ const owners=(c.chaseOwners||[]).map(o=>o.owner); if(owners.length===0) set.add("(Blanks)"); else owners.forEach(o=>set.add(o)); } else set.add(valueFor(s,c,col)); }); return [...set].sort((a,b)=> a==="(Blanks)"?1:b==="(Blanks)"?-1:(a>b?1:a<b?-1:0)); };
   const filterProps=(col)=>({ filterActive: !!colFilters[col], filterOpen: filterCol===col, filterValues: filterCol===col?distinctFor(col):null, filterAllowed: colFilters[col]||null,
     onToggleFilter:()=>{ finishEditing(); setFilterCol(p=>p===col?null:col); },
     onSetFilter:(arr)=>setColFilters(f=>{ const n={...f}; if(!arr) delete n[col]; else n[col]=arr; return n; }),
@@ -435,6 +446,11 @@ export default function App(){
         <div style={{ display:"flex", alignItems:"center", gap:14 }}><span style={{ fontSize:11, color: saveState==="error"?"#e8746b":saveState==="saving"?"#d9b46a":saveState==="saved"?"#7fd1a8":"#6a665e" }}>{saveState==="error"?"⚠ save failed":saveState==="saving"?"… saving":saveState==="saved"?"● saved to cloud":"○ connected"}</span><div style={{ display:"flex", border:"1px solid #4a463e" }}>{Object.keys(ROLES).map(r=>(<button key={r} onClick={(e)=>{ e.stopPropagation(); setRole(r); }} style={{ fontFamily:"inherit", fontSize:10, padding:"5px 9px", cursor:"pointer", border:"none", background:role===r?"#d97706":"transparent", color:role===r?"#1a1a1a":"#cfc9bf", fontWeight:role===r?700:400 }}>{ROLES[r].label}</button>))}</div></div>
       </div>
 
+      <div style={{ display:"flex", gap:0, padding:"0 22px", background:"#1a1a1a", borderBottom:"1px solid #3a362e" }}>
+        {[["tracker","Tracker"],["dashboard","Dashboard"],["todo","To-Do"],["settings","Settings"]].map(([k,lab])=>(<button key={k} onClick={(e)=>{ e.stopPropagation(); setTab(k); }} style={{ fontFamily:"'Archivo',sans-serif", fontWeight:700, fontSize:12, letterSpacing:0.3, padding:"9px 16px", cursor:"pointer", border:"none", borderBottom:tab===k?"3px solid #d97706":"3px solid transparent", background:"transparent", color:tab===k?"#f4f0e8":"#9a958c" }}>{lab}{k==="todo"&&todoItems.length?` · ${todoItems.length}`:""}</button>))}
+      </div>
+
+      {tab==="tracker" && (<>
       <div style={{ display:"flex", padding:"12px 22px 0", flexWrap:"wrap" }}>
         {Object.entries(funnel).map(([k,v],i,arr)=>(<div key={k} style={{ flex:1, minWidth:90, background:"#fff", border:"1px solid #1a1a1a", borderRight:i===arr.length-1?"1px solid #1a1a1a":"none", padding:"8px 10px" }}><div style={{ fontSize:22, fontWeight:700, lineHeight:1, fontFamily:"'Archivo',sans-serif", color:k==="Released"?"#1f6f54":k==="Fabric IH"?"#c0392b":"#1a1a1a" }}>{v}</div><div style={{ fontSize:9, color:"#888", marginTop:3, letterSpacing:0.5, textTransform:"uppercase" }}>{k}</div></div>))}
       </div>
@@ -593,6 +609,11 @@ export default function App(){
         <span style={{ display:"flex", alignItems:"center", gap:5 }}><RotateCcw size={11} color="#6d4aab"/> set REVISED plan (incl. Fabric IH) — plans cascade from it</span>
         <span style={{ display:"flex", alignItems:"center", gap:5 }}><span style={{ width:0,height:0, borderTop:"8px solid #c0392b", borderLeft:"8px solid transparent", display:"inline-block" }}/> comment</span>
       </div>
+      </>)}
+
+      {tab==="dashboard" && <DashboardView computed={computed} todoItems={todoItems} drill={(setter)=>{ setter&&setter(); setTab("tracker"); }} setStatusFilter={setStatusFilter} setColFilters={setColFilters} setSearch={setSearch}/>}
+      {tab==="todo" && <TodoView items={todoItems} onJump={(id,key)=>{ setTab("tracker"); requestAnimationFrame(()=>setTimeout(()=>jumpToEnter(id,key),60)); }}/>}
+      {tab==="settings" && <SettingsView cfg={cfg} setCfg={setCfg} canEdit={role!=="Viewer"}/>}
     </div>
   );
 }
@@ -642,3 +663,118 @@ function FillPanel({ count, onApply, onClose }){
 }
 const ndCell={ border:"1px dashed #e8dcc2", padding:"6px 9px", whiteSpace:"nowrap" };
 const ndInput=(w)=>({ border:"none", outline:"none", background:"transparent", fontFamily:"'JetBrains Mono', monospace", fontSize:10, width:w });
+
+/* ========================= DASHBOARD ========================= */
+function DashboardView({ computed, todoItems, drill, setStatusFilter, setColFilters, setSearch }){
+  const total=computed.length;
+  const onTrack=computed.filter(({c})=>c.tone==="ok").length;
+  const atRisk=computed.filter(({c})=>c.tone==="late"||c.tone==="warn").length;
+  const released=computed.filter(({c})=>c.released).length;
+  const delRisk=computed.filter(({c})=>String(c.status).startsWith("Delivery risk")).length;
+  const overdueTodo=todoItems.filter(t=>t.overdue).length;
+  // owner chase load
+  const ownerLoad={}; computed.forEach(({c})=>{ if(c.released) return; (c.chaseOwners||[]).forEach(o=>{ ownerLoad[o.owner]=(ownerLoad[o.owner]||0)+1; }); });
+  const owners=Object.entries(ownerLoad).sort((a,b)=>b[1]-a[1]);
+  const maxOwner=Math.max(1,...owners.map(o=>o[1]));
+  // phase buckets (where the next pending sits)
+  const phase={ "Pre-Fit":0,"Fit / Print":0,"Lab Dip":0,"Fabric IH":0,"PP / Prod":0 };
+  computed.forEach(({c})=>{ if(c.released) return; const k=c.nextPending&&c.nextPending.key; if(k==="techpack") phase["Pre-Fit"]++; else if(["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"].includes(k)) phase["Fit / Print"]++; else if(["labDip","labAppr"].includes(k)) phase["Lab Dip"]++; else if(k==="fabricIH") phase["Fabric IH"]++; else phase["PP / Prod"]++; });
+  const maxPhase=Math.max(1,...Object.values(phase));
+  const card=(label,val,color,onClick)=>(<button onClick={onClick} disabled={!onClick} style={{ flex:1, minWidth:140, textAlign:"left", background:"#fff", border:"1px solid #1a1a1a", padding:"14px 16px", cursor:onClick?"pointer":"default", fontFamily:"inherit" }}><div style={{ fontSize:30, fontWeight:800, fontFamily:"'Archivo',sans-serif", color, lineHeight:1 }}>{val}</div><div style={{ fontSize:10, color:"#888", marginTop:5, letterSpacing:0.5, textTransform:"uppercase" }}>{label}{onClick?" ›":""}</div></button>);
+  const OWNER_COLOR2={ Merchant:"#1f6f54", CAD:"#2563a6", Buyer:"#b4531a", Designer:"#6d4aab", Mill:"#7a5a1e" };
+  return (<div style={{ padding:"18px 22px", maxWidth:1100 }}>
+    <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+      {card("Total styles",total,"#1a1a1a")}
+      {card("On track",onTrack,"#1f6f54",()=>drill(()=>setStatusFilter("On Track")))}
+      {card("At risk",atRisk,"#c0392b",()=>drill(()=>setStatusFilter("At Risk")))}
+      {card("Delivery risk",delRisk,"#c0392b",()=>drill(()=>setColFilters({ overall:["Delivery risk"] })))}
+      {card("Released",released,"#1f6f54",()=>drill(()=>setStatusFilter("Released")))}
+      {card("Overdue to-dos",overdueTodo,"#c0392b")}
+    </div>
+
+    <div style={{ display:"flex", gap:18, flexWrap:"wrap", marginTop:22 }}>
+      <div style={{ flex:1, minWidth:320, background:"#fff", border:"1px solid #1a1a1a", padding:16 }}>
+        <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>WHO TO CHASE — open branches by owner</div>
+        {owners.length===0 ? <div style={{ fontSize:11, color:"#999" }}>Nothing pending.</div> : owners.map(([o,n])=>(
+          <button key={o} onClick={()=>drill(()=>setColFilters({ chase:[o] }))} style={{ display:"flex", alignItems:"center", gap:8, width:"100%", border:"none", background:"transparent", cursor:"pointer", fontFamily:"inherit", padding:"4px 0" }}>
+            <span style={{ width:64, fontSize:11, fontWeight:700, color:OWNER_COLOR2[o]||"#555", textAlign:"left" }}>{o}</span>
+            <span style={{ flex:1, height:16, background:"#f0ece3", position:"relative" }}><span style={{ position:"absolute", left:0, top:0, bottom:0, width:`${(n/maxOwner)*100}%`, background:OWNER_COLOR2[o]||"#888" }}/></span>
+            <span style={{ width:28, textAlign:"right", fontSize:11, fontWeight:700 }}>{n}</span>
+          </button>))}
+        <div style={{ fontSize:9, color:"#aaa", marginTop:8 }}>Click a bar to open those styles in the Tracker.</div>
+      </div>
+
+      <div style={{ flex:1, minWidth:320, background:"#fff", border:"1px solid #1a1a1a", padding:16 }}>
+        <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>WHERE STYLES ARE STUCK — current phase</div>
+        {Object.entries(phase).map(([p,n])=>(
+          <div key={p} style={{ display:"flex", alignItems:"center", gap:8, padding:"4px 0" }}>
+            <span style={{ width:80, fontSize:10, fontWeight:700, color:"#555" }}>{p}</span>
+            <span style={{ flex:1, height:16, background:"#f0ece3", position:"relative" }}><span style={{ position:"absolute", left:0, top:0, bottom:0, width:`${(n/maxPhase)*100}%`, background:p==="Fabric IH"?"#c0392b":"#d97706" }}/></span>
+            <span style={{ width:28, textAlign:"right", fontSize:11, fontWeight:700 }}>{n}</span>
+          </div>))}
+      </div>
+    </div>
+  </div>);
+}
+
+/* ========================= TO-DO ========================= */
+function TodoView({ items, onJump }){
+  const overdue=items.filter(t=>t.overdue), upcoming=items.filter(t=>!t.overdue);
+  const OWNER_COLOR2={ Merchant:"#1f6f54", CAD:"#2563a6", Buyer:"#b4531a", Designer:"#6d4aab", Mill:"#7a5a1e" };
+  const row=(t)=>(<button key={(t.isColour?"col-":"")+t.id+t.key} onClick={()=>onJump(t.id,t.key)} style={{ display:"flex", alignItems:"center", gap:12, width:"100%", textAlign:"left", border:"1px solid #e2ddd2", borderLeft:`4px solid ${t.overdue?"#c0392b":"#d97706"}`, background:t.isColour?"#fbf8f1":"#fff", cursor:"pointer", fontFamily:"inherit", padding:"8px 12px", marginBottom:5 }}>
+    <span style={{ width:150, fontSize:11, fontWeight:700, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{t.isColour?<span style={{ display:"inline-flex", alignItems:"center", gap:6 }}><span style={{ fontSize:8, fontWeight:700, background:"#1a1a1a", color:"#f4f0e8", padding:"1px 4px" }}>FABRIC</span>{t.colour}</span>:t.styleNo}</span>
+    <span style={{ width:90, fontSize:10, fontWeight:700, color:"#444" }}>{t.isColour?`×${t.count} ${t.count>1?"styles":"style"}`:t.label}</span>
+    <span style={{ width:70, fontSize:10, fontWeight:700, color:OWNER_COLOR2[t.owner]||"#666" }}>{t.owner}</span>
+    <span style={{ width:90, fontSize:10, color:"#666" }}>{fmt(t.exp)}</span>
+    <span style={{ flex:1, fontSize:10, fontWeight:700, color:t.overdue?"#c0392b":"#7a560f" }}>{t.overdue?`OVERDUE ${Math.abs(t.du)}d`:`in ${t.du}d`}</span>
+    <span style={{ fontSize:10, color:"#bbb" }}>open ›</span>
+  </button>);
+  return (<div style={{ padding:"18px 22px", maxWidth:900 }}>
+    <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:14, color:"#c0392b", marginBottom:10 }}>OVERDUE · {overdue.length}</div>
+    {overdue.length?overdue.map(row):<div style={{ fontSize:11, color:"#999", marginBottom:14 }}>Nothing overdue. 👍</div>}
+    <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:14, color:"#7a560f", margin:"18px 0 10px" }}>UPCOMING · {upcoming.length}</div>
+    {upcoming.length?upcoming.map(row):<div style={{ fontSize:11, color:"#999" }}>Nothing coming up in the watch windows.</div>}
+    <div style={{ fontSize:9, color:"#aaa", marginTop:14 }}>Watch windows (working days before due) are editable in Settings · click any row to jump to it in the Tracker.</div>
+  </div>);
+}
+
+/* ========================= SETTINGS ========================= */
+function SettingsView({ cfg, setCfg, canEdit }){
+  const num=(v)=> v==null?"":v;
+  const setLead=(k,val)=> setCfg(c=>({ ...c, leads:{ ...c.leads, [k]: val===""?undefined:Math.max(0,Number(val)||0) } }));
+  const setRew=(k,val)=> setCfg(c=>({ ...c, rework:{ ...c.rework, [k]: val===""?undefined:Math.max(0,Number(val)||0) } }));
+  const setUpc=(k,val)=> setCfg(c=>({ ...c, upcoming:{ ...c.upcoming, [k]: val===""?undefined:Math.max(0,Number(val)||0) } }));
+  const setTop=(k,val)=> setCfg(c=>({ ...c, [k]: val===""?undefined:Math.max(0,Number(val)||0) }));
+  const inp=(value,onChange)=>(<input type="number" min="0" disabled={!canEdit} value={num(value)} onChange={e=>onChange(e.target.value)} style={{ width:58, fontFamily:"inherit", fontSize:12, padding:"4px 6px", border:"1px solid #bbb", outline:"none", background:canEdit?"#fff":"#f3f1ec" }}/>);
+  const box={ background:"#fff", border:"1px solid #1a1a1a", padding:16, minWidth:300, flex:1 };
+  const head={ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:4 };
+  const sub={ fontSize:10, color:"#999", marginBottom:12 };
+  const rworkLabels={ fitSend:"Fit (redo & resend)", artwork:"Artwork", strikeOff:"Strike-off", labDip:"Lab Dip", ppSample:"PP Sample" };
+  const upcLabels={ fitSend:"Fit Send", artwork:"Artwork", strikeOff:"Strike-off", ppSample:"PP Sample", fabricIH:"Fabric In-House" };
+  return (<div style={{ padding:"18px 22px", maxWidth:1100 }}>
+    {!canEdit && <div style={{ fontSize:11, color:"#c0392b", marginBottom:12 }}>Viewer role — switch role to edit these numbers.</div>}
+    <div style={{ display:"flex", gap:18, flexWrap:"wrap" }}>
+      <div style={box}>
+        <div style={head}>STAGE LEAD TIMES</div><div style={sub}>Working days each stage takes after its predecessor.</div>
+        {STAGES.map(st=>(<div key={st.key} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"3px 0", fontSize:11 }}><span>{st.label}</span>{inp(cfg.leads[st.key], v=>setLead(st.key,v))}</div>))}
+      </div>
+      <div style={{ display:"flex", flexDirection:"column", gap:18, flex:1, minWidth:300 }}>
+        <div style={box}>
+          <div style={head}>REWORK DAYS (on rejection)</div><div style={sub}>Working days added on a rejection, before re-send.</div>
+          {Object.keys(rworkLabels).map(k=>(<div key={k} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"3px 0", fontSize:11 }}><span>{rworkLabels[k]}</span>{inp(cfg.rework[k], v=>setRew(k,v))}</div>))}
+        </div>
+        <div style={box}>
+          <div style={head}>DELIVERY GATES</div><div style={sub}>Working days before delivery.</div>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"3px 0", fontSize:11 }}><span>Fabric cut-off (Fabric IH by)</span>{inp(cfg.fabricCutoff, v=>setTop("fabricCutoff",v))}</div>
+          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"3px 0", fontSize:11 }}><span>Release gate (prod must start by)</span>{inp(cfg.relGate, v=>setTop("relGate",v))}</div>
+        </div>
+      </div>
+      <div style={box}>
+        <div style={head}>TO-DO WATCH WINDOWS</div><div style={sub}>Working days before due that an activity becomes "upcoming".</div>
+        {Object.keys(upcLabels).map(k=>(<div key={k} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"3px 0", fontSize:11 }}><span>{upcLabels[k]}</span>{inp(cfg.upcoming[k], v=>setUpc(k,v))}</div>))}
+      </div>
+    </div>
+    <button disabled={!canEdit} onClick={()=>setCfg(DEFAULT_CFG)} style={{ marginTop:16, fontFamily:"inherit", fontSize:11, padding:"7px 14px", cursor:canEdit?"pointer":"not-allowed", border:"1px solid #1a1a1a", background:"#fff", opacity:canEdit?1:0.5 }}>Reset to defaults</button>
+    <div style={{ fontSize:9, color:"#aaa", marginTop:10 }}>Changes save automatically and apply to every user's calculations.</div>
+  </div>);
+}
