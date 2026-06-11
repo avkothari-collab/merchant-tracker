@@ -76,9 +76,9 @@ function computeStyle(s){
     else if(selfRej){ const rjd=rejOf(st.key); const rv=revOf(st.key); plan[st.key]=p; eff[st.key]=(rv && rv>=rjd)?rv:p; } // rejected approval cascades off redone send
     else { plan[st.key]=p; eff[st.key]=actualOf(st.key)||revOf(st.key)||p; }
   });
-  const stages=applicableStages(s).map(st=>{ const apprK=APPR_OF_SEND[st.key]; const rejAppr=!!(apprK&&rejOf(apprK)&&!actualOf(apprK)); const a=actualOf(st.key); const rjd_=rejAppr?rejOf(apprK):null; const resent=rejAppr&&a&&a>=rjd_; const rework=rejAppr&&!resent; const rejected=REJECTABLE.includes(st.key)&&!!rejOf(st.key)&&!actualOf(st.key); const rjd=rework?rjd_:(rejected?rejOf(st.key):null); let rv=revOf(st.key); if(rjd&&rv&&rv<rjd) rv=null; return { ...st, actual:a, rev:rv, reject:rjd, rework, rejected, plan:plan[st.key], done: rework?false:!!a }; });
-  let nextPending=null, lastActual=null;
-  stages.forEach(r=>{ if(r.actual&&(!lastActual||r.actual>lastActual)) lastActual=r.actual; if(!r.done&&!nextPending) nextPending=r; });
+  const stages=applicableStages(s).map(st=>{ const apprK=APPR_OF_SEND[st.key]; const apprRej=apprK?rejOf(apprK):null; const selfRejDate=REJECTABLE.includes(st.key)?rejOf(st.key):null; const rejAppr=!!(apprK&&apprRej&&!actualOf(apprK)); const a=actualOf(st.key); const rjd_=rejAppr?apprRej:null; const resent=rejAppr&&a&&a>=rjd_; const rework=rejAppr&&!resent; const rejected=REJECTABLE.includes(st.key)&&!!selfRejDate&&!actualOf(st.key); const rjd=rework?rjd_:(rejected?selfRejDate:null); let rv=revOf(st.key); if(rjd&&rv&&rv<rjd) rv=null; const histReject = a ? ((apprRej&&a>=apprRej)?apprRej:(selfRejDate||null)) : null; return { ...st, actual:a, rev:rv, reject:rjd, histReject, rework, rejected, plan:plan[st.key], done: rework?false:!!a }; });
+  let nextPending=null, lastActual=null, lastActualKey=null;
+  stages.forEach(r=>{ if(r.actual&&(!lastActual||r.actual>lastActual)){ lastActual=r.actual; lastActualKey=r.key; } if(!r.done&&!nextPending) nextPending=r; });
   const released=stages.every(r=>r.done);
   const idle=lastActual?Math.max(0,netWorkdays(lastActual,TODAY)):null;
   const get=(k)=>stages.find(r=>r.key===k); const done=(k)=>!!(get(k)&&get(k).done); const rejected=(k)=>{ const r=get(k); return !!(r&&r.rejected); };
@@ -128,7 +128,7 @@ function computeStyle(s){
   if(!released) STAGES.forEach(st=>{ if(appl(st.key)&&!done(st.key)&&predDone(st)) chaseCount[st.owner]=(chaseCount[st.owner]||0)+1; });
   const chaseOwners=Object.entries(chaseCount).map(([owner,count])=>({owner,count}));
   const frontier=new Set(); Object.values(BRANCH_STAGES).forEach(keys=>{ const nx=keys.find(k=>applies(k)&&!done(k)); if(nx) frontier.add(nx); });
-  return { stages, frontier, nextPending, status, tone, idle, float, released, fitBranch, printBranch, fabricBranch, ppBranch, prodFileBranch, fabricCountdown, projRelease, projTone, releaseGate, releaseOnTrack, pct, ownerToChase, chaseOwners };
+  return { stages, frontier, nextPending, lastActual, lastActualKey, status, tone, idle, float, released, fitBranch, printBranch, fabricBranch, ppBranch, prodFileBranch, fabricCountdown, projRelease, projTone, releaseGate, releaseOnTrack, pct, ownerToChase, chaseOwners };
 }
 
 const ROLES={ Merchant:{label:"Merchant",canEdit:()=>true}, Junior:{label:"Junior",canEdit:(o)=>o==="Merchant"||o==="CAD"}, Viewer:{label:"Viewer (Buyer)",canEdit:()=>false} };
@@ -220,11 +220,13 @@ export default function App(){
   const [noteEditing,setNoteEditing]=useState(false);
   const [noteText,setNoteText]=useState("");
   const [clip,setClip]=useState(null);     // {values:2D,h,w}
+  const [showAux,setShowAux]=useState(false); // toggle: reveal underlying auto/plan + revised dates in cells
   const [colFilters,setColFilters]=useState({}); // col -> array of allowed display values
   const [filterCol,setFilterCol]=useState(null); // which header filter is open
   const [past,setPast]=useState([]); const [future,setFuture]=useState([]);
   const [filling,setFilling]=useState(false); const [fillFrom,setFillFrom]=useState(null); const [fillTo,setFillTo]=useState(null);
   const selectingRef=useRef(false); const [dragSel,setDragSel]=useState(false);
+  useEffect(()=>{ const up=()=>{ if(selectingRef.current){ selectingRef.current=false; setDragSel(false); } }; window.addEventListener("mouseup",up); return ()=>window.removeEventListener("mouseup",up); },[]);
   const [newRow,setNewRow]=useState({ styleNo:"", orderNo:"", sampleFit:"", family:"", colour:"", owner:"", qty:"", ordRec:iso(TODAY), delivery:"", fitReq:true, printReq:false, soReq:false, ppBypass:false, labDipReq:true, ppNeeded:true });
   const [newError,setNewError]=useState("");
   const savedTimer=useRef();
@@ -254,6 +256,11 @@ export default function App(){
     setFills(f); setNotes(n); loadedRef.current=true; flash();
   }catch(e){ console.error("load failed",e); } };
   useEffect(()=>{ loadShared(); },[]);
+  useEffect(()=>{ const ch=supabase.channel("merch-live")
+    .on("postgres_changes",{ event:"*", schema:"public", table:"stage_dates" },(p)=>{ const n=p.new; if(!n||!n.style_id){ setRemoteChanged(true); return; } const key=n.style_id+":"+n.stage; const row=JSON.stringify({ style_id:n.style_id, stage:n.stage, revised_date:n.revised_date||null, actual_date:n.actual_date||null, reject_date:n.reject_date||null }); if(savedRef.current.stg[key]!==row) setRemoteChanged(true); })
+    .on("postgres_changes",{ event:"*", schema:"public", table:"styles" },(p)=>{ const n=p.new; if(!n||!n.id){ setRemoteChanged(true); return; } if(savedRef.current.sty[n.id]!==JSON.stringify(n)) setRemoteChanged(true); })
+    .subscribe();
+    return ()=>{ try{ supabase.removeChannel(ch); }catch(e){} }; },[]);
   // SAVE everything to Supabase shortly after any change (debounced)
   useEffect(()=>{ if(firstRender.current){ firstRender.current=false; return; } if(!loadedRef.current) return; const t=setTimeout(async()=>{ try{ setSaveState("saving");
     const SR=savedRef.current;
@@ -269,6 +276,7 @@ export default function App(){
   }catch(e){ console.error("save failed",e); setSaveState("error"); } },700); return ()=>clearTimeout(t); },[styles,fills,notes]);
 
   const [saveState,setSaveState]=useState("idle"); // idle | saving | saved | error
+  const [remoteChanged,setRemoteChanged]=useState(false); // another user wrote data
   const flash=()=>{ setSaved(true); clearTimeout(savedTimer.current); savedTimer.current=setTimeout(()=>setSaved(false),1200); };
   const setField=(id,field,val)=>{ pushHistory(); setStyles(prev=>prev.map(s=>{ if(s.id!==id) return s; if(STAGE_KEYS.includes(field)) return { ...s, actuals:{ ...s.actuals, [field]: val||undefined } }; if(field==="qty") return { ...s, qty:Number(val)||0 }; return { ...s, [field]:val }; })); flash(); };
   const setRev=(id,key,val)=>{ pushHistory(); setStyles(prev=>prev.map(s=> s.id===id?{...s,revs:{...(s.revs||{}),[key]:val||undefined}}:s)); flash(); };
@@ -376,6 +384,7 @@ export default function App(){
 
   const handleCopy=(e)=>{ const R=rect(); if(!R) return; const lines=[]; let any=false; for(let r=R.r1;r<=R.r2;r++){ const cells=[]; for(let cc=R.c1;cc<=R.c2;cc++){ let v=rows[r]?getVal(rows[r].s,navCols[cc]):""; if(isDateCol(navCols[cc])&&v) v=fmtTyped(v); if(v) any=true; cells.push(v??""); } lines.push(cells.join("\t")); } if(any){ const tsv=lines.join("\n"); try{ e.clipboardData.setData("text/plain",tsv); e.preventDefault(); }catch(err){} setClip({ values:lines.map(l=>l.split("\t")), h:lines.length, w:lines[0].split("\t").length }); flash(); } };
   const handlePaste=(e)=>{ if(!sel) return; let txt=""; try{ txt=e.clipboardData.getData("text/plain"); }catch(err){} if(!txt){ doPaste(); return; } e.preventDefault(); const grid=txt.replace(/\r/g,"").replace(/\n$/,"").split("\n").map(l=>l.split("\t")); pushHistory(); const aR=rowIndex(sel.id), aC=colIndex(sel.col); const ch={}; if(grid.length===1&&grid[0].length===1){ const R=rect(); for(let r=R.r1;r<=R.r2;r++){ for(let cc=R.c1;cc<=R.c2;cc++){ const row=rows[r]; const col=navCols[cc]; if(row&&canPasteCell(row.s,col)) (ch[row.s.id]=ch[row.s.id]||{})[col]=coerce(col,grid[0][0]); } } } else { for(let i=0;i<grid.length;i++){ for(let j=0;j<grid[i].length;j++){ const row=rows[aR+i]; const col=navCols[aC+j]; if(row&&col&&canPasteCell(row.s,col)) (ch[row.s.id]=ch[row.s.id]||{})[col]=coerce(col,grid[i][j]); } } } writeChanges(ch); };
+  const copySelection=async()=>{ const R=rect(); if(!R) return; const lines=[]; for(let r=R.r1;r<=R.r2;r++){ const cells=[]; for(let cc=R.c1;cc<=R.c2;cc++){ let v=rows[r]?getVal(rows[r].s,navCols[cc]):""; if(isDateCol(navCols[cc])&&v) v=fmtTyped(v); cells.push(v??""); } lines.push(cells.join("\t")); } const tsv=lines.join("\n"); setClip({ values:lines.map(l=>l.split("\t")), h:lines.length, w:lines[0].split("\t").length }); try{ await navigator.clipboard.writeText(tsv); }catch(err){} flash(); };
   const cellKey=(id,col)=>`${id}:${col}`;
   const applyFill=(color)=>{ if(!sel) return; pushHistory(); const R=rect(); setFills(p=>{ const n={...p}; for(let r=R.r1;r<=R.r2;r++){ for(let c=R.c1;c<=R.c2;c++){ if(!rows[r]) continue; const k=`${rows[r].s.id}:${navCols[c]}`; if(color==="") delete n[k]; else n[k]=color; } } return n; }); flash(); };
   const saveNote=()=>{ if(!sel) return; pushHistory(); setNotes(p=>{ const n={...p}; const k=cellKey(sel.id,sel.col); if(noteText.trim()==="") delete n[k]; else n[k]=noteText.trim(); return n; }); setNoteEditing(false); setNoteText(""); flash(); };
@@ -449,12 +458,15 @@ export default function App(){
           <button onClick={(e)=>{ e.stopPropagation(); undo(); }} disabled={!past.length} title="Undo (Ctrl/Cmd+Z)" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 9px", cursor:past.length?"pointer":"not-allowed", border:"none", borderRight:"1px solid #1a1a1a", background:"#fff", opacity:past.length?1:0.4 }}>↶</button>
           <button onClick={(e)=>{ e.stopPropagation(); redo(); }} disabled={!future.length} title="Redo (Ctrl/Cmd+Shift+Z)" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 9px", cursor:future.length?"pointer":"not-allowed", border:"none", background:"#fff", opacity:future.length?1:0.4 }}>↷</button>
         </div>
-        <button onClick={(e)=>{ e.stopPropagation(); loadShared(); }} title="reload shared data (pull latest edits)" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 11px", cursor:"pointer", border:"1px solid #1a1a1a", background:"#fff", display:"flex", alignItems:"center", gap:6 }}><RotateCcw size={13}/> Sync</button>
+        <button onClick={(e)=>{ e.stopPropagation(); setRemoteChanged(false); loadShared(); }} title="reload shared data (pull latest edits)" style={{ fontFamily:"inherit", fontSize:11, fontWeight:remoteChanged?700:400, padding:"6px 11px", cursor:"pointer", border:"1px solid #1a1a1a", background:remoteChanged?"#d97706":"#fff", display:"flex", alignItems:"center", gap:6 }}><RotateCcw size={13}/> {remoteChanged?"Sync · new changes":"Sync"}</button>
         <span style={{ fontSize:10, color:"#999", marginLeft:"auto" }}>{sort.col?<>sorted by <b>{sort.col==="__style"?"Style":(INFO_COLS.find(c=>c.key===sort.col)?.label||STAGES.find(s=>s.key===sort.col)?.label||(sort.col==="remarks"?"Remarks":sort.col))}</b> {sort.dir>0?"↑":"↓"}</>:"shift-click / shift-arrows = range · Ctrl/Cmd C & V = copy/paste"}</span>
       </div>
 
       <div style={{ display:"flex", gap:10, alignItems:"center", padding:"0 22px 10px", flexWrap:"wrap", fontSize:10, color:"#777" }}>
-        <button onClick={(e)=>{ e.stopPropagation(); selectAll(); }} title="select all" style={{ fontFamily:"inherit", fontSize:10, padding:"4px 8px", cursor:"pointer", border:"1px solid #1a1a1a", background:"#fff" }}>⌖ all</button><Droplet size={13}/><span>fill:</span>
+        <button onClick={(e)=>{ e.stopPropagation(); selectAll(); }} title="select all" style={{ fontFamily:"inherit", fontSize:10, padding:"4px 8px", cursor:"pointer", border:"1px solid #1a1a1a", background:"#fff" }}>⌖ all</button>
+        <button onClick={(e)=>{ e.stopPropagation(); copySelection(); }} disabled={!sel} title="copy selected cell(s)" style={{ fontFamily:"inherit", fontSize:10, padding:"4px 9px", cursor:sel?"pointer":"not-allowed", border:"1px solid #1a1a1a", background:"#fff", display:"inline-flex", alignItems:"center", gap:5, opacity:sel?1:0.4 }}><Copy size={12}/> copy</button>
+        <button onClick={(e)=>{ e.stopPropagation(); setShowAux(v=>!v); }} title="show underlying auto/revised dates inside cells" style={{ fontFamily:"inherit", fontSize:10, padding:"4px 9px", cursor:"pointer", border:"1px solid #1a1a1a", background:showAux?"#1a1a1a":"#fff", color:showAux?"#f4f0e8":"#1a1a1a" }}>{showAux?"hide plan":"show plan"}</button>
+        <Droplet size={13}/><span>fill:</span>
         {FILL_SWATCHES.map((sw,i)=>(<button key={i} onClick={(e)=>{ e.stopPropagation(); applyFill(sw); }} disabled={!sel} title={sw===""?"clear fill":sw} style={{ width:18, height:18, cursor:sel?"pointer":"not-allowed", border:"1px solid #1a1a1a", background:sw===""?"#fff":sw, position:"relative", opacity:sel?1:0.4 }}>{sw===""?<X size={11} style={{position:"absolute",top:2,left:2}}/>:null}</button>))}
         <span style={{ marginLeft:10, position:"relative" }}>
           <button onClick={(e)=>{ e.stopPropagation(); beginNote(); }} disabled={!sel} style={{ fontFamily:"inherit", fontSize:10, padding:"4px 9px", cursor:sel?"pointer":"not-allowed", border:"1px solid #1a1a1a", background:"#fff", display:"inline-flex", alignItems:"center", gap:5, opacity:sel?1:0.4 }}><MessageSquare size={12}/> {sel&&notes[cellKey(sel.id,sel.col)]?"edit comment":"add comment"}</button>
@@ -494,7 +506,7 @@ export default function App(){
                   if(col.kind==="date"){ const bg=bgFor(s.id,col.key,"#fff"); return (<td key={col.key} id={`cell-${s.id}-${col.key}`} onClick={(e)=>onCellClick(e,s.id,col.key)} onDoubleClick={(e)=>{ e.stopPropagation(); if(role!=="Viewer") beginDate(s.id,col.key,"actual"); }} style={{ border:"1px solid #ddd", padding:"6px 9px", whiteSpace:"nowrap", boxShadow:ringFor(s.id,col.key), cursor:"cell", position:"relative", overflow:(editing&&editing.id===s.id&&editing.col===col.key)?"visible":"hidden", background:bg, ...freezeStyle(col.key,bg) }}>{fmt(parse(s[col.key]))||<span style={{color:"#ccc"}}>—</span>}{editing&&editing.id===s.id&&editing.col===col.key && dateEditor(s.id,col.key,editing.mode)}<NoteTri k={k}/><FillHandle id={s.id} col={col.key}/></td>); }
                   let content=null;
                   if(col.kind==="branch"){ const b=col.branch==="fit"?c.fitBranch:col.branch==="print"?c.printBranch:col.branch==="fabric"?c.fabricBranch:col.branch==="pp"?c.ppBranch:c.prodFileBranch; const canJump=b.tone!=="na"&&!c.released; content=<BranchPill b={b} onJump={canJump?()=>jumpToEnter(s.id,branchTarget(s,c,col.branch)):null}/>; }
-                  else if(col.key==="overall") content=<span style={{ display:"inline-flex", alignItems:"center", gap:5, background:t.bg, color:t.fg, padding:"2px 7px", fontSize:10, fontWeight:700 }}><span style={{ width:6,height:6,borderRadius:"50%", background:t.dot }}/>{c.status}</span>;
+                  else if(col.key==="overall") content=(<span style={{ display:"inline-flex", flexDirection:"column", gap:2, alignItems:"flex-start" }}><span style={{ display:"inline-flex", alignItems:"center", gap:5, background:t.bg, color:t.fg, padding:"2px 7px", fontSize:10, fontWeight:700 }}><span style={{ width:6,height:6,borderRadius:"50%", background:t.dot }}/>{c.status}</span>{c.lastActual && <span style={{ fontSize:8.5, color:"#9a958a", whiteSpace:"nowrap" }}>last: {fmt(c.lastActual)}{c.lastActualKey?` · ${(STAGES.find(x=>x.key===c.lastActualKey)||{}).label||""}`:""}</span>}</span>);
                   else if(col.key==="fabricCD") content=<span style={{ fontWeight:700, color:BR_TONE[c.fabricCountdown.tone].fg }}>{c.fabricCountdown.txt}</span>;
                   else if(col.key==="proj") content=<span title={`release gate (30wd before delivery): ${fmt(c.releaseGate)}`} style={{ fontWeight:600, color:c.projTone==="late"?"#c0392b":c.projTone==="warn"?"#7a560f":c.projTone==="done"?"#888":"#1f6f54" }}>{fmt(c.projRelease)}{c.projTone==="late"&&!c.released?" ⚠":c.projTone==="ok"?" ✓":""}</span>;
                   else if(col.key==="pct") content=(<div style={{ display:"flex", alignItems:"center", gap:5 }}><div style={{ flex:1, height:6, background:"#eee", position:"relative", minWidth:34 }}><div style={{ position:"absolute", left:0, top:0, bottom:0, width:`${c.pct}%`, background:c.pct===100?"#1f6f54":"#d97706" }}/></div><span style={{ fontSize:9, color:"#666", width:26, textAlign:"right" }}>{c.pct}%</span></div>);
@@ -513,18 +525,19 @@ export default function App(){
                   const k=cellKey(s.id,st.key);
                   if(!applies){ const bg=bgFor(s.id,st.key,"#f3f1ec"); return <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} style={{ border:"1px solid #ddd", background:bg, color:"#ccc", textAlign:"center", padding:"6px 9px", boxShadow:ringFor(s.id,st.key), position:"relative", overflow:"hidden" }}>—<NoteTri k={k}/></td>; }
                   const hasRev=cs&&cs.rev&&!cs.done;
-                  const bg=bgFor(s.id,st.key,(cs&&(cs.rework||cs.rejected))?"#fcecea":(isNext?"#fff7ec":"#fff"));
+                  const bg=bgFor(s.id,st.key,(cs&&(cs.rework||cs.rejected))?"#fcecea":(cs&&cs.actual&&cs.histReject?"#fff4f2":(isNext?"#fff7ec":"#fff")));
                   return (
                     <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} onDoubleClick={(e)=>{ e.stopPropagation(); if(editable) beginDate(s.id,st.key,"actual"); }}
                       style={{ border:"1px solid #ddd", padding:0, position:"relative", overflow:(editing&&editing.id===s.id&&editing.col===st.key)?"visible":"hidden", background:bg, boxShadow:ringFor(s.id,st.key)||(isNext?"inset 0 0 0 2px #d97706":null), cursor:editable?"cell":"default" }}>
                       <div style={{ minHeight:38, padding:"4px 8px", fontSize:11, color:cs.actual?"#1a1a1a":"#bbb" }}>
+                        {showAux && cs.plan && <span style={{ display:"block", fontSize:8, color:"#bcb6a8", lineHeight:1.3 }}>auto {fmt(cs.plan)}{cs.rev?` · rev ${fmt(cs.rev)}`:""}</span>}
                         {cs.rework ? (
                           <span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}>
                             <span style={{ fontSize:9, color:"#b03020", fontWeight:700, display:"flex", alignItems:"center", gap:3 }}><X size={9}/>REDO &amp; RESEND</span>
                             <span style={{ fontSize:9, color:"#7a560f" }}>{hasRev?"→ rev ":"→ "}{fmt(cs.rev||cs.plan)}</span>
                             {editable && <span style={{ fontSize:9, color:"#d97706", fontWeight:700 }}>▸ enter resend</span>}
                           </span>
-                        ) : cs.actual ? (<span style={{ display:"flex", alignItems:"center", gap:4 }}><Check size={11} color={OWNER_COLOR[st.owner]}/>{fmt(cs.actual)}</span>) : cs.rejected ? (
+                        ) : cs.actual ? (<span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}><span style={{ display:"flex", alignItems:"center", gap:4 }}><Check size={11} color={OWNER_COLOR[st.owner]}/>{fmt(cs.actual)}</span>{cs.histReject && <span style={{ fontSize:8, color:"#b03020", fontWeight:700 }}>↻ was REJ {fmt(cs.histReject)}</span>}</span>) : cs.rejected ? (
                           <span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}>
                             <span style={{ fontSize:9, color:"#b03020", fontWeight:700, display:"flex", alignItems:"center", gap:3 }}><X size={9}/>REJECTED</span>
                             <span style={{ fontSize:9, color:"#b03020" }}>rej {fmt(cs.reject)}</span>
@@ -590,7 +603,7 @@ function Th({ col, label, sort, onSort, sticky, left, z, width, onResize, onAuto
   return (<th role="columnheader" aria-sort={active?(sort.dir>0?"ascending":"descending"):"none"} style={{ position:"sticky", top:0, left:sticky?left:undefined, zIndex:sticky?(z||5):3, background:active?"#d97706":"#1a1a1a", color:active?"#1a1a1a":"#f4f0e8", padding:"8px 9px", textAlign:"left", fontWeight:600, fontSize:9.5, letterSpacing:0.4, textTransform:"uppercase", whiteSpace:"nowrap", overflow:"visible", border:"1px solid #3a362e", userSelect:"none" }}>
     <span style={{ display:"flex", alignItems:"center", gap:3 }}>
       <span onClick={(e)=>{ e.stopPropagation(); onSort(col); }} title="click to sort" style={{ display:"inline-flex", alignItems:"center", gap:3, cursor:"pointer", flex:1, overflow:"hidden", textOverflow:"ellipsis" }}>{label}{active?(sort.dir>0?<ChevronUp size={11}/>:<ChevronDown size={11}/>):null}</span>
-      <span onClick={(e)=>{ e.stopPropagation(); onToggleFilter&&onToggleFilter(); }} title="filter" style={{ cursor:"pointer", display:"inline-flex", padding:"0 1px", color: filterActive?"#1a1a1a":(active?"#7a4a08":"#9a958c") }}><Filter size={10} fill={filterActive?"currentColor":"none"}/></span>
+      <span onClick={(e)=>{ e.stopPropagation(); onToggleFilter&&onToggleFilter(); }} title={filterActive?"filter ON — click to edit/clear":"filter"} style={{ cursor:"pointer", display:"inline-flex", padding:"0 1px", color: filterActive?(active?"#1a1a1a":"#f4b942"):(active?"#7a4a08":"#cfc9bf") }}><Filter size={filterActive?12:10} fill={filterActive?"currentColor":"none"}/></span>
     </span>
     {filterOpen && <FilterMenu values={filterValues||[]} allowed={filterAllowed} onSet={onSetFilter} onClose={onCloseFilter}/>}
     <span onMouseDown={startDrag} onDoubleClick={(e)=>{ e.stopPropagation(); onAutoFit&&onAutoFit(col); }} onClick={(e)=>e.stopPropagation()} title="drag to resize · double-click to auto-fit" style={{ position:"absolute", top:0, right:0, bottom:0, width:7, cursor:"col-resize", zIndex:2 }}/>
