@@ -172,6 +172,8 @@ const TEXT_COLS=["orderNo","sampleFit","family","colour","owner","setId","setRol
 const isEditableCol=(col)=> col==="__style"||col==="qty"||col==="ordRec"||col==="delivery"||TEXT_COLS.includes(col)||STAGE_KEYS.includes(col);
 const isDateCol=(col)=> col==="ordRec"||col==="delivery"||STAGE_KEYS.includes(col);
 const BRANCH_STAGES={ fit:["fitSend","fitAppr"], print:["artwork","artAppr","strikeOff","soAppr"], fabric:["labDip","labAppr","fabricIH"], pp:["ppSample","ppAppr"], prod:["prodFile"] };
+const BRANCH_LABEL={ fit:"Fit", print:"Print", fabric:"Fabric", pp:"PP", prod:"Production" };
+const BRANCH_OF={}; Object.entries(BRANCH_STAGES).forEach(([b,ks])=>ks.forEach(k=>{ BRANCH_OF[k]=BRANCH_LABEL[b]; }));
 function branchTarget(s,c,branch){ const keys=BRANCH_STAGES[branch].filter(k=>{ const st=STAGES.find(x=>x.key===k); return st.flag===null||s[st.flag]; }); for(const k of keys){ if(!c.stages.find(r=>r.key===k)?.done) return k; } return keys[keys.length-1]; }
 
 function CalPopup({ value, onPick, onClose, label }){
@@ -294,7 +296,8 @@ export default function App(){
   const deleteStyle=async(id)=>{ if(!window.confirm("Delete this style row? This removes it for everyone and cannot be undone.")) return; pushHistory(); setStyles(prev=>prev.filter(s=>s.id!==id)); flash(); try{ await supabase.from("stage_dates").delete().eq("style_id",id); await supabase.from("cell_meta").delete().eq("style_id",id); await supabase.from("styles").delete().eq("id",id); }catch(e){ console.error("delete failed",e); } };
 
   const computed=useMemo(()=>styles.map(s=>({s,c:computeStyle(s,cfg)})),[styles,cfg]);
-  const todoItems=useMemo(()=>{ const out=[]; const fabByCol={}; computed.forEach(({s,c})=>{ if(c.released) return; Object.entries(cfg.upcoming||{}).forEach(([key,win])=>{ const r=(c.stages||[]).find(x=>x.key===key); if(!r||r.done) return; const exp=r.rev||r.plan; if(!exp) return; const du=netWorkdays(TODAY,exp); const overdue=TODAY>exp; if(!(overdue||du<=win)) return; if(key==="fabricIH"){ const cols=String(s.colour||"").split(/[,/]/).map(x=>x.trim()).filter(Boolean); (cols.length?cols:["(no colour)"]).forEach(col=>{ let cur=fabByCol[col]; if(!cur){ cur=fabByCol[col]={ colour:col, key, label:r.label, owner:r.owner, exp, du, overdue, anyStyle:s.id, count:0 }; } cur.count++; if(exp<cur.exp){ cur.exp=exp; cur.du=du; cur.overdue=overdue; cur.anyStyle=s.id; } }); } else { out.push({ id:s.id, styleNo:s.styleNo, colour:s.colour, key, label:r.label, owner:r.owner, exp, du, overdue }); } }); }); Object.values(fabByCol).forEach(f=> out.push({ id:f.anyStyle, styleNo:f.colour, colour:f.colour, key:f.key, label:f.label, owner:f.owner, exp:f.exp, du:f.du, overdue:f.overdue, isColour:true, count:f.count })); out.sort((a,b)=> (a.overdue!==b.overdue)?(a.overdue?-1:1):((a.exp&&b.exp)?(a.exp-b.exp):0)); return out; },[computed,cfg]);
+  const todoItems=useMemo(()=>{ const out=[]; const fabByCol={}; computed.forEach(({s,c})=>{ if(c.released) return; const front=c.frontier?[...c.frontier]:[]; front.forEach(key=>{ const r=(c.stages||[]).find(x=>x.key===key); if(!r||r.done) return; const exp=r.rev||r.plan; if(!exp) return; const du=netWorkdays(TODAY,exp); const overdue=TODAY>exp; const win=(cfg.upcoming&&cfg.upcoming[key]!=null)?cfg.upcoming[key]:null; const include = overdue || (win!=null && du<=win); if(!include) return; const branch=BRANCH_OF[key]||""; if(key==="fabricIH"){ const cols=String(s.colour||"").split(/[,/]/).map(x=>x.trim()).filter(Boolean); (cols.length?cols:["(no colour)"]).forEach(col=>{ let cur=fabByCol[col]; if(!cur){ cur=fabByCol[col]={ colour:col, key, label:r.label, owner:r.owner, branch, exp, du, overdue, anyStyle:s.id, anyOrder:s.orderNo, anyJunior:s.owner, count:0 }; } cur.count++; if(exp<cur.exp){ cur.exp=exp; cur.du=du; cur.overdue=overdue; cur.anyStyle=s.id; cur.anyOrder=s.orderNo; cur.anyJunior=s.owner; } }); } else { out.push({ id:s.id, orderNo:s.orderNo, styleNo:s.styleNo, junior:s.owner, colour:s.colour, key, activity:r.label, branch, owner:r.owner, exp, du, overdue }); } }); }); Object.values(fabByCol).forEach(f=> out.push({ id:f.anyStyle, orderNo:f.anyOrder, styleNo:f.colour, junior:f.anyJunior, colour:f.colour, key:f.key, activity:f.label, branch:f.branch, owner:f.owner, exp:f.exp, du:f.du, overdue:f.overdue, isColour:true, count:f.count })); out.sort((a,b)=> (a.overdue!==b.overdue)?(a.overdue?-1:1):((a.exp&&b.exp)?(a.exp-b.exp):0)); return out; },[computed,cfg]);
+  const [todoFilter,setTodoFilter]=useState(null); // filter the To-Do by activity (drill target)
   const valueFor=(s,cc,col)=>{
     if(col==="__style") return s.styleNo||"";
     if(["orderNo","sampleFit","family","colour","owner","setId","setRole","remarks"].includes(col)) return s[col]||"(Blanks)";
@@ -611,8 +614,8 @@ export default function App(){
       </div>
       </>)}
 
-      {tab==="dashboard" && <DashboardView computed={computed} todoItems={todoItems} drill={(setter)=>{ setter&&setter(); setTab("tracker"); }} setStatusFilter={setStatusFilter} setColFilters={setColFilters} setSearch={setSearch}/>}
-      {tab==="todo" && <TodoView items={todoItems} onJump={(id,key)=>{ setTab("tracker"); requestAnimationFrame(()=>setTimeout(()=>jumpToEnter(id,key),60)); }}/>}
+      {tab==="dashboard" && <DashboardView computed={computed} todoItems={todoItems} drill={(setter)=>{ setter&&setter(); setTab("tracker"); }} drillTodo={(act)=>{ setTodoFilter(act); setTab("todo"); }} setStatusFilter={setStatusFilter} setColFilters={setColFilters} setSearch={setSearch}/>}
+      {tab==="todo" && <TodoView items={todoItems} filter={todoFilter} setFilter={setTodoFilter} onJump={(id,key)=>{ setTab("tracker"); requestAnimationFrame(()=>setTimeout(()=>jumpToEnter(id,key),60)); }}/>}
       {tab==="settings" && <SettingsView cfg={cfg} setCfg={setCfg} canEdit={role!=="Viewer"}/>}
     </div>
   );
@@ -665,7 +668,7 @@ const ndCell={ border:"1px dashed #e8dcc2", padding:"6px 9px", whiteSpace:"nowra
 const ndInput=(w)=>({ border:"none", outline:"none", background:"transparent", fontFamily:"'JetBrains Mono', monospace", fontSize:10, width:w });
 
 /* ========================= DASHBOARD ========================= */
-function DashboardView({ computed, todoItems, drill, setStatusFilter, setColFilters, setSearch }){
+function DashboardView({ computed, todoItems, drill, drillTodo, setStatusFilter, setColFilters, setSearch }){
   const total=computed.length;
   const onTrack=computed.filter(({c})=>c.tone==="ok").length;
   const atRisk=computed.filter(({c})=>c.tone==="late"||c.tone==="warn").length;
@@ -705,6 +708,17 @@ function DashboardView({ computed, todoItems, drill, setStatusFilter, setColFilt
       </div>
 
       <div style={{ flex:1, minWidth:320, background:"#fff", border:"1px solid #1a1a1a", padding:16 }}>
+        <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>OPEN ACTIVITIES — overdue + upcoming</div>
+        {(()=>{ const byAct={}; todoItems.forEach(t=>{ const a=byAct[t.activity]=byAct[t.activity]||{n:0,over:0}; a.n+=(t.isColour?t.count:1); if(t.overdue) a.over+=(t.isColour?t.count:1); }); const ents=Object.entries(byAct).sort((a,b)=>b[1].n-a[1].n); const mx=Math.max(1,...ents.map(e=>e[1].n)); return ents.length===0?<div style={{ fontSize:11, color:"#999" }}>Nothing due.</div>:ents.map(([a,v])=>(
+          <button key={a} onClick={()=>drillTodo(a)} style={{ display:"flex", alignItems:"center", gap:8, width:"100%", border:"none", background:"transparent", cursor:"pointer", fontFamily:"inherit", padding:"4px 0" }}>
+            <span style={{ width:84, fontSize:10, fontWeight:700, color:"#444", textAlign:"left" }}>{a}</span>
+            <span style={{ flex:1, height:16, background:"#f0ece3", position:"relative" }}><span style={{ position:"absolute", left:0, top:0, bottom:0, width:`${(v.n/mx)*100}%`, background:v.over?"#c0392b":"#d97706" }}/></span>
+            <span style={{ width:54, textAlign:"right", fontSize:10, fontWeight:700 }}>{v.n}{v.over?<span style={{ color:"#c0392b" }}> ({v.over})</span>:null}</span>
+          </button>)); })()}
+        <div style={{ fontSize:9, color:"#aaa", marginTop:8 }}>Click an activity to open it in the To-Do. Red number = overdue.</div>
+      </div>
+
+      <div style={{ flex:1, minWidth:320, background:"#fff", border:"1px solid #1a1a1a", padding:16 }}>
         <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>WHERE STYLES ARE STUCK — current phase</div>
         {Object.entries(phase).map(([p,n])=>(
           <div key={p} style={{ display:"flex", alignItems:"center", gap:8, padding:"4px 0" }}>
@@ -718,23 +732,37 @@ function DashboardView({ computed, todoItems, drill, setStatusFilter, setColFilt
 }
 
 /* ========================= TO-DO ========================= */
-function TodoView({ items, onJump }){
-  const overdue=items.filter(t=>t.overdue), upcoming=items.filter(t=>!t.overdue);
+function TodoView({ items, filter, setFilter, onJump }){
   const OWNER_COLOR2={ Merchant:"#1f6f54", CAD:"#2563a6", Buyer:"#b4531a", Designer:"#6d4aab", Mill:"#7a5a1e" };
-  const row=(t)=>(<button key={(t.isColour?"col-":"")+t.id+t.key} onClick={()=>onJump(t.id,t.key)} style={{ display:"flex", alignItems:"center", gap:12, width:"100%", textAlign:"left", border:"1px solid #e2ddd2", borderLeft:`4px solid ${t.overdue?"#c0392b":"#d97706"}`, background:t.isColour?"#fbf8f1":"#fff", cursor:"pointer", fontFamily:"inherit", padding:"8px 12px", marginBottom:5 }}>
-    <span style={{ width:150, fontSize:11, fontWeight:700, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{t.isColour?<span style={{ display:"inline-flex", alignItems:"center", gap:6 }}><span style={{ fontSize:8, fontWeight:700, background:"#1a1a1a", color:"#f4f0e8", padding:"1px 4px" }}>FABRIC</span>{t.colour}</span>:t.styleNo}</span>
-    <span style={{ width:90, fontSize:10, fontWeight:700, color:"#444" }}>{t.isColour?`×${t.count} ${t.count>1?"styles":"style"}`:t.label}</span>
-    <span style={{ width:70, fontSize:10, fontWeight:700, color:OWNER_COLOR2[t.owner]||"#666" }}>{t.owner}</span>
-    <span style={{ width:90, fontSize:10, color:"#666" }}>{fmt(t.exp)}</span>
-    <span style={{ flex:1, fontSize:10, fontWeight:700, color:t.overdue?"#c0392b":"#7a560f" }}>{t.overdue?`OVERDUE ${Math.abs(t.du)}d`:`in ${t.du}d`}</span>
-    <span style={{ fontSize:10, color:"#bbb" }}>open ›</span>
+  // activity chips (drillable stage filter)
+  const acts=[]; const seen={}; items.forEach(t=>{ if(!seen[t.activity]){ seen[t.activity]=0; acts.push(t.activity); } seen[t.activity]++; });
+  const shown=items.filter(t=>!filter||t.activity===filter);
+  const overdue=shown.filter(t=>t.overdue), upcoming=shown.filter(t=>!t.overdue);
+  const COLW={ pri:96, ord:60, sty:170, jr:64, act:92, br:84, own:70, date:84 };
+  const head=(<div style={{ display:"flex", alignItems:"center", gap:10, padding:"6px 12px", fontSize:9, fontWeight:700, letterSpacing:0.4, textTransform:"uppercase", color:"#8a857a", borderBottom:"2px solid #1a1a1a" }}>
+    <span style={{ width:COLW.pri }}>Priority</span><span style={{ width:COLW.ord }}>Order</span><span style={{ width:COLW.sty }}>Style / Colour</span><span style={{ width:COLW.jr }}>Junior</span><span style={{ width:COLW.act }}>Activity</span><span style={{ width:COLW.br }}>Branch</span><span style={{ width:COLW.own }}>Owner</span><span style={{ width:COLW.date }}>Plan Date</span><span style={{ flex:1 }}>Days Late / Left</span>
+  </div>);
+  const row=(t)=>(<button key={(t.isColour?"col-":"")+t.id+t.key} onClick={()=>onJump(t.id,t.key)} style={{ display:"flex", alignItems:"center", gap:10, width:"100%", textAlign:"left", borderLeft:`4px solid ${t.overdue?"#c0392b":"#d97706"}`, borderBottom:"1px solid #eee7da", background:t.isColour?"#fbf8f1":"#fff", cursor:"pointer", fontFamily:"inherit", padding:"7px 12px" }}>
+    <span style={{ width:COLW.pri, fontSize:10, fontWeight:700, display:"flex", alignItems:"center", gap:6, color:t.overdue?"#c0392b":"#7a560f" }}><span style={{ width:8, height:8, borderRadius:"50%", background:t.overdue?"#c0392b":"#d97706" }}/>{t.overdue?"Overdue":"Upcoming"}</span>
+    <span style={{ width:COLW.ord, fontSize:10, color:"#555" }}>{t.orderNo||"—"}</span>
+    <span style={{ width:COLW.sty, fontSize:11, fontWeight:700, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{t.isColour?<span style={{ display:"inline-flex", alignItems:"center", gap:6 }}><span style={{ fontSize:8, fontWeight:700, background:"#1a1a1a", color:"#f4f0e8", padding:"1px 4px" }}>FABRIC</span>{t.colour} <span style={{ color:"#999", fontWeight:400 }}>×{t.count}</span></span>:t.styleNo}</span>
+    <span style={{ width:COLW.jr, fontSize:10, color:"#444" }}>{t.junior||"—"}</span>
+    <span style={{ width:COLW.act, fontSize:10, fontWeight:700, color:"#333" }}>{t.activity}</span>
+    <span style={{ width:COLW.br, fontSize:10, color:"#666" }}>{t.branch}</span>
+    <span style={{ width:COLW.own, fontSize:10, fontWeight:700, color:OWNER_COLOR2[t.owner]||"#666" }}>{t.owner}</span>
+    <span style={{ width:COLW.date, fontSize:10, color:"#666" }}>{fmt(t.exp)}</span>
+    <span style={{ flex:1, fontSize:10, fontWeight:700, color:t.overdue?"#c0392b":"#7a560f" }}>{t.overdue?`+${Math.abs(t.du)}d late`:`${t.du}d left`}</span>
   </button>);
-  return (<div style={{ padding:"18px 22px", maxWidth:900 }}>
-    <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:14, color:"#c0392b", marginBottom:10 }}>OVERDUE · {overdue.length}</div>
-    {overdue.length?overdue.map(row):<div style={{ fontSize:11, color:"#999", marginBottom:14 }}>Nothing overdue. 👍</div>}
-    <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:14, color:"#7a560f", margin:"18px 0 10px" }}>UPCOMING · {upcoming.length}</div>
-    {upcoming.length?upcoming.map(row):<div style={{ fontSize:11, color:"#999" }}>Nothing coming up in the watch windows.</div>}
-    <div style={{ fontSize:9, color:"#aaa", marginTop:14 }}>Watch windows (working days before due) are editable in Settings · click any row to jump to it in the Tracker.</div>
+  const chip=(label,val,n)=>(<button key={label} onClick={()=>setFilter(val)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:filter===val?700:400, padding:"4px 9px", cursor:"pointer", border:"1px solid #1a1a1a", background:filter===val?"#1a1a1a":"#fff", color:filter===val?"#f4f0e8":"#1a1a1a" }}>{label}{n!=null?` · ${n}`:""}</button>);
+  return (<div style={{ padding:"16px 22px", maxWidth:1080 }}>
+    <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:12 }}>{chip("All activities",null,items.length)}{acts.map(a=>chip(a,a,seen[a]))}</div>
+    <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, color:"#c0392b", margin:"4px 0 6px" }}>OVERDUE · {overdue.length}</div>
+    {head}
+    {overdue.length?overdue.map(row):<div style={{ fontSize:11, color:"#999", padding:"8px 12px" }}>Nothing overdue. 👍</div>}
+    <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, color:"#7a560f", margin:"20px 0 6px" }}>UPCOMING · {upcoming.length}</div>
+    {head}
+    {upcoming.length?upcoming.map(row):<div style={{ fontSize:11, color:"#999", padding:"8px 12px" }}>Nothing coming up in the watch windows.</div>}
+    <div style={{ fontSize:9, color:"#aaa", marginTop:14 }}>Fabric is grouped by unique colour (×N = styles needing it now) · click a row to jump to it in the Tracker · watch windows are editable in Settings.</div>
   </div>);
 }
 
