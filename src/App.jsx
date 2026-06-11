@@ -248,6 +248,22 @@ export default function App(){
   const toggleFlag=(id,flag)=>{ pushHistory(); setStyles(prev=>prev.map(s=>s.id===id?{...s,[flag]:!s[flag]}:s)); flash(); };
 
   const computed=useMemo(()=>styles.map(s=>({s,c:computeStyle(s)})),[styles]);
+  const valueFor=(s,cc,col)=>{
+    if(col==="__style") return s.styleNo||"";
+    if(["orderNo","sampleFit","family","colour","owner","setId","setRole","remarks"].includes(col)) return s[col]||"(Blanks)";
+    if(col==="qty") return String(s.qty);
+    if(col==="ordRec"||col==="delivery") return fmt(parse(s[col]))||"(Blanks)";
+    if(col==="overall") return cc.status;
+    if(col==="fit") return cc.fitBranch.txt; if(col==="print") return cc.printBranch.txt; if(col==="fabric") return cc.fabricBranch.txt; if(col==="pp") return cc.ppBranch.txt;
+    if(col==="fabricCD") return cc.fabricCountdown.txt;
+    if(col==="proj") return fmt(cc.projRelease)||"(Blanks)";
+    if(col==="pct") return cc.pct+"%";
+    if(col==="chase") return (cc.chaseOwners||[]).map(o=>o.owner).join(", ")||"(Blanks)";
+    if(col==="float") return cc.float==null?"(Blanks)":String(cc.float);
+    if(col==="idle") return cc.idle==null?"(Blanks)":String(cc.idle);
+    if(STAGE_KEYS.includes(col)){ const a=s.actuals[col]; return a?fmt(parse(a)):"(Blanks)"; }
+    return "";
+  };
   const filtered=computed.filter(({s,c})=>{ const q=search.toLowerCase(); const ownerMatch=(c.chaseOwners||[]).some(o=>o.owner.toLowerCase().includes(q)); const matchQ=!q||s.styleNo.toLowerCase().includes(q)||s.colour.toLowerCase().includes(q)||s.family.toLowerCase().includes(q)||s.sampleFit.toLowerCase().includes(q)||s.orderNo.toLowerCase().includes(q)||ownerMatch; const matchS=statusFilter==="All"||(statusFilter==="At Risk"&&(c.tone==="late"||c.tone==="warn"))||(statusFilter==="On Track"&&c.tone==="ok")||(statusFilter==="Released"&&c.released); const matchF=Object.entries(colFilters).every(([col,allowed])=> !allowed || allowed.includes(valueFor(s,c,col))); return matchQ&&matchS&&matchF; });
   const toneRank={ late:0, warn:1, ok:2, done:3, na:4 };
   const fitNum=(s)=>{ const m=String(s.sampleFit).match(/\d+/); return m?Number(m[0]):Infinity; };
@@ -335,22 +351,6 @@ export default function App(){
   const saveNote=()=>{ if(!sel) return; pushHistory(); setNotes(p=>{ const n={...p}; const k=cellKey(sel.id,sel.col); if(noteText.trim()==="") delete n[k]; else n[k]=noteText.trim(); return n; }); setNoteEditing(false); setNoteText(""); flash(); };
   const beginNote=()=>{ if(!sel) return; setNoteText(notes[cellKey(sel.id,sel.col)]||""); setNoteEditing(true); };
 
-  const valueFor=(s,cc,col)=>{
-    if(col==="__style") return s.styleNo||"";
-    if(["orderNo","sampleFit","family","colour","owner","setId","setRole","remarks"].includes(col)) return s[col]||"(Blanks)";
-    if(col==="qty") return String(s.qty);
-    if(col==="ordRec"||col==="delivery") return fmt(parse(s[col]))||"(Blanks)";
-    if(col==="overall") return cc.status;
-    if(col==="fit") return cc.fitBranch.txt; if(col==="print") return cc.printBranch.txt; if(col==="fabric") return cc.fabricBranch.txt; if(col==="pp") return cc.ppBranch.txt;
-    if(col==="fabricCD") return cc.fabricCountdown.txt;
-    if(col==="proj") return fmt(cc.projRelease)||"(Blanks)";
-    if(col==="pct") return cc.pct+"%";
-    if(col==="chase") return (cc.chaseOwners||[]).map(o=>o.owner).join(", ")||"(Blanks)";
-    if(col==="float") return cc.float==null?"(Blanks)":String(cc.float);
-    if(col==="idle") return cc.idle==null?"(Blanks)":String(cc.idle);
-    if(STAGE_KEYS.includes(col)){ const a=s.actuals[col]; return a?fmt(parse(a)):"(Blanks)"; }
-    return "";
-  };
   const distinctFor=(col)=>{ const set=new Set(); computed.forEach(({s,c})=>set.add(valueFor(s,c,col))); return [...set].sort((a,b)=> a==="(Blanks)"?1:b==="(Blanks)"?-1:(a>b?1:a<b?-1:0)); };
   const filterProps=(col)=>({ filterActive: !!colFilters[col], filterOpen: filterCol===col, filterValues: filterCol===col?distinctFor(col):null, filterAllowed: colFilters[col]||null,
     onToggleFilter:()=>setFilterCol(p=>p===col?null:col),
