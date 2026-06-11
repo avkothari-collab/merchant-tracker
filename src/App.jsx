@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import { Check, Plus, Lock, Filter, X, Copy, ChevronUp, ChevronDown, CornerDownRight, Columns3, MessageSquare, RotateCcw, Droplet, Snowflake, Trash2 } from "lucide-react";
+import * as XLSX from "xlsx";
 import { supabase } from "./supabaseClient";
 
 /* MERCH TRACKER — Excel-like entry grid PROTOTYPE (v13 Excel as smart base) */
@@ -142,11 +143,15 @@ const BR_TONE={ ok:{bg:"#eef6f1",fg:"#16523d"}, warn:{bg:"#fbf4e6",fg:"#7a560f"}
 const FLAG_DEFS=[ {key:"fitReq",short:"FIT",title:"Fit sample required"}, {key:"printReq",short:"PRT",title:"Print required"}, {key:"soReq",short:"S/O",title:"Strike-off required"}, {key:"labDipReq",short:"LAB",title:"Lab dip required"}, {key:"ppBypass",short:"BYP",title:"PP bypass — Prod File flows straight from Fabric IH (not PP Appr)"}, {key:"ppNeeded",short:"PP",title:"PP sample required"} ];
 const FILL_SWATCHES=["#fff7ec","#fde2e1","#e7f3ec","#e3edf9","#f3e8fa","#fff3bf",""];
 
+const NORMH=(h)=> String(h||"").toLowerCase().replace(/[^a-z0-9]/g,"");
+const HEADER_MAP={ samplefit:"sampleFit", family:"family", fit:"orderNo", orderno:"orderNo", order:"orderNo", tranche:"orderNo", styleno:"styleNo", style:"styleNo", colour:"colour", color:"colour", brand:"brand", buyer:"brand", juniorowner:"owner", junior:"owner", owner:"owner", merchant:"owner", setpackid:"setId", setid:"setId", setpackrole:"setRole", setrole:"setRole", agegroup:"age", age:"age", orderqty:"qty", qty:"qty", quantity:"qty", reserve3:"fabricType", fabrictype:"fabricType", fabric:"fabricType", construction:"fabricType", orderreceived:"ordRec", orderdate:"ordRec", received:"ordRec", deliverydate:"delivery", delivery:"delivery", fitreq:"fitReq", printreq:"printReq", soreq:"soReq", ppbypass:"ppBypass", labdipreq:"labDipReq", ppneeded:"ppNeeded" };
 const INFO_COLS=[
   { key:"orderNo",   label:"Order No",   kind:"text", w:60,  owner:"Merchant" },
   { key:"sampleFit", label:"Sample Fit", kind:"text", w:72,  owner:"Merchant" },
   { key:"family",    label:"Family",     kind:"text", w:130, owner:"Merchant" },
   { key:"colour",    label:"Colour",     kind:"text", w:150, owner:"Merchant" },
+  { key:"brand",     label:"Brand",      kind:"text", w:90,  owner:"Merchant" },
+  { key:"fabricType",label:"Fabric Type",kind:"text", w:140, owner:"Merchant" },
   { key:"owner",     label:"Owner",      kind:"text", w:64,  owner:"Merchant" },
   { key:"setId",     label:"Set ID",     kind:"text", w:60,  owner:"Merchant" },
   { key:"setRole",   label:"Set Role",   kind:"text", w:64,  owner:"Merchant" },
@@ -211,6 +216,11 @@ export default function App(){
   const [role,setRole]=useState("Merchant");
   const [search,setSearch]=useState("");
   const [statusFilter,setStatusFilter]=useState("All");
+  const [ownerFilter,setOwnerFilter]=useState("All");   // quick owner toggle
+  const [archiveView,setArchiveView]=useState("active"); // active | all | archived (keeps the live sheet lean)
+  const [activityFilter,setActivityFilter]=useState(null); // filter tracker by current activity (stage key)
+  const [viewSnap,setViewSnap]=useState(null); // saved tracker view before a drill, for one-click restore
+  const scrollWrapRef=useRef(null);
   const [saved,setSaved]=useState(false);
   const [fillOpen,setFillOpen]=useState(false);
   const [colsOpen,setColsOpen]=useState(false);
@@ -243,9 +253,9 @@ export default function App(){
   const firstRender=useRef(true);
   const loadedRef=useRef(false);
   const savedRef=useRef({ sty:{}, stg:{}, meta:{} }); // last-persisted snapshot, keyed per row, so we only write what changed
-  const S2C={ orderNo:"order_no", styleNo:"style_no", sampleFit:"sample_fit", family:"family", colour:"colour", owner:"owner", setId:"set_id", setRole:"set_role", age:"age", qty:"qty", ordRec:"order_date", delivery:"delivery_date", fitReq:"fit_req", printReq:"print_req", soReq:"so_req", ppBypass:"pp_bypass", labDipReq:"lab_dip_req", ppNeeded:"pp_needed", remarks:"remarks" };
-  const styleToRow=(s)=>{ const r={ id:s.id }; Object.entries(S2C).forEach(([k,col])=>{ r[col]= k==="qty"?(Number(s[k])||0):(s[k]||null); }); return r; };
-  const rowToStyle=(row,byId)=>({ id:row.id, orderNo:row.order_no||"", sampleFit:row.sample_fit||"", family:row.family||"", styleNo:row.style_no||"", colour:row.colour||"", owner:row.owner||"", setId:row.set_id||"", setRole:row.set_role||"", age:row.age||"", qty:row.qty||0, ordRec:row.order_date||"", delivery:row.delivery_date||"", fitReq:!!row.fit_req, printReq:!!row.print_req, soReq:!!row.so_req, ppBypass:!!row.pp_bypass, labDipReq:!!row.lab_dip_req, ppNeeded:!!row.pp_needed, remarks:row.remarks||"", actuals:(byId[row.id]&&byId[row.id].actuals)||{}, revs:(byId[row.id]&&byId[row.id].revs)||{}, rejects:(byId[row.id]&&byId[row.id].rejects)||{} });
+  const S2C={ orderNo:"order_no", styleNo:"style_no", sampleFit:"sample_fit", family:"family", colour:"colour", brand:"brand", fabricType:"fabric_type", owner:"owner", setId:"set_id", setRole:"set_role", age:"age", qty:"qty", ordRec:"order_date", delivery:"delivery_date", fitReq:"fit_req", printReq:"print_req", soReq:"so_req", ppBypass:"pp_bypass", labDipReq:"lab_dip_req", ppNeeded:"pp_needed", remarks:"remarks" };
+  const styleToRow=(s)=>{ const r={ id:s.id }; Object.entries(S2C).forEach(([k,col])=>{ r[col]= k==="qty"?(Number(s[k])||0):(s[k]||null); }); r.archived=!!s.archived; return r; };
+  const rowToStyle=(row,byId)=>({ id:row.id, orderNo:row.order_no||"", sampleFit:row.sample_fit||"", family:row.family||"", styleNo:row.style_no||"", colour:row.colour||"", brand:row.brand||"", fabricType:row.fabric_type||"", owner:row.owner||"", setId:row.set_id||"", setRole:row.set_role||"", age:row.age||"", qty:row.qty||0, ordRec:row.order_date||"", delivery:row.delivery_date||"", fitReq:!!row.fit_req, printReq:!!row.print_req, soReq:!!row.so_req, ppBypass:!!row.pp_bypass, labDipReq:!!row.lab_dip_req, ppNeeded:!!row.pp_needed, remarks:row.remarks||"", actuals:(byId[row.id]&&byId[row.id].actuals)||{}, revs:(byId[row.id]&&byId[row.id].revs)||{}, rejects:(byId[row.id]&&byId[row.id].rejects)||{}, archived:!!row.archived });
   // LOAD everything from Supabase (also used by the Sync button)
   const loadShared=async()=>{ try{
     const [styRes, sdRes, cmRes] = await Promise.all([
@@ -293,14 +303,31 @@ export default function App(){
   const setRev=(id,key,val)=>{ pushHistory(); setStyles(prev=>prev.map(s=> s.id===id?{...s,revs:{...(s.revs||{}),[key]:val||undefined}}:s)); flash(); };
   const setReject=(id,key,val)=>{ pushHistory(); setStyles(prev=>prev.map(s=> s.id===id?{...s,rejects:{...(s.rejects||{}),[key]:val||undefined}}:s)); flash(); };
   const toggleFlag=(id,flag)=>{ pushHistory(); setStyles(prev=>prev.map(s=>s.id===id?{...s,[flag]:!s[flag]}:s)); flash(); };
+  const [bulkOpen,setBulkOpen]=useState(false);
+  const [bulkResult,setBulkResult]=useState(null); // {inserts, updates, unchanged, sheetName} | {error}
+  const toBool=(v)=>{ const s=String(v||"").trim().toLowerCase(); return s==="y"||s==="yes"||s==="true"||s==="1"; };
+  const toISO=(v)=>{ if(v==null||v==="") return ""; if(v instanceof Date && !isNaN(v)) return iso(v); const d=parse(String(v)); if(d) return iso(d); const dd=new Date(v); return isNaN(dd)?"":iso(dd); };
+  const downloadTemplate=()=>{ const headers=["Style No","Order No","Sample Fit","Family","Colour","Brand","Fabric Type","Junior Owner","Set-Pack ID","Set-Pack Role","Age Group","Order Qty","Order Received","Delivery Date","Fit Req?","Print Req?","S/O Req?","PP Bypass?","Lab Dip Req?","PP Needed?"]; const example=["HSAW26EXAMPLE01","T1","fit 1-3","SWEAT","BLACK","Hopscotch","TERRY","Tamal","","SWEATSHIRT","4-10YRS",400,"2026-05-18","2026-06-25","Y","N","N","Y","Y","Y"]; const ws=XLSX.utils.aoa_to_sheet([headers,example]); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Styles"); XLSX.writeFile(wb,"merch_tracker_upload_template.xlsx"); };
+  const parseUpload=async(file)=>{ try{ const buf=await file.arrayBuffer(); const wb=XLSX.read(buf,{cellDates:true}); const sn=wb.SheetNames.includes("Tracker")?"Tracker":wb.SheetNames[0]; const aoa=XLSX.utils.sheet_to_json(wb.Sheets[sn],{header:1,raw:false,cellDates:true,defval:""}); let hr=-1; for(let i=0;i<Math.min(aoa.length,6);i++){ if((aoa[i]||[]).some(c=>{ const n=NORMH(c); return n==="styleno"||n==="style"; })){ hr=i; break; } } if(hr<0) hr=0; const headers=(aoa[hr]||[]).map(NORMH); const fi={}; headers.forEach((h,i)=>{ const f=HEADER_MAP[h]; if(f&&fi[f]==null) fi[f]=i; }); if(fi.styleNo==null){ setBulkResult({ error:"Couldn't find a 'Style No' column. Use the template headers." }); return; }
+    const recs=[]; for(let i=hr+1;i<aoa.length;i++){ const row=aoa[i]||[]; const styleNo=String(row[fi.styleNo]??"").trim(); if(!styleNo) continue; const rec={ styleNo }; ["orderNo","sampleFit","family","colour","brand","fabricType","owner","setId","setRole","age"].forEach(f=>{ if(fi[f]!=null){ const v=String(row[fi[f]]??"").trim(); if(v) rec[f]=v; } }); if(fi.qty!=null){ const q=String(row[fi.qty]??"").replace(/[^0-9.]/g,""); if(q) rec.qty=Number(q)||0; } if(fi.ordRec!=null){ const d=toISO(row[fi.ordRec]); if(d) rec.ordRec=d; } if(fi.delivery!=null){ const d=toISO(row[fi.delivery]); if(d) rec.delivery=d; } ["fitReq","printReq","soReq","ppBypass","labDipReq","ppNeeded"].forEach(f=>{ if(fi[f]!=null && String(row[fi[f]]??"").trim()!=="") rec[f]=toBool(row[fi[f]]); }); recs.push(rec); }
+    const byNo={}; styles.forEach(s=> byNo[String(s.styleNo).trim().toLowerCase()]=s); const inserts=[], updates=[]; let unchanged=0;
+    recs.forEach(rec=>{ const ex=byNo[rec.styleNo.toLowerCase()]; if(ex){ const chg={}; Object.keys(rec).forEach(f=>{ if(f==="styleNo") return; const nv=rec[f]; if(nv===undefined||nv==="") return; if(String(ex[f]??"")!==String(nv)) chg[f]=nv; }); if(Object.keys(chg).length) updates.push({ id:ex.id, styleNo:rec.styleNo, chg }); else unchanged++; } else inserts.push(rec); });
+    setBulkResult({ inserts, updates, unchanged, sheetName:sn, total:recs.length });
+  }catch(e){ console.error("parse failed",e); setBulkResult({ error:"Couldn't read that file: "+(e.message||e) }); } };
+  const applyBulk=async()=>{ if(!bulkResult||bulkResult.error) return; pushHistory(); const { inserts, updates }=bulkResult;
+    if(updates.length){ const m={}; updates.forEach(u=>{ m[u.id]={...(m[u.id]||{}),...u.chg}; }); setStyles(prev=>prev.map(s=> m[s.id]?{...s,...m[s.id]}:s)); }
+    if(inserts.length){ const rows=inserts.map(rec=>{ const s={ orderNo:rec.orderNo||"NEW", styleNo:rec.styleNo, sampleFit:rec.sampleFit||"", family:rec.family||"", colour:rec.colour||"", brand:rec.brand||"", fabricType:rec.fabricType||"", owner:rec.owner||"", setId:rec.setId||"", setRole:rec.setRole||"", age:rec.age||"", qty:rec.qty||0, ordRec:rec.ordRec||iso(TODAY), delivery:rec.delivery||rec.ordRec||iso(TODAY), fitReq:rec.fitReq??true, printReq:rec.printReq??false, soReq:rec.soReq??false, ppBypass:rec.ppBypass??false, labDipReq:rec.labDipReq??true, ppNeeded:rec.ppNeeded??true, remarks:"" }; const r=styleToRow(s); delete r.id; return r; });
+      try{ const { data, error }=await supabase.from("styles").insert(rows).select(); if(error) throw error; if(data) setStyles(prev=>[...prev, ...data.map(d=>rowToStyle(d,{}))]); }catch(e){ console.error("bulk insert failed",e); alert("New styles failed to insert (existing updates were applied): "+(e.message||e)); } }
+    setBulkOpen(false); setBulkResult(null); flash(); };
+  const archiveFiltered=(val)=>{ const ids=new Set(rows.map(r=>r.s.id)); if(!ids.size) return; if(!window.confirm(`${val?"Archive":"Restore"} ${ids.size} style(s)? Archived styles are hidden from the active sheet — this is reversible.`)) return; pushHistory(); setStyles(prev=>prev.map(s=> ids.has(s.id)?{...s,archived:val}:s)); flash(); };
   const deleteStyle=async(id)=>{ if(!window.confirm("Delete this style row? This removes it for everyone and cannot be undone.")) return; pushHistory(); setStyles(prev=>prev.filter(s=>s.id!==id)); flash(); try{ await supabase.from("stage_dates").delete().eq("style_id",id); await supabase.from("cell_meta").delete().eq("style_id",id); await supabase.from("styles").delete().eq("id",id); }catch(e){ console.error("delete failed",e); } };
 
   const computed=useMemo(()=>styles.map(s=>({s,c:computeStyle(s,cfg)})),[styles,cfg]);
   const todoItems=useMemo(()=>{ const out=[]; const fabByCol={}; computed.forEach(({s,c})=>{ if(c.released) return; const front=c.frontier?[...c.frontier]:[]; front.forEach(key=>{ const r=(c.stages||[]).find(x=>x.key===key); if(!r||r.done) return; const exp=r.rev||r.plan; if(!exp) return; const du=netWorkdays(TODAY,exp); const overdue=TODAY>exp; const win=(cfg.upcoming&&cfg.upcoming[key]!=null)?cfg.upcoming[key]:null; const include = overdue || (win!=null && du<=win); if(!include) return; const branch=BRANCH_OF[key]||""; if(key==="fabricIH"){ const cols=String(s.colour||"").split(/[,/]/).map(x=>x.trim()).filter(Boolean); (cols.length?cols:["(no colour)"]).forEach(col=>{ let cur=fabByCol[col]; if(!cur){ cur=fabByCol[col]={ colour:col, key, label:r.label, owner:r.owner, branch, exp, du, overdue, anyStyle:s.id, anyOrder:s.orderNo, anyJunior:s.owner, count:0 }; } cur.count++; if(exp<cur.exp){ cur.exp=exp; cur.du=du; cur.overdue=overdue; cur.anyStyle=s.id; cur.anyOrder=s.orderNo; cur.anyJunior=s.owner; } }); } else { out.push({ id:s.id, orderNo:s.orderNo, styleNo:s.styleNo, junior:s.owner, colour:s.colour, key, activity:r.label, branch, owner:r.owner, exp, du, overdue }); } }); }); Object.values(fabByCol).forEach(f=> out.push({ id:f.anyStyle, orderNo:f.anyOrder, styleNo:f.colour, junior:f.anyJunior, colour:f.colour, key:f.key, activity:f.label, branch:f.branch, owner:f.owner, exp:f.exp, du:f.du, overdue:f.overdue, isColour:true, count:f.count })); out.sort((a,b)=> (a.overdue!==b.overdue)?(a.overdue?-1:1):((a.exp&&b.exp)?(a.exp-b.exp):0)); return out; },[computed,cfg]);
-  const [todoFilter,setTodoFilter]=useState(null); // filter the To-Do by activity (drill target)
+  const [todoFilter,setTodoFilter]=useState({}); // To-Do filters {activity, owner} from a dashboard drill
   const valueFor=(s,cc,col)=>{
     if(col==="__style") return s.styleNo||"";
-    if(["orderNo","sampleFit","family","colour","owner","setId","setRole","remarks"].includes(col)) return s[col]||"(Blanks)";
+    if(["orderNo","sampleFit","family","colour","brand","fabricType","owner","setId","setRole","remarks"].includes(col)) return s[col]||"(Blanks)";
     if(col==="qty") return String(s.qty);
     if(col==="ordRec"||col==="delivery") return fmt(parse(s[col]))||"(Blanks)";
     if(col==="overall") return cc.status;
@@ -315,7 +342,13 @@ export default function App(){
     return "";
   };
   const passCol=(s,c,col,allowed)=>{ if(!allowed||allowed.length===0) return true; if(col==="chase"){ const owners=(c.chaseOwners||[]).map(o=>o.owner); if(owners.length===0) return allowed.includes("(Blanks)"); return owners.some(o=>allowed.includes(o)); } return allowed.includes(valueFor(s,c,col)); };
-  const filtered=computed.filter(({s,c})=>{ const q=search.toLowerCase(); const ownerMatch=(c.chaseOwners||[]).some(o=>o.owner.toLowerCase().includes(q)); const matchQ=!q||s.styleNo.toLowerCase().includes(q)||s.colour.toLowerCase().includes(q)||s.family.toLowerCase().includes(q)||s.sampleFit.toLowerCase().includes(q)||s.orderNo.toLowerCase().includes(q)||ownerMatch; const matchS=statusFilter==="All"||(statusFilter==="At Risk"&&(c.tone==="late"||c.tone==="warn"))||(statusFilter==="On Track"&&c.tone==="ok")||(statusFilter==="Released"&&c.released); const matchF=Object.entries(colFilters).every(([col,allowed])=> passCol(s,c,col,allowed)); return matchQ&&matchS&&matchF; });
+  const anyFilter = statusFilter!=="All"||ownerFilter!=="All"||!!search||Object.keys(colFilters).length>0||!!activityFilter;
+  const resetFilters=()=>{ setStatusFilter("All"); setOwnerFilter("All"); setSearch(""); setColFilters({}); setActivityFilter(null); };
+  const snapCurrent=()=>setViewSnap({ statusFilter, ownerFilter, search, colFilters, activityFilter });
+  const clearAllFilters=()=>{ resetFilters(); setViewSnap(null); };
+  const restoreView=()=>{ if(!viewSnap) return; setStatusFilter(viewSnap.statusFilter); setOwnerFilter(viewSnap.ownerFilter); setSearch(viewSnap.search); setColFilters(viewSnap.colFilters); setActivityFilter(viewSnap.activityFilter); setViewSnap(null); };
+  const applyDrill=(spec)=>{ snapCurrent(); setStatusFilter(spec.status||"All"); setOwnerFilter(spec.owner||"All"); setSearch(spec.search||""); setColFilters(spec.colFilters||{}); setActivityFilter(spec.activity||null); setTab("tracker"); };
+  const filtered=computed.filter(({s,c})=>{ const q=search.toLowerCase(); const ownerMatch=(c.chaseOwners||[]).some(o=>o.owner.toLowerCase().includes(q)); const matchQ=!q||s.styleNo.toLowerCase().includes(q)||s.colour.toLowerCase().includes(q)||s.family.toLowerCase().includes(q)||s.sampleFit.toLowerCase().includes(q)||s.orderNo.toLowerCase().includes(q)||ownerMatch; const matchS=statusFilter==="All"||(statusFilter==="At Risk"&&(c.tone==="late"||c.tone==="warn"))||(statusFilter==="On Track"&&c.tone==="ok")||(statusFilter==="Released"&&c.released); const matchF=Object.entries(colFilters).every(([col,allowed])=> passCol(s,c,col,allowed)); const matchO=ownerFilter==="All"||(c.chaseOwners||[]).some(o=>o.owner===ownerFilter); const matchA=!activityFilter||(c.frontier&&c.frontier.has(activityFilter)); const matchArch=archiveView==="all"?true:(archiveView==="archived"?!!s.archived:!s.archived); return matchQ&&matchS&&matchF&&matchO&&matchA&&matchArch; });
   const toneRank={ late:0, warn:1, ok:2, done:3, na:4 };
   const fitNum=(s)=>{ const m=String(s.sampleFit).match(/\d+/); return m?Number(m[0]):Infinity; };
   const sortVal=(col,{s,c})=>{ switch(col){ case "__style": return s.styleNo.toLowerCase(); case "orderNo": return (s.orderNo||"~").toLowerCase(); case "sampleFit": return fitNum(s); case "family": return s.family.toLowerCase(); case "colour": return s.colour.toLowerCase(); case "owner": return (s.owner||"").toLowerCase(); case "setId": return (s.setId||"~").toLowerCase(); case "setRole": return (s.setRole||"").toLowerCase(); case "qty": return s.qty; case "ordRec": return s.ordRec?new Date(s.ordRec).getTime():Infinity; case "delivery": return s.delivery?new Date(s.delivery).getTime():Infinity; case "overall": return toneRank[c.tone]; case "fit": return toneRank[c.fitBranch.tone]; case "print": return toneRank[c.printBranch.tone]; case "fabric": return toneRank[c.fabricBranch.tone]; case "pp": return toneRank[c.ppBranch.tone]; case "prod": return toneRank[c.prodFileBranch.tone]; case "fabricCD": return c.fabricCountdown.n==null?Infinity:c.fabricCountdown.n; case "proj": return c.projRelease?c.projRelease.getTime():Infinity; case "pct": return c.pct; case "chase": return (c.chaseOwners||[]).length; case "float": return c.float==null?Infinity:c.float; case "idle": return c.idle==null?-1:c.idle; case "remarks": return (s.remarks||"~").toLowerCase(); default: { const a=s.actuals[col]; return a?new Date(a).getTime():Infinity; } } };
@@ -357,7 +390,7 @@ export default function App(){
   const onCellClick=(e,id,col)=>{ e.stopPropagation(); if(gridRef.current) gridRef.current.focus({preventScroll:true}); if(editing){ if(editing.id===id&&editing.col===col) return; finishEditing(); } if(e.shiftKey&&sel){ setFocus({id,col}); scrollToCell(id,col); return; } if(sel&&sel.id===id&&sel.col===col&&!editing&&isEditableCol(col)&&ROLES[role].canEdit(ownerOfCol(col))){ startEdit(id,col); return; } setSel({id,col}); setFocus(null); };
 
   const moveAnchor=(dr,dc)=>{ if(!sel) return; let r=rowIndex(sel.id)+dr, c=colIndex(sel.col)+dc; r=Math.min(Math.max(r,0),rows.length-1); c=Math.min(Math.max(c,0),navCols.length-1); if(rows[r]){ setSel({id:rows[r].s.id,col:navCols[c]}); setFocus(null); scrollToCell(rows[r].s.id,navCols[c]); } };
-  const scrollToCell=(id,col)=>{ requestAnimationFrame(()=>{ const el=document.getElementById(`cell-${id}-${col}`); if(el) el.scrollIntoView({ inline:"nearest", block:"nearest" }); }); };
+  const scrollToCell=(id,col)=>{ requestAnimationFrame(()=>{ const el=document.getElementById(`cell-${id}-${col}`); if(!el) return; el.scrollIntoView({ block:"nearest" }); const wrap=scrollWrapRef.current; if(wrap){ const cr=el.getBoundingClientRect(), wr=wrap.getBoundingClientRect(); const frozen=STYLE_W+6; if(cr.left < wr.left+frozen){ wrap.scrollLeft -= (wr.left+frozen-cr.left)+8; } else if(cr.right > wr.right){ wrap.scrollLeft += (cr.right-wr.right)+8; } } }); };
   const selectRow=(id)=>{ setSel({id,col:navCols[0]}); setFocus({id,col:navCols[navCols.length-1]}); };
   const selectAll=()=>{ if(!rows.length) return; setSel({id:rows[0].s.id,col:navCols[0]}); setFocus({id:rows[rows.length-1].s.id,col:navCols[navCols.length-1]}); };
   const moveFocus=(dr,dc)=>{ if(!sel) return; const f=focus||sel; let r=rowIndex(f.id)+dr, c=colIndex(f.col)+dc; r=Math.min(Math.max(r,0),rows.length-1); c=Math.min(Math.max(c,0),navCols.length-1); if(rows[r]){ setFocus({id:rows[r].s.id,col:navCols[c]}); scrollToCell(rows[r].s.id,navCols[c]); } };
@@ -413,7 +446,7 @@ export default function App(){
 
   const requiredMissing=()=>{ const m=[]; if(!newRow.styleNo.trim()) m.push("Style No"); if(!newRow.orderNo.trim()) m.push("Order No"); if(!newRow.ordRec) m.push("Order Date"); if(!newRow.delivery) m.push("Delivery Date"); return m; };
   const addNewStyle=async()=>{ const miss=requiredMissing(); if(miss.length){ setNewError("Required: "+miss.join(", ")); return; } setNewError(""); pushHistory();
-    const base={ order_no:newRow.orderNo||"", style_no:newRow.styleNo.trim(), sample_fit:newRow.sampleFit||"", family:newRow.family||"", colour:newRow.colour||"", owner:newRow.owner||"", set_id:"", set_role:"", age:"", qty:Number(newRow.qty)||0, order_date:newRow.ordRec||iso(TODAY), delivery_date:newRow.delivery||"2026-07-15", fit_req:newRow.fitReq, print_req:newRow.printReq, so_req:newRow.soReq, pp_bypass:newRow.ppBypass, lab_dip_req:newRow.labDipReq, pp_needed:newRow.ppNeeded, remarks:"" };
+    const base={ order_no:newRow.orderNo||"", style_no:newRow.styleNo.trim(), sample_fit:newRow.sampleFit||"", family:newRow.family||"", colour:newRow.colour||"", brand:newRow.brand||"", fabric_type:newRow.fabricType||"", owner:newRow.owner||"", set_id:"", set_role:"", age:"", qty:Number(newRow.qty)||0, order_date:newRow.ordRec||iso(TODAY), delivery_date:newRow.delivery||"2026-07-15", fit_req:newRow.fitReq, print_req:newRow.printReq, so_req:newRow.soReq, pp_bypass:newRow.ppBypass, lab_dip_req:newRow.labDipReq, pp_needed:newRow.ppNeeded, remarks:"" };
     try{ const { data, error }=await supabase.from("styles").insert(base).select().single(); if(error||!data) throw error||new Error("no row"); setStyles(prev=>[...prev, rowToStyle(data,{})]); }catch(e){ console.error("create failed",e); }
     setNewRow({ styleNo:"", orderNo:"", sampleFit:"", family:"", colour:"", owner:"", qty:"", ordRec:iso(TODAY), delivery:"", fitReq:true, printReq:false, soReq:false, ppBypass:false, labDipReq:true, ppNeeded:true }); flash(); };
 
@@ -453,6 +486,26 @@ export default function App(){
         {[["tracker","Tracker"],["dashboard","Dashboard"],["todo","To-Do"],["settings","Settings"]].map(([k,lab])=>(<button key={k} onClick={(e)=>{ e.stopPropagation(); setTab(k); }} style={{ fontFamily:"'Archivo',sans-serif", fontWeight:700, fontSize:12, letterSpacing:0.3, padding:"9px 16px", cursor:"pointer", border:"none", borderBottom:tab===k?"3px solid #d97706":"3px solid transparent", background:"transparent", color:tab===k?"#f4f0e8":"#9a958c" }}>{lab}{k==="todo"&&todoItems.length?` · ${todoItems.length}`:""}</button>))}
       </div>
 
+      {bulkOpen && (<div onClick={()=>{ setBulkOpen(false); setBulkResult(null); }} style={{ position:"fixed", inset:0, background:"rgba(26,26,26,0.55)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+        <div onClick={e=>e.stopPropagation()} style={{ background:"#f4f0e8", border:"2px solid #1a1a1a", boxShadow:"8px 8px 0 #1a1a1a", width:560, maxWidth:"100%", maxHeight:"86vh", overflowY:"auto", padding:22, fontFamily:"'JetBrains Mono',monospace" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:18 }}>Bulk upload styles</div><button onClick={()=>{ setBulkOpen(false); setBulkResult(null); }} style={{ border:"none", background:"transparent", cursor:"pointer" }}><X size={18}/></button></div>
+          <p style={{ fontSize:11, color:"#666", lineHeight:1.5 }}>Upload an Excel (.xlsx) or CSV. Rows are matched by <b>Style No</b> — existing styles are updated, new ones are added. Nothing is saved until you confirm.</p>
+          <button onClick={downloadTemplate} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 11px", cursor:"pointer", border:"1px solid #1a1a1a", background:"#fff", marginBottom:12 }}>⬇ Download template</button>
+          <div style={{ marginBottom:12 }}><input type="file" accept=".xlsx,.xls,.csv" onChange={e=>{ const f=e.target.files&&e.target.files[0]; if(f) parseUpload(f); }} style={{ fontFamily:"inherit", fontSize:11 }}/></div>
+          {bulkResult && bulkResult.error && <div style={{ fontSize:11, color:"#c0392b", fontWeight:700, marginBottom:12 }}>{bulkResult.error}</div>}
+          {bulkResult && !bulkResult.error && (<div style={{ marginBottom:12 }}>
+            <div style={{ fontSize:12, marginBottom:8 }}>Read <b>{bulkResult.total}</b> rows from sheet "<b>{bulkResult.sheetName}</b>":</div>
+            <div style={{ display:"flex", gap:10, marginBottom:10 }}>
+              <div style={{ flex:1, border:"1px solid #1a1a1a", background:"#fff", padding:"8px 10px" }}><div style={{ fontSize:22, fontWeight:800, color:"#1f6f54", fontFamily:"'Archivo',sans-serif" }}>{bulkResult.inserts.length}</div><div style={{ fontSize:9, color:"#888", textTransform:"uppercase" }}>new</div></div>
+              <div style={{ flex:1, border:"1px solid #1a1a1a", background:"#fff", padding:"8px 10px" }}><div style={{ fontSize:22, fontWeight:800, color:"#d97706", fontFamily:"'Archivo',sans-serif" }}>{bulkResult.updates.length}</div><div style={{ fontSize:9, color:"#888", textTransform:"uppercase" }}>updated</div></div>
+              <div style={{ flex:1, border:"1px solid #1a1a1a", background:"#fff", padding:"8px 10px" }}><div style={{ fontSize:22, fontWeight:800, color:"#999", fontFamily:"'Archivo',sans-serif" }}>{bulkResult.unchanged}</div><div style={{ fontSize:9, color:"#888", textTransform:"uppercase" }}>unchanged</div></div>
+            </div>
+            {bulkResult.updates.length>0 && <div style={{ maxHeight:140, overflowY:"auto", border:"1px solid #ddd", background:"#fff", padding:8, fontSize:10 }}><div style={{ fontWeight:700, marginBottom:4 }}>Changes to existing styles:</div>{bulkResult.updates.slice(0,40).map(u=>(<div key={u.id} style={{ padding:"2px 0", borderBottom:"1px solid #f0ece3" }}><b>{u.styleNo}</b> — {Object.keys(u.chg).join(", ")}</div>))}{bulkResult.updates.length>40 && <div style={{ color:"#999" }}>…and {bulkResult.updates.length-40} more</div>}</div>}
+          </div>)}
+          {bulkResult && !bulkResult.error && (bulkResult.inserts.length+bulkResult.updates.length>0) && <button onClick={applyBulk} style={{ fontFamily:"inherit", fontSize:12, padding:"9px 16px", cursor:"pointer", border:"1px solid #1a1a1a", background:"#1f6f54", color:"#fff", fontWeight:700 }}>Confirm — apply {bulkResult.inserts.length+bulkResult.updates.length} change(s)</button>}
+        </div>
+      </div>)}
+
       {tab==="tracker" && (<>
       <div style={{ display:"flex", padding:"12px 22px 0", flexWrap:"wrap" }}>
         {Object.entries(funnel).map(([k,v],i,arr)=>(<div key={k} style={{ flex:1, minWidth:90, background:"#fff", border:"1px solid #1a1a1a", borderRight:i===arr.length-1?"1px solid #1a1a1a":"none", padding:"8px 10px" }}><div style={{ fontSize:22, fontWeight:700, lineHeight:1, fontFamily:"'Archivo',sans-serif", color:k==="Released"?"#1f6f54":k==="Fabric IH"?"#c0392b":"#1a1a1a" }}>{v}</div><div style={{ fontSize:9, color:"#888", marginTop:3, letterSpacing:0.5, textTransform:"uppercase" }}>{k}</div></div>))}
@@ -461,6 +514,14 @@ export default function App(){
       <div style={{ display:"flex", gap:10, alignItems:"center", padding:"12px 22px 6px", flexWrap:"wrap" }}>
         <div style={{ display:"flex", alignItems:"center", gap:6, background:"#fff", border:"1px solid #1a1a1a", padding:"5px 9px" }}><Filter size={13}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="search style / colour / fit / order…" onClick={e=>e.stopPropagation()} style={{ border:"none", outline:"none", fontFamily:"inherit", fontSize:12, width:180, background:"transparent" }}/></div>
         <div style={{ display:"flex", border:"1px solid #1a1a1a" }}>{["All","At Risk","On Track","Released"].map(f=>(<button key={f} onClick={(e)=>{ e.stopPropagation(); setStatusFilter(f); }} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 11px", cursor:"pointer", border:"none", borderRight:f!=="Released"?"1px solid #1a1a1a":"none", background:statusFilter===f?"#1a1a1a":"#fff", color:statusFilter===f?"#f4f0e8":"#1a1a1a" }}>{f}</button>))}</div>
+        <div style={{ display:"flex", border:"1px solid #1a1a1a" }}>{["All","Merchant","CAD","Buyer","Designer","Mill"].map(f=>(<button key={f} onClick={(e)=>{ e.stopPropagation(); setOwnerFilter(f); }} title="chase owner" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 9px", cursor:"pointer", border:"none", borderRight:f!=="Mill"?"1px solid #1a1a1a":"none", background:ownerFilter===f?"#2563a6":"#fff", color:ownerFilter===f?"#fff":"#1a1a1a" }}>{f==="All"?"Owner":f}</button>))}</div>
+        <div style={{ display:"flex", border:"1px solid #1a1a1a" }}>{[["active","Active"],["all","All"],["archived","Archived"]].map(([v,lab])=>(<button key={v} onClick={(e)=>{ e.stopPropagation(); setArchiveView(v); }} title="archived styles are hidden from the live sheet" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 9px", cursor:"pointer", border:"none", borderRight:v!=="archived"?"1px solid #1a1a1a":"none", background:archiveView===v?"#5a6650":"#fff", color:archiveView===v?"#fff":"#1a1a1a" }}>{lab}</button>))}</div>
+        {role!=="Viewer" && archiveView!=="archived" && anyFilter && <button onClick={(e)=>{ e.stopPropagation(); archiveFiltered(true); }} title="archive the styles currently shown (e.g. a finished season)" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 10px", cursor:"pointer", border:"1px solid #5a6650", background:"#fff", color:"#5a6650", fontWeight:700 }}>Archive these ({rows.length})</button>}
+        {role!=="Viewer" && archiveView==="archived" && rows.length>0 && <button onClick={(e)=>{ e.stopPropagation(); archiveFiltered(false); }} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 10px", cursor:"pointer", border:"1px solid #1f6f54", background:"#fff", color:"#1f6f54", fontWeight:700 }}>Restore these ({rows.length})</button>}
+        {role!=="Viewer" && <button onClick={(e)=>{ e.stopPropagation(); setBulkResult(null); setBulkOpen(true); }} title="bulk upload / update styles from Excel" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 11px", cursor:"pointer", border:"1px solid #1a1a1a", background:"#1a1a1a", color:"#f4f0e8", fontWeight:700, display:"flex", alignItems:"center", gap:6 }}><Plus size={13}/> Upload styles</button>}
+        {activityFilter && <span style={{ fontSize:10, fontWeight:700, background:"#d97706", color:"#1a1a1a", padding:"5px 9px", display:"flex", alignItems:"center", gap:5 }}>activity: {(STAGES.find(x=>x.key===activityFilter)||{}).label}<button onClick={(e)=>{ e.stopPropagation(); setActivityFilter(null); }} style={{ border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:0 }}><X size={11}/></button></span>}
+        {anyFilter && <button onClick={(e)=>{ e.stopPropagation(); clearAllFilters(); }} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 10px", cursor:"pointer", border:"1px solid #c0392b", background:"#fff", color:"#c0392b", fontWeight:700, display:"flex", alignItems:"center", gap:5 }}><X size={12}/> clear filters</button>}
+        {viewSnap && <button onClick={(e)=>{ e.stopPropagation(); restoreView(); }} title="go back to the view you had before drilling in" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 10px", cursor:"pointer", border:"1px solid #1a1a1a", background:"#fff", display:"flex", alignItems:"center", gap:5 }}><RotateCcw size={12}/> restore view</button>}
         <div style={{ position:"relative" }}><button onClick={(e)=>{ e.stopPropagation(); finishEditing(); setFillOpen(o=>!o); setColsOpen(false); }} disabled={role==="Viewer"} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 11px", cursor:role==="Viewer"?"not-allowed":"pointer", border:"1px solid #1a1a1a", background:"#d97706", color:"#1a1a1a", fontWeight:700, display:"flex", alignItems:"center", gap:6, opacity:role==="Viewer"?0.4:1 }}><Copy size={13}/> Fill date → {rows.length}</button>{fillOpen && role!=="Viewer" && (<FillPanel count={rows.length} onClose={()=>setFillOpen(false)} onApply={(key,val)=>{ setStyles(prev=>prev.map(s=>rows.some(r=>r.s.id===s.id)?{...s,actuals:{...s.actuals,[key]:val||undefined}}:s)); flash(); setFillOpen(false); }}/>)}</div>
         <div style={{ position:"relative" }}><button onClick={(e)=>{ e.stopPropagation(); finishEditing(); setColsOpen(o=>!o); setFillOpen(false); }} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 11px", cursor:"pointer", border:"1px solid #1a1a1a", background:"#fff", display:"flex", alignItems:"center", gap:6 }}><Columns3 size={13}/> Columns {hidden.size>0?`(${hidden.size} hidden)`:""}</button>
           {colsOpen && (<div onClick={e=>e.stopPropagation()} style={{ position:"absolute", top:"100%", left:0, marginTop:4, zIndex:70, background:"#fff", border:"1px solid #1a1a1a", boxShadow:"4px 4px 0 #1a1a1a", padding:10, width:230, maxHeight:300, overflowY:"auto" }}><div style={{ fontSize:10, fontWeight:700, marginBottom:6 }}>Show / hide columns</div>{[...INFO_COLS,{key:"remarks",label:"Remarks / Delays"},...STAGES].map(col=>(<label key={col.key} style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, padding:"2px 0", cursor:"pointer" }}><input type="checkbox" checked={!hidden.has(col.key)} onChange={()=>setHidden(p=>{ const n=new Set(p); n.has(col.key)?n.delete(col.key):n.add(col.key); return n; })}/>{col.label}</label>))}{hidden.size>0 && <button onClick={()=>setHidden(new Set())} style={{ ...chip, marginTop:6, width:"100%" }}>Show all</button>}</div>)}
@@ -494,7 +555,7 @@ export default function App(){
         <span style={{ marginLeft:8 }}>{clip?<span style={{color:"#2563a6"}}>📋 {clip.h}×{clip.w} copied — select & Ctrl/Cmd+V to paste</span>:(sel?<>selected: <b>{styles.find(s=>s.id===sel.id)?.styleNo} · {sel.col==="__style"?"Style":(INFO_COLS.find(c=>c.key===sel.col)?.label||STAGES.find(s=>s.key===sel.col)?.label||sel.col)}</b>{focus?" (range)":""}</>:"click a cell to format / comment")}</span>
       </div>
 
-      <div style={{ overflow:"auto", padding:"0 22px", maxHeight:"calc(100vh - 210px)" }}>
+      <div ref={scrollWrapRef} style={{ overflow:"auto", padding:"0 22px", maxHeight:"calc(100vh - 210px)" }}>
         <table role="grid" aria-label="Pre-production tracker grid. Arrow keys to move, Escape to exit, Tab to leave the grid." style={{ borderCollapse:"separate", borderSpacing:0, fontSize:11, tableLayout:"fixed", userSelect:dragSel?"none":"auto" }}>
           <colgroup>
             <col style={{ width:widthOf("__style") }}/>
@@ -614,8 +675,8 @@ export default function App(){
       </div>
       </>)}
 
-      {tab==="dashboard" && <DashboardView computed={computed} todoItems={todoItems} drill={(setter)=>{ setter&&setter(); setTab("tracker"); }} drillTodo={(act)=>{ setTodoFilter(act); setTab("todo"); }} setStatusFilter={setStatusFilter} setColFilters={setColFilters} setSearch={setSearch}/>}
-      {tab==="todo" && <TodoView items={todoItems} filter={todoFilter} setFilter={setTodoFilter} onJump={(id,key)=>{ setTab("tracker"); requestAnimationFrame(()=>setTimeout(()=>jumpToEnter(id,key),60)); }}/>}
+      {tab==="dashboard" && <DashboardView computed={computed} todoItems={todoItems} applyDrill={applyDrill} drillTodo={(obj)=>{ setTodoFilter(obj); setTab("todo"); }}/>}
+      {tab==="todo" && <TodoView items={todoItems} filter={todoFilter} setFilter={setTodoFilter} onJump={(id,key)=>{ snapCurrent(); resetFilters(); setTab("tracker"); requestAnimationFrame(()=>setTimeout(()=>jumpToEnter(id,key),60)); }}/>}
       {tab==="settings" && <SettingsView cfg={cfg} setCfg={setCfg} canEdit={role!=="Viewer"}/>}
     </div>
   );
@@ -668,58 +729,85 @@ const ndCell={ border:"1px dashed #e8dcc2", padding:"6px 9px", whiteSpace:"nowra
 const ndInput=(w)=>({ border:"none", outline:"none", background:"transparent", fontFamily:"'JetBrains Mono', monospace", fontSize:10, width:w });
 
 /* ========================= DASHBOARD ========================= */
-function DashboardView({ computed, todoItems, drill, drillTodo, setStatusFilter, setColFilters, setSearch }){
-  const total=computed.length;
-  const onTrack=computed.filter(({c})=>c.tone==="ok").length;
-  const atRisk=computed.filter(({c})=>c.tone==="late"||c.tone==="warn").length;
-  const released=computed.filter(({c})=>c.released).length;
-  const delRisk=computed.filter(({c})=>String(c.status).startsWith("Delivery risk")).length;
-  const overdueTodo=todoItems.filter(t=>t.overdue).length;
-  // owner chase load
-  const ownerLoad={}; computed.forEach(({c})=>{ if(c.released) return; (c.chaseOwners||[]).forEach(o=>{ ownerLoad[o.owner]=(ownerLoad[o.owner]||0)+1; }); });
-  const owners=Object.entries(ownerLoad).sort((a,b)=>b[1]-a[1]);
-  const maxOwner=Math.max(1,...owners.map(o=>o[1]));
-  // phase buckets (where the next pending sits)
+function DashboardView({ computed, todoItems, applyDrill, drillTodo }){
+  const [target,setTarget]=useState("tracker"); // where bar/owner/activity drills go
+  const [df,setDf]=useState({}); // splice filters: order, fit, colour, junior, family
+  const distinct=(fn)=>{ const s=new Set(); computed.forEach(({s:st})=>{ fn(st).forEach(v=>{ if(v) s.add(v); }); }); return [...s].sort(); };
+  const orders=distinct(s=>[s.orderNo]); const fits=distinct(s=>[s.sampleFit]); const juniors=distinct(s=>[s.owner]); const families=distinct(s=>[s.family]); const brands=distinct(s=>[s.brand]); const fabrics=distinct(s=>[s.fabricType]);
+  const colours=distinct(s=>String(s.colour||"").split(/[,/]/).map(x=>x.trim()));
+  const fc=computed.filter(({s})=> (!df.order||s.orderNo===df.order) && (!df.fit||s.sampleFit===df.fit) && (!df.junior||s.owner===df.junior) && (!df.family||s.family===df.family) && (!df.brand||s.brand===df.brand) && (!df.fabric||s.fabricType===df.fabric) && (!df.colour||String(s.colour||"").split(/[,/]/).map(x=>x.trim()).includes(df.colour)) );
+  const total=fc.length;
+  const onTrack=fc.filter(({c})=>c.tone==="ok").length;
+  const atRisk=fc.filter(({c})=>c.tone==="late"||c.tone==="warn").length;
+  const released=fc.filter(({c})=>c.released).length;
+  const delRisk=fc.filter(({c})=>String(c.status).startsWith("Delivery risk")).length;
+  // owner load + activity load from the spliced set
+  const ownerLoad={}; const actAgg={};
+  fc.forEach(({c})=>{ if(c.released) return; (c.chaseOwners||[]).forEach(o=>{ ownerLoad[o.owner]=(ownerLoad[o.owner]||0)+1; }); (c.frontier?[...c.frontier]:[]).forEach(k=>{ const r=(c.stages||[]).find(x=>x.key===k); if(!r||r.done) return; const a=actAgg[r.label]=actAgg[r.label]||{n:0,over:0,key:k}; a.n++; if((r.rev||r.plan)&&TODAY>(r.rev||r.plan)) a.over++; }); });
+  const owners=Object.entries(ownerLoad).sort((a,b)=>b[1]-a[1]); const maxOwner=Math.max(1,...owners.map(o=>o[1]));
+  const acts=Object.entries(actAgg).sort((a,b)=>b[1].n-a[1].n); const maxAct=Math.max(1,...acts.map(e=>e[1].n));
+  const overdueAct=acts.reduce((s,[,v])=>s+v.over,0);
   const phase={ "Pre-Fit":0,"Fit / Print":0,"Lab Dip":0,"Fabric IH":0,"PP / Prod":0 };
-  computed.forEach(({c})=>{ if(c.released) return; const k=c.nextPending&&c.nextPending.key; if(k==="techpack") phase["Pre-Fit"]++; else if(["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"].includes(k)) phase["Fit / Print"]++; else if(["labDip","labAppr"].includes(k)) phase["Lab Dip"]++; else if(k==="fabricIH") phase["Fabric IH"]++; else phase["PP / Prod"]++; });
+  fc.forEach(({c})=>{ if(c.released) return; const k=c.nextPending&&c.nextPending.key; if(k==="techpack") phase["Pre-Fit"]++; else if(["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"].includes(k)) phase["Fit / Print"]++; else if(["labDip","labAppr"].includes(k)) phase["Lab Dip"]++; else if(k==="fabricIH") phase["Fabric IH"]++; else phase["PP / Prod"]++; });
   const maxPhase=Math.max(1,...Object.values(phase));
-  const card=(label,val,color,onClick)=>(<button onClick={onClick} disabled={!onClick} style={{ flex:1, minWidth:140, textAlign:"left", background:"#fff", border:"1px solid #1a1a1a", padding:"14px 16px", cursor:onClick?"pointer":"default", fontFamily:"inherit" }}><div style={{ fontSize:30, fontWeight:800, fontFamily:"'Archivo',sans-serif", color, lineHeight:1 }}>{val}</div><div style={{ fontSize:10, color:"#888", marginTop:5, letterSpacing:0.5, textTransform:"uppercase" }}>{label}{onClick?" ›":""}</div></button>);
   const OWNER_COLOR2={ Merchant:"#1f6f54", CAD:"#2563a6", Buyer:"#b4531a", Designer:"#6d4aab", Mill:"#7a5a1e" };
-  return (<div style={{ padding:"18px 22px", maxWidth:1100 }}>
+  // splice carried into drills so the tracker shows the same slice
+  const spliceCols=()=>{ const cf={}; if(df.order) cf.orderNo=[df.order]; if(df.fit) cf.sampleFit=[df.fit]; if(df.junior) cf.owner=[df.junior]; if(df.family) cf.family=[df.family]; if(df.brand) cf.brand=[df.brand]; if(df.fabric) cf.fabricType=[df.fabric]; return cf; };
+  const spliceSearch=()=> df.colour||"";
+  const goOwner=(o)=>{ if(target==="todo") drillTodo({ owner:o }); else applyDrill({ owner:o, colFilters:spliceCols(), search:spliceSearch() }); };
+  const goAct=(label,key)=>{ if(target==="todo") drillTodo({ activity:label }); else applyDrill({ activity:key, colFilters:spliceCols(), search:spliceSearch() }); };
+  const goStatus=(st,extra)=>applyDrill({ status:st, colFilters:{...spliceCols(),...(extra||{})}, search:spliceSearch() });
+  const card=(label,val,color,onClick)=>(<button onClick={onClick} disabled={!onClick} style={{ flex:1, minWidth:130, textAlign:"left", background:"#fff", border:"1px solid #1a1a1a", padding:"14px 16px", cursor:onClick?"pointer":"default", fontFamily:"inherit" }}><div style={{ fontSize:28, fontWeight:800, fontFamily:"'Archivo',sans-serif", color, lineHeight:1 }}>{val}</div><div style={{ fontSize:10, color:"#888", marginTop:5, letterSpacing:0.5, textTransform:"uppercase" }}>{label}{onClick?" ›":""}</div></button>);
+  const sel=(label,val,opts,onChange)=>(<select value={val||""} onChange={e=>onChange(e.target.value||undefined)} style={{ fontFamily:"inherit", fontSize:11, padding:"5px 7px", border:"1px solid #1a1a1a", background:val?"#fff7ec":"#fff", maxWidth:150 }}><option value="">{label}: all</option>{opts.map(o=>(<option key={o} value={o}>{o}</option>))}</select>);
+  const anyDf=Object.values(df).some(Boolean);
+  const bar=(items,maxV,colorFn,labelW,onClick,fmtR)=> items.length===0?<div style={{ fontSize:11, color:"#999" }}>Nothing pending.</div>:items.map(([k,v])=>{ const n=typeof v==="number"?v:v.n; return (
+    <button key={k} onClick={()=>onClick(k,v)} style={{ display:"flex", alignItems:"center", gap:8, width:"100%", border:"none", background:"transparent", cursor:"pointer", fontFamily:"inherit", padding:"4px 0" }}>
+      <span style={{ width:labelW, fontSize:10, fontWeight:700, color:colorFn(k), textAlign:"left" }}>{k}</span>
+      <span style={{ flex:1, height:16, background:"#f0ece3", position:"relative" }}><span style={{ position:"absolute", left:0, top:0, bottom:0, width:`${(n/maxV)*100}%`, background:colorFn(k,v) }}/></span>
+      <span style={{ width:54, textAlign:"right", fontSize:10, fontWeight:700 }}>{fmtR?fmtR(v):n}</span>
+    </button>); });
+  return (<div style={{ padding:"16px 22px", maxWidth:1140 }}>
+    {/* splice filter bar */}
+    <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom:14 }}>
+      <span style={{ fontSize:10, fontWeight:700, color:"#888", textTransform:"uppercase", letterSpacing:0.5 }}>Slice:</span>
+      {sel("Order",df.order,orders,v=>setDf(d=>({...d,order:v})))}
+      {sel("Fit",df.fit,fits,v=>setDf(d=>({...d,fit:v})))}
+      {sel("Colour",df.colour,colours,v=>setDf(d=>({...d,colour:v})))}
+      {sel("Junior",df.junior,juniors,v=>setDf(d=>({...d,junior:v})))}
+      {sel("Family",df.family,families,v=>setDf(d=>({...d,family:v})))}
+      {sel("Brand",df.brand,brands,v=>setDf(d=>({...d,brand:v})))}
+      {sel("Fabric",df.fabric,fabrics,v=>setDf(d=>({...d,fabric:v})))}
+      {anyDf && <button onClick={()=>setDf({})} style={{ fontFamily:"inherit", fontSize:10, padding:"5px 9px", cursor:"pointer", border:"1px solid #c0392b", background:"#fff", color:"#c0392b", fontWeight:700 }}>clear slice</button>}
+      <span style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6 }}><span style={{ fontSize:10, color:"#888" }}>drill to:</span><div style={{ display:"flex", border:"1px solid #1a1a1a" }}>{["tracker","todo"].map(t=>(<button key={t} onClick={()=>setTarget(t)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:700, padding:"5px 10px", cursor:"pointer", border:"none", borderRight:t==="tracker"?"1px solid #1a1a1a":"none", background:target===t?"#1a1a1a":"#fff", color:target===t?"#f4f0e8":"#1a1a1a" }}>{t==="tracker"?"Tracker":"To-Do"}</button>))}</div></span>
+    </div>
+
     <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
-      {card("Total styles",total,"#1a1a1a")}
-      {card("On track",onTrack,"#1f6f54",()=>drill(()=>setStatusFilter("On Track")))}
-      {card("At risk",atRisk,"#c0392b",()=>drill(()=>setStatusFilter("At Risk")))}
-      {card("Delivery risk",delRisk,"#c0392b",()=>drill(()=>setColFilters({ overall:["Delivery risk"] })))}
-      {card("Released",released,"#1f6f54",()=>drill(()=>setStatusFilter("Released")))}
-      {card("Overdue to-dos",overdueTodo,"#c0392b")}
+      {card("Styles (slice)",total,"#1a1a1a")}
+      {card("On track",onTrack,"#1f6f54",()=>goStatus("On Track"))}
+      {card("At risk",atRisk,"#c0392b",()=>goStatus("At Risk"))}
+      {card("Delivery risk",delRisk,"#c0392b",()=>goStatus("All",{ overall:["Delivery risk"] }))}
+      {card("Released",released,"#1f6f54",()=>goStatus("Released"))}
+      {card("Overdue activities",overdueAct,"#c0392b")}
     </div>
 
     <div style={{ display:"flex", gap:18, flexWrap:"wrap", marginTop:22 }}>
       <div style={{ flex:1, minWidth:320, background:"#fff", border:"1px solid #1a1a1a", padding:16 }}>
-        <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>WHO TO CHASE — open branches by owner</div>
-        {owners.length===0 ? <div style={{ fontSize:11, color:"#999" }}>Nothing pending.</div> : owners.map(([o,n])=>(
-          <button key={o} onClick={()=>drill(()=>setColFilters({ chase:[o] }))} style={{ display:"flex", alignItems:"center", gap:8, width:"100%", border:"none", background:"transparent", cursor:"pointer", fontFamily:"inherit", padding:"4px 0" }}>
-            <span style={{ width:64, fontSize:11, fontWeight:700, color:OWNER_COLOR2[o]||"#555", textAlign:"left" }}>{o}</span>
-            <span style={{ flex:1, height:16, background:"#f0ece3", position:"relative" }}><span style={{ position:"absolute", left:0, top:0, bottom:0, width:`${(n/maxOwner)*100}%`, background:OWNER_COLOR2[o]||"#888" }}/></span>
-            <span style={{ width:28, textAlign:"right", fontSize:11, fontWeight:700 }}>{n}</span>
-          </button>))}
-        <div style={{ fontSize:9, color:"#aaa", marginTop:8 }}>Click a bar to open those styles in the Tracker.</div>
+        <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>WHO TO CHASE — by owner</div>
+        {bar(owners, maxOwner, (o)=>OWNER_COLOR2[o]||"#888", 64, (o)=>goOwner(o))}
+        <div style={{ fontSize:9, color:"#aaa", marginTop:8 }}>Click to open in {target==="todo"?"To-Do":"Tracker"}.</div>
       </div>
-
       <div style={{ flex:1, minWidth:320, background:"#fff", border:"1px solid #1a1a1a", padding:16 }}>
-        <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>OPEN ACTIVITIES — overdue + upcoming</div>
-        {(()=>{ const byAct={}; todoItems.forEach(t=>{ const a=byAct[t.activity]=byAct[t.activity]||{n:0,over:0}; a.n+=(t.isColour?t.count:1); if(t.overdue) a.over+=(t.isColour?t.count:1); }); const ents=Object.entries(byAct).sort((a,b)=>b[1].n-a[1].n); const mx=Math.max(1,...ents.map(e=>e[1].n)); return ents.length===0?<div style={{ fontSize:11, color:"#999" }}>Nothing due.</div>:ents.map(([a,v])=>(
-          <button key={a} onClick={()=>drillTodo(a)} style={{ display:"flex", alignItems:"center", gap:8, width:"100%", border:"none", background:"transparent", cursor:"pointer", fontFamily:"inherit", padding:"4px 0" }}>
-            <span style={{ width:84, fontSize:10, fontWeight:700, color:"#444", textAlign:"left" }}>{a}</span>
-            <span style={{ flex:1, height:16, background:"#f0ece3", position:"relative" }}><span style={{ position:"absolute", left:0, top:0, bottom:0, width:`${(v.n/mx)*100}%`, background:v.over?"#c0392b":"#d97706" }}/></span>
+        <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>OPEN ACTIVITIES</div>
+        {acts.length===0?<div style={{ fontSize:11, color:"#999" }}>Nothing due.</div>:acts.map(([label,v])=>(
+          <button key={label} onClick={()=>goAct(label,v.key)} style={{ display:"flex", alignItems:"center", gap:8, width:"100%", border:"none", background:"transparent", cursor:"pointer", fontFamily:"inherit", padding:"4px 0" }}>
+            <span style={{ width:84, fontSize:10, fontWeight:700, color:"#444", textAlign:"left" }}>{label}</span>
+            <span style={{ flex:1, height:16, background:"#f0ece3", position:"relative" }}><span style={{ position:"absolute", left:0, top:0, bottom:0, width:`${(v.n/maxAct)*100}%`, background:v.over?"#c0392b":"#d97706" }}/></span>
             <span style={{ width:54, textAlign:"right", fontSize:10, fontWeight:700 }}>{v.n}{v.over?<span style={{ color:"#c0392b" }}> ({v.over})</span>:null}</span>
-          </button>)); })()}
-        <div style={{ fontSize:9, color:"#aaa", marginTop:8 }}>Click an activity to open it in the To-Do. Red number = overdue.</div>
+          </button>))}
+        <div style={{ fontSize:9, color:"#aaa", marginTop:8 }}>Click to open in {target==="todo"?"To-Do":"Tracker"}. Red = overdue.</div>
       </div>
-
       <div style={{ flex:1, minWidth:320, background:"#fff", border:"1px solid #1a1a1a", padding:16 }}>
-        <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>WHERE STYLES ARE STUCK — current phase</div>
+        <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>WHERE STYLES ARE STUCK</div>
         {Object.entries(phase).map(([p,n])=>(
           <div key={p} style={{ display:"flex", alignItems:"center", gap:8, padding:"4px 0" }}>
             <span style={{ width:80, fontSize:10, fontWeight:700, color:"#555" }}>{p}</span>
@@ -734,13 +822,27 @@ function DashboardView({ computed, todoItems, drill, drillTodo, setStatusFilter,
 /* ========================= TO-DO ========================= */
 function TodoView({ items, filter, setFilter, onJump }){
   const OWNER_COLOR2={ Merchant:"#1f6f54", CAD:"#2563a6", Buyer:"#b4531a", Designer:"#6d4aab", Mill:"#7a5a1e" };
-  // activity chips (drillable stage filter)
-  const acts=[]; const seen={}; items.forEach(t=>{ if(!seen[t.activity]){ seen[t.activity]=0; acts.push(t.activity); } seen[t.activity]++; });
-  const shown=items.filter(t=>!filter||t.activity===filter);
+  const [tf,setTf]=useState({}); // header filters: priority, order, junior, activity, branch, owner
+  useEffect(()=>{ if(filter&&Object.keys(filter).length) setTf(f=>({ ...f, ...filter })); },[filter]);
+  const distinct=(field)=>{ const s=new Set(); items.forEach(t=>{ const v=t[field]; if(v) s.add(v); }); return [...s].sort(); };
+  const orders=distinct("orderNo"), juniors=distinct("junior"), activities=distinct("activity"), branches=distinct("branch"), owners=distinct("owner");
+  const pass=(t)=> (!tf.priority||(tf.priority==="Overdue"?t.overdue:!t.overdue)) && (!tf.orderNo||t.orderNo===tf.orderNo) && (!tf.junior||t.junior===tf.junior) && (!tf.activity||t.activity===tf.activity) && (!tf.branch||t.branch===tf.branch) && (!tf.owner||t.owner===tf.owner);
+  const shown=items.filter(pass);
   const overdue=shown.filter(t=>t.overdue), upcoming=shown.filter(t=>!t.overdue);
+  const anyF=Object.values(tf).some(Boolean);
   const COLW={ pri:96, ord:60, sty:170, jr:64, act:92, br:84, own:70, date:84 };
-  const head=(<div style={{ display:"flex", alignItems:"center", gap:10, padding:"6px 12px", fontSize:9, fontWeight:700, letterSpacing:0.4, textTransform:"uppercase", color:"#8a857a", borderBottom:"2px solid #1a1a1a" }}>
-    <span style={{ width:COLW.pri }}>Priority</span><span style={{ width:COLW.ord }}>Order</span><span style={{ width:COLW.sty }}>Style / Colour</span><span style={{ width:COLW.jr }}>Junior</span><span style={{ width:COLW.act }}>Activity</span><span style={{ width:COLW.br }}>Branch</span><span style={{ width:COLW.own }}>Owner</span><span style={{ width:COLW.date }}>Plan Date</span><span style={{ flex:1 }}>Days Late / Left</span>
+  const set=(k,v)=>setTf(f=>({ ...f, [k]:v||undefined }));
+  const hsel=(w,k,opts,first)=>(<select value={tf[k]||""} onChange={e=>set(k,e.target.value)} onClick={e=>e.stopPropagation()} style={{ width:w, fontFamily:"inherit", fontSize:9, padding:"2px 1px", border:"1px solid "+(tf[k]?"#d97706":"#ccc"), background:tf[k]?"#fff7ec":"#fff" }}><option value="">{first}</option>{opts.map(o=>(<option key={o} value={o}>{o}</option>))}</select>);
+  const head=(<div style={{ display:"flex", alignItems:"flex-end", gap:10, padding:"6px 12px 4px", borderBottom:"2px solid #1a1a1a" }}>
+    {hsel(COLW.pri,"priority",["Overdue","Upcoming"],"Priority")}
+    {hsel(COLW.ord,"orderNo",orders,"Order")}
+    <span style={{ width:COLW.sty, fontSize:9, fontWeight:700, textTransform:"uppercase", color:"#8a857a" }}>Style / Colour</span>
+    {hsel(COLW.jr,"junior",juniors,"Junior")}
+    {hsel(COLW.act,"activity",activities,"Activity")}
+    {hsel(COLW.br,"branch",branches,"Branch")}
+    {hsel(COLW.own,"owner",owners,"Owner")}
+    <span style={{ width:COLW.date, fontSize:9, fontWeight:700, textTransform:"uppercase", color:"#8a857a" }}>Plan Date</span>
+    <span style={{ flex:1, fontSize:9, fontWeight:700, textTransform:"uppercase", color:"#8a857a" }}>Days Late / Left</span>
   </div>);
   const row=(t)=>(<button key={(t.isColour?"col-":"")+t.id+t.key} onClick={()=>onJump(t.id,t.key)} style={{ display:"flex", alignItems:"center", gap:10, width:"100%", textAlign:"left", borderLeft:`4px solid ${t.overdue?"#c0392b":"#d97706"}`, borderBottom:"1px solid #eee7da", background:t.isColour?"#fbf8f1":"#fff", cursor:"pointer", fontFamily:"inherit", padding:"7px 12px" }}>
     <span style={{ width:COLW.pri, fontSize:10, fontWeight:700, display:"flex", alignItems:"center", gap:6, color:t.overdue?"#c0392b":"#7a560f" }}><span style={{ width:8, height:8, borderRadius:"50%", background:t.overdue?"#c0392b":"#d97706" }}/>{t.overdue?"Overdue":"Upcoming"}</span>
@@ -753,16 +855,18 @@ function TodoView({ items, filter, setFilter, onJump }){
     <span style={{ width:COLW.date, fontSize:10, color:"#666" }}>{fmt(t.exp)}</span>
     <span style={{ flex:1, fontSize:10, fontWeight:700, color:t.overdue?"#c0392b":"#7a560f" }}>{t.overdue?`+${Math.abs(t.du)}d late`:`${t.du}d left`}</span>
   </button>);
-  const chip=(label,val,n)=>(<button key={label} onClick={()=>setFilter(val)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:filter===val?700:400, padding:"4px 9px", cursor:"pointer", border:"1px solid #1a1a1a", background:filter===val?"#1a1a1a":"#fff", color:filter===val?"#f4f0e8":"#1a1a1a" }}>{label}{n!=null?` · ${n}`:""}</button>);
   return (<div style={{ padding:"16px 22px", maxWidth:1080 }}>
-    <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:12 }}>{chip("All activities",null,items.length)}{acts.map(a=>chip(a,a,seen[a]))}</div>
+    <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
+      <span style={{ fontSize:10, color:"#888" }}>Showing {shown.length} of {items.length}</span>
+      {anyF && <button onClick={()=>{ setTf({}); setFilter&&setFilter({}); }} style={{ fontFamily:"inherit", fontSize:10, padding:"4px 9px", cursor:"pointer", border:"1px solid #c0392b", background:"#fff", color:"#c0392b", fontWeight:700 }}>clear filters</button>}
+    </div>
     <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, color:"#c0392b", margin:"4px 0 6px" }}>OVERDUE · {overdue.length}</div>
     {head}
     {overdue.length?overdue.map(row):<div style={{ fontSize:11, color:"#999", padding:"8px 12px" }}>Nothing overdue. 👍</div>}
     <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, color:"#7a560f", margin:"20px 0 6px" }}>UPCOMING · {upcoming.length}</div>
     {head}
     {upcoming.length?upcoming.map(row):<div style={{ fontSize:11, color:"#999", padding:"8px 12px" }}>Nothing coming up in the watch windows.</div>}
-    <div style={{ fontSize:9, color:"#aaa", marginTop:14 }}>Fabric is grouped by unique colour (×N = styles needing it now) · click a row to jump to it in the Tracker · watch windows are editable in Settings.</div>
+    <div style={{ fontSize:9, color:"#aaa", marginTop:14 }}>Filter any column above · fabric grouped by unique colour (×N = styles needing it now) · click a row to jump to it in the Tracker.</div>
   </div>);
 }
 
