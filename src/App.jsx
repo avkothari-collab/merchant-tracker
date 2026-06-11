@@ -554,23 +554,26 @@ function Th({ col, label, sort, onSort, sticky, left, z, width, onResize, onAuto
 }
 function FilterMenu({ values, allowed, onSet, onClose }){
   const [q,setQ]=useState("");
+  const masterRef=useRef(null); const menuRef=useRef(null); const [flip,setFlip]=useState(false);
   const isOn=(v)=> !allowed || allowed.includes(v);
-  const allOn = !allowed;
+  const allOn = !allowed;                       // no filter = every value shown
+  const noneOn = allowed && allowed.length===0; // nothing selected = grid empty
   const shown=values.filter(v=> v.toLowerCase().includes(q.toLowerCase()));
   const toggle=(v)=>{ const cur = allowed? new Set(allowed): new Set(values); if(cur.has(v)) cur.delete(v); else cur.add(v); const arr=[...cur]; onSet(arr.length===values.length? null : arr); };
-  const setAll=(on)=> onSet(on? null : []);
+  const toggleAll=()=> onSet(allOn? [] : null);  // checked -> deselect all ; otherwise select all
+  useEffect(()=>{ if(masterRef.current) masterRef.current.indeterminate = !allOn && !noneOn; },[allOn,noneOn]);
+  useEffect(()=>{ const el=menuRef.current; if(el){ const r=el.getBoundingClientRect(); if(r.right>window.innerWidth-8) setFlip(true); else if(r.left<8) setFlip(false); } },[]);
   return (
-    <div onClick={e=>e.stopPropagation()} style={{ position:"absolute", top:"100%", left:0, marginTop:2, zIndex:95, background:"#fff", color:"#1a1a1a", border:"1px solid #1a1a1a", boxShadow:"4px 4px 0 #1a1a1a", padding:8, width:200, textTransform:"none", letterSpacing:0, fontWeight:400 }}>
+    <div ref={menuRef} onClick={e=>e.stopPropagation()} style={{ position:"absolute", top:"100%", left:flip?"auto":0, right:flip?0:"auto", marginTop:2, zIndex:95, background:"#fff", color:"#1a1a1a", border:"1px solid #1a1a1a", boxShadow:"4px 4px 0 #1a1a1a", padding:8, width:210, textTransform:"none", letterSpacing:0, fontWeight:400 }}>
       <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="search values…" style={{ width:"100%", fontFamily:"inherit", fontSize:11, padding:"4px 6px", border:"1px solid #ccc", outline:"none", marginBottom:6 }}/>
-      <div style={{ display:"flex", gap:6, marginBottom:6 }}>
-        <button onClick={()=>setAll(true)} style={{ ...chip, flex:1, fontSize:9, background: allOn?"#d97706":"#f4f0e8" }}>Select all</button>
-        <button onClick={()=>setAll(false)} style={{ ...chip, flex:1, fontSize:9 }}>Clear</button>
-      </div>
+      <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, fontWeight:700, padding:"3px 0", cursor:"pointer", borderBottom:"1px solid #eee", marginBottom:4 }}><input ref={masterRef} type="checkbox" checked={allOn} onChange={toggleAll}/>(Select All)</label>
       <div style={{ maxHeight:180, overflowY:"auto" }}>
         {shown.map(v=>(<label key={v} style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, padding:"2px 0", cursor:"pointer" }}><input type="checkbox" checked={isOn(v)} onChange={()=>toggle(v)}/><span style={{ whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{v}</span></label>))}
         {shown.length===0 && <div style={{ fontSize:10, color:"#999", padding:"4px 0" }}>no matches</div>}
       </div>
+      {noneOn && <div style={{ fontSize:9, color:"#c0392b", marginTop:4 }}>Nothing selected — no rows shown.</div>}
       <div style={{ display:"flex", gap:6, marginTop:6 }}>
+        <button onClick={()=>onSet(null)} style={{ ...chip, flex:1, fontSize:9 }}>Clear filter</button>
         <button onClick={onClose} style={{ ...chip, flex:1, fontSize:9, background:"#1a1a1a", color:"#f4f0e8" }}>Done</button>
       </div>
     </div>
