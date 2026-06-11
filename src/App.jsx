@@ -93,6 +93,13 @@ function computeStyle(s){
   if(fabricInHouse) fabricBranch=bs("Bulk Fabric In-House","ok"); else if(s.labDipReq&&done("labAppr")) fabricBranch=bs(`Lab Dip Appr | ${fabDue}`,fabTone); else if(s.labDipReq&&done("labDip")) fabricBranch=bs(`Lab dip sent, appr pending | ${fabDue}`,"warn"); else if(s.labDipReq) fabricBranch=bs(`Lab dip pending | ${fabDue}`,"warn"); else fabricBranch=bs(fabDue,fabTone);
   let ppBranch;
   if(!s.ppNeeded) ppBranch=bs("PP Not Required","na"); else if(done("ppAppr")) ppBranch=bs("PP Approved","ok"); else if(done("ppSample")) ppBranch=bs(`PP appr ${dueText("ppAppr")}`,"warn"); else if(fabricInHouse) ppBranch=bs(`PP sample ${dueText("ppSample")}`,"warn"); else ppBranch=bs("Awaiting bulk fabric","warn");
+  // ---- Production File: a tracked activity; reflects PP bypass vs PP-approval gate ----
+  let prodFileBranch;
+  { const pfA=actualOf("prodFile"); const pfP=eff["prodFile"]; const pfDue=pfP?`due ${fmt(pfP)}`:"";
+    if(pfA){ prodFileBranch=bs(`Released ${fmt(pfA)}`,"ok"); }
+    else { const overdue=pfP&&pfP<TODAY; const tn=overdue?"late":"warn";
+      if(s.ppBypass){ const ready=fabricInHouse||done("fabricIH"); prodFileBranch=ready?bs(`Bypass · ready ${pfDue}`,tn):bs(`Bypass · awaiting fabric`,tn); }
+      else { const ready=done("ppAppr"); prodFileBranch=ready?bs(`Ready ${pfDue}`,tn):bs(`Awaiting PP appr`,tn); } } }
   let fabricCountdown;
   if(fabricInHouse) fabricCountdown={txt:"in-house",n:9e9,tone:"ok"}; else if(fabPlan){ const n=netWorkdays(TODAY,fabPlan); fabricCountdown={txt:n<0?`${-n}d over`:`${n}d`,n,tone:n<0?"late":n<=7?"warn":"ok"}; } else fabricCountdown={txt:"—",n:null,tone:"na"};
   const releaseGate=addWorkdays(delivery,-REL_GATE_DAYS);
@@ -112,7 +119,7 @@ function computeStyle(s){
   const chaseCount={};
   if(!released) STAGES.forEach(st=>{ if(appl(st.key)&&!done(st.key)&&predDone(st)) chaseCount[st.owner]=(chaseCount[st.owner]||0)+1; });
   const chaseOwners=Object.entries(chaseCount).map(([owner,count])=>({owner,count}));
-  return { stages, nextPending, status, tone, idle, float, released, fitBranch, printBranch, fabricBranch, ppBranch, fabricCountdown, projRelease, projTone, releaseGate, releaseOnTrack, pct, ownerToChase, chaseOwners };
+  return { stages, nextPending, status, tone, idle, float, released, fitBranch, printBranch, fabricBranch, ppBranch, prodFileBranch, fabricCountdown, projRelease, projTone, releaseGate, releaseOnTrack, pct, ownerToChase, chaseOwners };
 }
 
 const ROLES={ Merchant:{label:"Merchant",canEdit:()=>true}, Junior:{label:"Junior",canEdit:(o)=>o==="Merchant"||o==="CAD"}, Viewer:{label:"Viewer (Buyer)",canEdit:()=>false} };
@@ -137,6 +144,7 @@ const INFO_COLS=[
   { key:"print",     label:"Print Branch", kind:"branch", w:150, branch:"print" },
   { key:"fabric",    label:"Fabric Branch", kind:"branch", w:200, branch:"fabric" },
   { key:"pp",        label:"PP Branch",  kind:"branch", w:150, branch:"pp" },
+  { key:"prod",      label:"Prod File",  kind:"branch", w:160, branch:"prod" },
   { key:"fabricCD",  label:"Fabric IH",  kind:"calc", w:74 },
   { key:"proj",      label:"Proj. Release", kind:"calc", w:104 },
   { key:"pct",       label:"% Done",     kind:"calc", w:80 },
@@ -149,7 +157,7 @@ const REMARK_COL={ key:"remarks", label:"Remarks / Delays", kind:"text", w:170, 
 const TEXT_COLS=["orderNo","sampleFit","family","colour","owner","setId","setRole","remarks"];
 const isEditableCol=(col)=> col==="__style"||col==="qty"||col==="ordRec"||col==="delivery"||TEXT_COLS.includes(col)||STAGE_KEYS.includes(col);
 const isDateCol=(col)=> col==="ordRec"||col==="delivery"||STAGE_KEYS.includes(col);
-const BRANCH_STAGES={ fit:["fitSend","fitAppr"], print:["artwork","artAppr","strikeOff","soAppr"], fabric:["labDip","labAppr","fabricIH"], pp:["ppSample","ppAppr"] };
+const BRANCH_STAGES={ fit:["fitSend","fitAppr"], print:["artwork","artAppr","strikeOff","soAppr"], fabric:["labDip","labAppr","fabricIH"], pp:["ppSample","ppAppr"], prod:["prodFile"] };
 function branchTarget(s,c,branch){ const keys=BRANCH_STAGES[branch].filter(k=>{ const st=STAGES.find(x=>x.key===k); return st.flag===null||s[st.flag]; }); for(const k of keys){ if(!c.stages.find(r=>r.key===k)?.done) return k; } return keys[keys.length-1]; }
 
 function CalPopup({ value, onPick, onClose, label }){
@@ -254,7 +262,7 @@ export default function App(){
     if(col==="qty") return String(s.qty);
     if(col==="ordRec"||col==="delivery") return fmt(parse(s[col]))||"(Blanks)";
     if(col==="overall") return cc.status;
-    if(col==="fit") return cc.fitBranch.txt; if(col==="print") return cc.printBranch.txt; if(col==="fabric") return cc.fabricBranch.txt; if(col==="pp") return cc.ppBranch.txt;
+    if(col==="fit") return cc.fitBranch.txt; if(col==="print") return cc.printBranch.txt; if(col==="fabric") return cc.fabricBranch.txt; if(col==="pp") return cc.ppBranch.txt; if(col==="prod") return cc.prodFileBranch.txt;
     if(col==="fabricCD") return cc.fabricCountdown.txt;
     if(col==="proj") return fmt(cc.projRelease)||"(Blanks)";
     if(col==="pct") return cc.pct+"%";
@@ -267,7 +275,7 @@ export default function App(){
   const filtered=computed.filter(({s,c})=>{ const q=search.toLowerCase(); const ownerMatch=(c.chaseOwners||[]).some(o=>o.owner.toLowerCase().includes(q)); const matchQ=!q||s.styleNo.toLowerCase().includes(q)||s.colour.toLowerCase().includes(q)||s.family.toLowerCase().includes(q)||s.sampleFit.toLowerCase().includes(q)||s.orderNo.toLowerCase().includes(q)||ownerMatch; const matchS=statusFilter==="All"||(statusFilter==="At Risk"&&(c.tone==="late"||c.tone==="warn"))||(statusFilter==="On Track"&&c.tone==="ok")||(statusFilter==="Released"&&c.released); const matchF=Object.entries(colFilters).every(([col,allowed])=> !allowed || allowed.includes(valueFor(s,c,col))); return matchQ&&matchS&&matchF; });
   const toneRank={ late:0, warn:1, ok:2, done:3, na:4 };
   const fitNum=(s)=>{ const m=String(s.sampleFit).match(/\d+/); return m?Number(m[0]):Infinity; };
-  const sortVal=(col,{s,c})=>{ switch(col){ case "__style": return s.styleNo.toLowerCase(); case "orderNo": return (s.orderNo||"~").toLowerCase(); case "sampleFit": return fitNum(s); case "family": return s.family.toLowerCase(); case "colour": return s.colour.toLowerCase(); case "owner": return (s.owner||"").toLowerCase(); case "setId": return (s.setId||"~").toLowerCase(); case "setRole": return (s.setRole||"").toLowerCase(); case "qty": return s.qty; case "ordRec": return s.ordRec?new Date(s.ordRec).getTime():Infinity; case "delivery": return s.delivery?new Date(s.delivery).getTime():Infinity; case "overall": return toneRank[c.tone]; case "fit": return toneRank[c.fitBranch.tone]; case "print": return toneRank[c.printBranch.tone]; case "fabric": return toneRank[c.fabricBranch.tone]; case "pp": return toneRank[c.ppBranch.tone]; case "fabricCD": return c.fabricCountdown.n==null?Infinity:c.fabricCountdown.n; case "proj": return c.projRelease?c.projRelease.getTime():Infinity; case "pct": return c.pct; case "chase": return (c.chaseOwners||[]).length; case "float": return c.float==null?Infinity:c.float; case "idle": return c.idle==null?-1:c.idle; case "remarks": return (s.remarks||"~").toLowerCase(); default: { const a=s.actuals[col]; return a?new Date(a).getTime():Infinity; } } };
+  const sortVal=(col,{s,c})=>{ switch(col){ case "__style": return s.styleNo.toLowerCase(); case "orderNo": return (s.orderNo||"~").toLowerCase(); case "sampleFit": return fitNum(s); case "family": return s.family.toLowerCase(); case "colour": return s.colour.toLowerCase(); case "owner": return (s.owner||"").toLowerCase(); case "setId": return (s.setId||"~").toLowerCase(); case "setRole": return (s.setRole||"").toLowerCase(); case "qty": return s.qty; case "ordRec": return s.ordRec?new Date(s.ordRec).getTime():Infinity; case "delivery": return s.delivery?new Date(s.delivery).getTime():Infinity; case "overall": return toneRank[c.tone]; case "fit": return toneRank[c.fitBranch.tone]; case "print": return toneRank[c.printBranch.tone]; case "fabric": return toneRank[c.fabricBranch.tone]; case "pp": return toneRank[c.ppBranch.tone]; case "prod": return toneRank[c.prodFileBranch.tone]; case "fabricCD": return c.fabricCountdown.n==null?Infinity:c.fabricCountdown.n; case "proj": return c.projRelease?c.projRelease.getTime():Infinity; case "pct": return c.pct; case "chase": return (c.chaseOwners||[]).length; case "float": return c.float==null?Infinity:c.float; case "idle": return c.idle==null?-1:c.idle; case "remarks": return (s.remarks||"~").toLowerCase(); default: { const a=s.actuals[col]; return a?new Date(a).getTime():Infinity; } } };
   const rows=useMemo(()=>{ if(!sort.col) return filtered; return [...filtered].sort((A,B)=>{ const a=sortVal(sort.col,A), b=sortVal(sort.col,B); return a<b?-sort.dir:a>b?sort.dir:0; }); },[filtered,sort]);
   const clickHeader=(col)=>{ finishEditing(); setSort(p=> p.col===col?{col,dir:-p.dir}:{col,dir:1}); };
 
@@ -463,7 +471,7 @@ export default function App(){
                   const k=cellKey(s.id,col.key);
                   if(col.kind==="date"){ const bg=bgFor(s.id,col.key,"#fff"); return (<td key={col.key} id={`cell-${s.id}-${col.key}`} onClick={(e)=>onCellClick(e,s.id,col.key)} onDoubleClick={(e)=>{ e.stopPropagation(); if(role!=="Viewer") beginDate(s.id,col.key,"actual"); }} style={{ border:"1px solid #ddd", padding:"6px 9px", whiteSpace:"nowrap", boxShadow:ringFor(s.id,col.key), cursor:"cell", position:"relative", overflow:(editing&&editing.id===s.id&&editing.col===col.key)?"visible":"hidden", background:bg, ...freezeStyle(col.key,bg) }}>{fmt(parse(s[col.key]))||<span style={{color:"#ccc"}}>—</span>}{editing&&editing.id===s.id&&editing.col===col.key && dateEditor(s.id,col.key,editing.mode)}<NoteTri k={k}/><FillHandle id={s.id} col={col.key}/></td>); }
                   let content=null;
-                  if(col.kind==="branch"){ const b=col.branch==="fit"?c.fitBranch:col.branch==="print"?c.printBranch:col.branch==="fabric"?c.fabricBranch:c.ppBranch; const canJump=b.tone!=="na"&&!c.released; content=<BranchPill b={b} onJump={canJump?()=>jumpToEnter(s.id,branchTarget(s,c,col.branch)):null}/>; }
+                  if(col.kind==="branch"){ const b=col.branch==="fit"?c.fitBranch:col.branch==="print"?c.printBranch:col.branch==="fabric"?c.fabricBranch:col.branch==="pp"?c.ppBranch:c.prodFileBranch; const canJump=b.tone!=="na"&&!c.released; content=<BranchPill b={b} onJump={canJump?()=>jumpToEnter(s.id,branchTarget(s,c,col.branch)):null}/>; }
                   else if(col.key==="overall") content=<span style={{ display:"inline-flex", alignItems:"center", gap:5, background:t.bg, color:t.fg, padding:"2px 7px", fontSize:10, fontWeight:700 }}><span style={{ width:6,height:6,borderRadius:"50%", background:t.dot }}/>{c.status}</span>;
                   else if(col.key==="fabricCD") content=<span style={{ fontWeight:700, color:BR_TONE[c.fabricCountdown.tone].fg }}>{c.fabricCountdown.txt}</span>;
                   else if(col.key==="proj") content=<span title={`release gate (30wd before delivery): ${fmt(c.releaseGate)}`} style={{ fontWeight:600, color:c.projTone==="late"?"#c0392b":c.projTone==="warn"?"#7a560f":c.projTone==="done"?"#888":"#1f6f54" }}>{fmt(c.projRelease)}{c.projTone==="late"&&!c.released?" ⚠":c.projTone==="ok"?" ✓":""}</span>;
