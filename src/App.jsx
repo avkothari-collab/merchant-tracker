@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
-import { Check, Plus, Lock, Filter, X, Copy, ChevronUp, ChevronDown, CornerDownRight, Columns3, MessageSquare, RotateCcw, Droplet, Snowflake, Trash2 } from "lucide-react";
+import { Check, Plus, Lock, Filter, X, Copy, ChevronUp, ChevronDown, CornerDownRight, Columns3, MessageSquare, RotateCcw, Droplet, Snowflake, Trash2, SkipForward } from "lucide-react";
 import * as XLSX from "xlsx";
 import { createPortal } from "react-dom";
 import { supabase } from "./supabaseClient";
@@ -59,6 +59,7 @@ const SEED=[
 ];
 
 const REJECTABLE=["fitAppr","artAppr","soAppr","labAppr","ppAppr"]; // approval stages that can be rejected
+const SKIPPABLE_STAGES=["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr","labDip","labAppr","ppSample","ppAppr"]; // activities that can be waived/skipped
 const APPR_OF_SEND={ fitSend:"fitAppr", artwork:"artAppr", strikeOff:"soAppr", labDip:"labAppr", ppSample:"ppAppr" }; // send/make stage -> the approval that can reject it
 const REWORK_DAYS={ fitSend:4, artwork:2, strikeOff:3, labDip:7, ppSample:4 }; // working days added on rejection (redo+resend)
 const applicableStages=(s)=> STAGES.filter(st=> st.flag===null || s[st.flag]);
@@ -69,7 +70,7 @@ function computeStyle(s, cfg){
   const cutoff=addWorkdays(delivery,-CUTD);
   const eff={}, plan={};
   const applies=(k)=>{ const st=STAGES.find(x=>x.key===k); return st.flag===null||s[st.flag]; };
-  const actualOf=(k)=>parse(s.actuals[k]); const revOf=(k)=>parse(s.revs?.[k]); const rejOf=(k)=>parse(s.rejects?.[k]);
+  const actualOf=(k)=>parse(s.actuals[k]); const revOf=(k)=>parse(s.revs?.[k]); const rejOf=(k)=>parse(s.rejects?.[k]); const skipOf=(k)=>parse(s.skips?.[k]);
   STAGES.forEach(st=>{
     let p;
     if(st.cutoff){ const base=s.labDipReq?(eff["labAppr"]||eff["labDip"]||ordRec):ordRec; p=s.labDipReq?new Date(Math.max(addWorkdays(base,15)?.getTime()||0, cutoff.getTime())):cutoff; }
@@ -79,14 +80,14 @@ function computeStyle(s, cfg){
     if(rejAppr){ const rjd=rejOf(apprK); const auto=addWorkdays(rjd, rwOf(st)); const a=actualOf(st.key); const rv=revOf(st.key); plan[st.key]=auto;
       if(a && a>=rjd) eff[st.key]=a; else if(rv && rv>=rjd) eff[st.key]=rv; else eff[st.key]=auto; } // redo: re-sent actual wins, else fresh revised, else rejection+rework days
     else if(selfRej){ const rjd=rejOf(st.key); const rv=revOf(st.key); plan[st.key]=p; eff[st.key]=(rv && rv>=rjd)?rv:p; } // rejected approval cascades off redone send
-    else { plan[st.key]=p; eff[st.key]=actualOf(st.key)||revOf(st.key)||p; }
+    else { plan[st.key]=p; eff[st.key]=actualOf(st.key)||skipOf(st.key)||revOf(st.key)||p; }
   });
-  const stages=applicableStages(s).map(st=>{ const apprK=APPR_OF_SEND[st.key]; const apprRej=apprK?rejOf(apprK):null; const selfRejDate=REJECTABLE.includes(st.key)?rejOf(st.key):null; const rejAppr=!!(apprK&&apprRej&&!actualOf(apprK)); const a=actualOf(st.key); const rjd_=rejAppr?apprRej:null; const resent=rejAppr&&a&&a>=rjd_; const rework=rejAppr&&!resent; const rejected=REJECTABLE.includes(st.key)&&!!selfRejDate&&!actualOf(st.key); const rjd=rework?rjd_:(rejected?selfRejDate:null); let rv=revOf(st.key); if(rjd&&rv&&rv<rjd) rv=null; const histReject = a ? ((apprRej&&a>=apprRej)?apprRej:(selfRejDate||null)) : null; return { ...st, actual:a, rev:rv, reject:rjd, histReject, rework, rejected, plan:plan[st.key], done: rework?false:!!a }; });
+  const stages=applicableStages(s).map(st=>{ const apprK=APPR_OF_SEND[st.key]; const apprRej=apprK?rejOf(apprK):null; const selfRejDate=REJECTABLE.includes(st.key)?rejOf(st.key):null; const rejAppr=!!(apprK&&apprRej&&!actualOf(apprK)); const a=actualOf(st.key); const skp=skipOf(st.key); const isSkip=!!skp&&!a; const rjd_=rejAppr?apprRej:null; const resent=rejAppr&&a&&a>=rjd_; const rework=rejAppr&&!resent; const rejected=REJECTABLE.includes(st.key)&&!!selfRejDate&&!actualOf(st.key); const rjd=rework?rjd_:(rejected?selfRejDate:null); let rv=revOf(st.key); if(rjd&&rv&&rv<rjd) rv=null; const histReject = a ? ((apprRej&&a>=apprRej)?apprRej:(selfRejDate||null)) : null; return { ...st, actual:a, rev:rv, reject:rjd, histReject, rework:isSkip?false:rework, rejected:isSkip?false:rejected, skipped:isSkip, skip:skp, plan:plan[st.key], done: isSkip?true:(rework?false:!!a) }; });
   let nextPending=null, lastActual=null, lastActualKey=null;
   stages.forEach(r=>{ if(r.actual&&(!lastActual||r.actual>lastActual)){ lastActual=r.actual; lastActualKey=r.key; } if(!r.done&&!nextPending) nextPending=r; });
   const released=stages.every(r=>r.done);
   const idle=lastActual?Math.max(0,netWorkdays(lastActual,TODAY)):null;
-  const get=(k)=>stages.find(r=>r.key===k); const done=(k)=>!!(get(k)&&get(k).done); const rejected=(k)=>{ const r=get(k); return !!(r&&r.rejected); };
+  const get=(k)=>stages.find(r=>r.key===k); const done=(k)=>!!(get(k)&&get(k).done); const rejected=(k)=>{ const r=get(k); return !!(r&&r.rejected); }; const isSkipped=(k)=>{ const r=get(k); return !!(r&&r.skipped); };
   const fabricInHouse=done("fabricIH"); const fihA=actualOf("fabricIH"); const lateFIH=(k)=>{ const r=get(k); return !!(fihA && r && r.actual && r.actual>fihA); };
   const lastPlan=stages[stages.length-1]?.plan;
   const float=lastPlan?netWorkdays(lastPlan,delivery):null;
@@ -97,15 +98,15 @@ function computeStyle(s, cfg){
   const dueText=(k)=>{ const r=get(k); if(!r||!r.plan) return "pending"; return TODAY>r.plan?`OVERDUE ${Math.round((TODAY-r.plan)/ONE_DAY)}d`:`due ${fmt(r.plan)}`; };
   const bs=(txt,tn)=>({txt,tone:tn});
   let fitBranch;
-  if(!s.fitReq) fitBranch=bs("—","na"); else if(done("fitAppr")) fitBranch=bs(lateFIH("fitAppr")?"Fit Approved · LATE":"Fit Approved", lateFIH("fitAppr")?"late":"ok"); else if(rejected("fitAppr")) fitBranch=bs("Fit REJECTED · rework","late"); else if(fabricInHouse) fitBranch=bs("Not done before Fabric IH","late"); else if(done("fitSend")) fitBranch=bs(`Fit appr ${dueText("fitAppr")}`,TODAY>(get("fitAppr")?.plan||TODAY)?"late":"warn"); else fitBranch=bs(`Fit send ${dueText("fitSend")}`,TODAY>(get("fitSend")?.plan||TODAY)?"late":"warn");
+  if(!s.fitReq) fitBranch=bs("—","na"); else if(done("fitAppr")) fitBranch=bs(isSkipped("fitAppr")?"Fit Skipped":(lateFIH("fitAppr")?"Fit Approved · LATE":"Fit Approved"), isSkipped("fitAppr")?"ok":(lateFIH("fitAppr")?"late":"ok")); else if(rejected("fitAppr")) fitBranch=bs("Fit REJECTED · rework","late"); else if(fabricInHouse) fitBranch=bs("Not done before Fabric IH","late"); else if(done("fitSend")) fitBranch=bs(`Fit appr ${dueText("fitAppr")}`,TODAY>(get("fitAppr")?.plan||TODAY)?"late":"warn"); else fitBranch=bs(`Fit send ${dueText("fitSend")}`,TODAY>(get("fitSend")?.plan||TODAY)?"late":"warn");
   let printBranch; const printDone=s.soReq?done("soAppr"):done("artAppr"); const printComp=s.soReq?"soAppr":"artAppr";
-  if(!s.printReq) printBranch=bs("—","na"); else if(printDone) printBranch=bs(lateFIH(printComp)?"Print Approved · LATE":"Print Approved", lateFIH(printComp)?"late":"ok"); else if(rejected("artAppr")||rejected("soAppr")) printBranch=bs("Print REJECTED · rework","late"); else if(fabricInHouse) printBranch=bs("Not done before Fabric IH","late"); else if(!done("artwork")) printBranch=bs(`Artwork ${dueText("artwork")}`,TODAY>(get("artwork")?.plan||TODAY)?"late":"warn"); else if(!done("artAppr")) printBranch=bs(`Art appr ${dueText("artAppr")}`,"warn"); else if(s.soReq&&!done("strikeOff")) printBranch=bs(`S/O ${dueText("strikeOff")}`,"warn"); else printBranch=bs(`S/O appr ${dueText("soAppr")}`,"warn");
+  if(!s.printReq) printBranch=bs("—","na"); else if(printDone) printBranch=bs(isSkipped(printComp)?"Print Skipped":(lateFIH(printComp)?"Print Approved · LATE":"Print Approved"), isSkipped(printComp)?"ok":(lateFIH(printComp)?"late":"ok")); else if(rejected("artAppr")||rejected("soAppr")) printBranch=bs("Print REJECTED · rework","late"); else if(fabricInHouse) printBranch=bs("Not done before Fabric IH","late"); else if(!done("artwork")) printBranch=bs(`Artwork ${dueText("artwork")}`,TODAY>(get("artwork")?.plan||TODAY)?"late":"warn"); else if(!done("artAppr")) printBranch=bs(`Art appr ${dueText("artAppr")}`,"warn"); else if(s.soReq&&!done("strikeOff")) printBranch=bs(`S/O ${dueText("strikeOff")}`,"warn"); else printBranch=bs(`S/O appr ${dueText("soAppr")}`,"warn");
   let fabricBranch; const fabPlan=get("fabricIH")?.plan;
   const fabDue=fabPlan?(TODAY>fabPlan?`IH OVERDUE ${Math.round((TODAY-fabPlan)/ONE_DAY)}d`:`IH due ${fmt(fabPlan)}`):"IH —";
   const fabTone=fabPlan&&TODAY>fabPlan?"late":"warn";
   if(fabricInHouse) fabricBranch=bs("Bulk Fabric In-House","ok"); else if(rejected("labAppr")) fabricBranch=bs("Lab Dip REJECTED · rework","late"); else if(s.labDipReq&&done("labAppr")) fabricBranch=bs(`Lab Dip Appr | ${fabDue}`,fabTone); else if(s.labDipReq&&done("labDip")) fabricBranch=bs(`Lab dip sent, appr pending | ${fabDue}`,"warn"); else if(s.labDipReq) fabricBranch=bs(`Lab dip pending | ${fabDue}`,"warn"); else fabricBranch=bs(fabDue,fabTone);
   let ppBranch;
-  if(!s.ppNeeded) ppBranch=bs("PP Not Required","na"); else if(done("ppAppr")) ppBranch=bs(lateFIH("ppAppr")?"PP Approved · LATE":"PP Approved", lateFIH("ppAppr")?"late":"ok"); else if(rejected("ppAppr")) ppBranch=bs("PP REJECTED · rework","late"); else if(done("ppSample")) ppBranch=bs(`PP appr ${dueText("ppAppr")}`,"warn"); else if(fabricInHouse) ppBranch=bs(`PP sample ${dueText("ppSample")}`,"warn"); else ppBranch=bs("Awaiting bulk fabric","warn");
+  if(!s.ppNeeded) ppBranch=bs("PP Not Required","na"); else if(done("ppAppr")) ppBranch=bs(isSkipped("ppAppr")?"PP Skipped":(lateFIH("ppAppr")?"PP Approved · LATE":"PP Approved"), isSkipped("ppAppr")?"ok":(lateFIH("ppAppr")?"late":"ok")); else if(rejected("ppAppr")) ppBranch=bs("PP REJECTED · rework","late"); else if(done("ppSample")) ppBranch=bs(`PP appr ${dueText("ppAppr")}`,"warn"); else if(fabricInHouse) ppBranch=bs(`PP sample ${dueText("ppSample")}`,"warn"); else ppBranch=bs("Awaiting bulk fabric","warn");
   // ---- Production File: a tracked activity; reflects PP bypass vs PP-approval gate ----
   let prodFileBranch;
   { const pfA=actualOf("prodFile"); const pfP=eff["prodFile"]; const pfDue=pfP?`due ${fmt(pfP)}`:"";
@@ -275,7 +276,7 @@ export default function App(){
   const savedRef=useRef({ sty:{}, stg:{}, meta:{} }); // last-persisted snapshot, keyed per row, so we only write what changed
   const S2C={ orderNo:"order_no", styleNo:"style_no", sampleFit:"sample_fit", family:"family", colour:"colour", brand:"brand", fabricType:"fabric_type", owner:"owner", setId:"set_id", setRole:"set_role", age:"age", qty:"qty", ordRec:"order_date", delivery:"delivery_date", fitReq:"fit_req", printReq:"print_req", soReq:"so_req", ppBypass:"pp_bypass", labDipReq:"lab_dip_req", ppNeeded:"pp_needed", remarks:"remarks" };
   const styleToRow=(s)=>{ const r={ id:s.id }; Object.entries(S2C).forEach(([k,col])=>{ r[col]= k==="qty"?(Number(s[k])||0):(s[k]||null); }); r.archived=!!s.archived; return r; };
-  const rowToStyle=(row,byId)=>({ id:row.id, orderNo:row.order_no||"", sampleFit:row.sample_fit||"", family:row.family||"", styleNo:row.style_no||"", colour:row.colour||"", brand:row.brand||"", fabricType:row.fabric_type||"", owner:row.owner||"", setId:row.set_id||"", setRole:row.set_role||"", age:row.age||"", qty:row.qty||0, ordRec:row.order_date||"", delivery:row.delivery_date||"", fitReq:!!row.fit_req, printReq:!!row.print_req, soReq:!!row.so_req, ppBypass:!!row.pp_bypass, labDipReq:!!row.lab_dip_req, ppNeeded:!!row.pp_needed, remarks:row.remarks||"", actuals:(byId[row.id]&&byId[row.id].actuals)||{}, revs:(byId[row.id]&&byId[row.id].revs)||{}, rejects:(byId[row.id]&&byId[row.id].rejects)||{}, archived:!!row.archived });
+  const rowToStyle=(row,byId)=>({ id:row.id, orderNo:row.order_no||"", sampleFit:row.sample_fit||"", family:row.family||"", styleNo:row.style_no||"", colour:row.colour||"", brand:row.brand||"", fabricType:row.fabric_type||"", owner:row.owner||"", setId:row.set_id||"", setRole:row.set_role||"", age:row.age||"", qty:row.qty||0, ordRec:row.order_date||"", delivery:row.delivery_date||"", fitReq:!!row.fit_req, printReq:!!row.print_req, soReq:!!row.so_req, ppBypass:!!row.pp_bypass, labDipReq:!!row.lab_dip_req, ppNeeded:!!row.pp_needed, remarks:row.remarks||"", actuals:(byId[row.id]&&byId[row.id].actuals)||{}, revs:(byId[row.id]&&byId[row.id].revs)||{}, rejects:(byId[row.id]&&byId[row.id].rejects)||{}, skips:(byId[row.id]&&byId[row.id].skips)||{}, archived:!!row.archived });
   // LOAD everything from Supabase (also used by the Sync button)
   const loadShared=async()=>{ try{
     const [styRes, sdRes, cmRes] = await Promise.all([
@@ -284,11 +285,11 @@ export default function App(){
       supabase.from("cell_meta").select("*"),
     ]);
     if(styRes.error||!styRes.data){ console.error(styRes.error); return; }
-    const byId={}; (sdRes.data||[]).forEach(r=>{ const e=(byId[r.style_id]=byId[r.style_id]||{actuals:{},revs:{},rejects:{}}); if(r.actual_date) e.actuals[r.stage]=r.actual_date; if(r.revised_date) e.revs[r.stage]=r.revised_date; if(r.reject_date) e.rejects[r.stage]=r.reject_date; });
+    const byId={}; (sdRes.data||[]).forEach(r=>{ const e=(byId[r.style_id]=byId[r.style_id]||{actuals:{},revs:{},rejects:{},skips:{}}); if(r.actual_date) e.actuals[r.stage]=r.actual_date; if(r.revised_date) e.revs[r.stage]=r.revised_date; if(r.reject_date) e.rejects[r.stage]=r.reject_date; if(r.skip_date) e.skips[r.stage]=r.skip_date; });
     const appStyles=styRes.data.map(row=>rowToStyle(row,byId));
     setStyles(appStyles);
     const SR={ sty:{}, stg:{}, meta:{} };
-    appStyles.forEach(s=>{ SR.sty[s.id]=JSON.stringify(styleToRow(s)); STAGE_KEYS.forEach(k=>{ SR.stg[s.id+":"+k]=JSON.stringify({ style_id:s.id, stage:k, revised_date:(s.revs&&s.revs[k])||null, actual_date:s.actuals[k]||null, reject_date:(s.rejects&&s.rejects[k])||null }); }); });
+    appStyles.forEach(s=>{ SR.sty[s.id]=JSON.stringify(styleToRow(s)); STAGE_KEYS.forEach(k=>{ SR.stg[s.id+":"+k]=JSON.stringify({ style_id:s.id, stage:k, revised_date:(s.revs&&s.revs[k])||null, actual_date:s.actuals[k]||null, reject_date:(s.rejects&&s.rejects[k])||null, skip_date:(s.skips&&s.skips[k])||null }); }); });
     (cmRes.data||[]).forEach(r=>{ if(r.fill||r.note) SR.meta[r.style_id+":"+r.col]=JSON.stringify({ style_id:r.style_id, col:r.col, fill:r.fill||null, note:r.note||null }); });
     savedRef.current=SR;
     try{ const cfgRes=await supabase.from("app_settings").select("data").eq("id","global").maybeSingle(); if(cfgRes&&cfgRes.data&&cfgRes.data.data){ const d=cfgRes.data.data; setCfg({ ...DEFAULT_CFG, ...d, leads:{...DEFAULT_CFG.leads,...(d.leads||{})}, rework:{...DEFAULT_CFG.rework,...(d.rework||{})}, upcoming:{...DEFAULT_CFG.upcoming,...(d.upcoming||{})} }); } }catch(e){ /* settings table optional */ }
@@ -297,7 +298,7 @@ export default function App(){
   }catch(e){ console.error("load failed",e); } };
   useEffect(()=>{ loadShared(); },[]);
   useEffect(()=>{ const ch=supabase.channel("merch-live")
-    .on("postgres_changes",{ event:"*", schema:"public", table:"stage_dates" },(p)=>{ const n=p.new; if(!n||!n.style_id){ setRemoteChanged(true); return; } const key=n.style_id+":"+n.stage; const row=JSON.stringify({ style_id:n.style_id, stage:n.stage, revised_date:n.revised_date||null, actual_date:n.actual_date||null, reject_date:n.reject_date||null }); if(savedRef.current.stg[key]!==row) setRemoteChanged(true); })
+    .on("postgres_changes",{ event:"*", schema:"public", table:"stage_dates" },(p)=>{ const n=p.new; if(!n||!n.style_id){ setRemoteChanged(true); return; } const key=n.style_id+":"+n.stage; const row=JSON.stringify({ style_id:n.style_id, stage:n.stage, revised_date:n.revised_date||null, actual_date:n.actual_date||null, reject_date:n.reject_date||null, skip_date:n.skip_date||null }); if(savedRef.current.stg[key]!==row) setRemoteChanged(true); })
     .on("postgres_changes",{ event:"*", schema:"public", table:"styles" },(p)=>{ const n=p.new; if(!n||!n.id){ setRemoteChanged(true); return; } if(savedRef.current.sty[n.id]!==JSON.stringify(n)) setRemoteChanged(true); })
     .subscribe();
     return ()=>{ try{ supabase.removeChannel(ch); }catch(e){} }; },[]);
@@ -307,7 +308,7 @@ export default function App(){
     // ---- only upsert rows that actually changed since last save: protects other users' concurrent edits ----
     const styRows=styles.map(styleToRow); const styChanged=styRows.filter(r=>SR.sty[r.id]!==JSON.stringify(r));
     if(styChanged.length){ const up1=await supabase.from("styles").upsert(styChanged); if(up1.error) throw up1.error; }
-    const stgChanged=[]; styles.forEach(s=> STAGE_KEYS.forEach(k=>{ const row={ style_id:s.id, stage:k, revised_date:(s.revs&&s.revs[k])||null, actual_date:s.actuals[k]||null, reject_date:(s.rejects&&s.rejects[k])||null }; const key=s.id+":"+k; const j=JSON.stringify(row); if(SR.stg[key]!==j) stgChanged.push({row,key,j}); }));
+    const stgChanged=[]; styles.forEach(s=> STAGE_KEYS.forEach(k=>{ const row={ style_id:s.id, stage:k, revised_date:(s.revs&&s.revs[k])||null, actual_date:s.actuals[k]||null, reject_date:(s.rejects&&s.rejects[k])||null, skip_date:(s.skips&&s.skips[k])||null }; const key=s.id+":"+k; const j=JSON.stringify(row); if(SR.stg[key]!==j) stgChanged.push({row,key,j}); }));
     if(stgChanged.length){ const up2=await supabase.from("stage_dates").upsert(stgChanged.map(x=>x.row),{ onConflict:"style_id,stage" }); if(up2.error) throw up2.error; }
     const keys=new Set([...Object.keys(fills),...Object.keys(notes)]); const metaChanged=[]; keys.forEach(key=>{ const i=key.indexOf(":"); const row={ style_id:Number(key.slice(0,i)), col:key.slice(i+1), fill:fills[key]||null, note:notes[key]||null }; const j=JSON.stringify(row); if(SR.meta[key]!==j) metaChanged.push({row,key,j}); });
     if(metaChanged.length){ const up3=await supabase.from("cell_meta").upsert(metaChanged.map(x=>x.row),{ onConflict:"style_id,col" }); if(up3.error) throw up3.error; }
@@ -322,6 +323,7 @@ export default function App(){
   const setField=(id,field,val)=>{ pushHistory(); setStyles(prev=>prev.map(s=>{ if(s.id!==id) return s; if(STAGE_KEYS.includes(field)) return { ...s, actuals:{ ...s.actuals, [field]: val||undefined } }; if(field==="qty") return { ...s, qty:Number(val)||0 }; return { ...s, [field]:val }; })); flash(); };
   const setRev=(id,key,val)=>{ pushHistory(); setStyles(prev=>prev.map(s=> s.id===id?{...s,revs:{...(s.revs||{}),[key]:val||undefined}}:s)); flash(); };
   const setReject=(id,key,val)=>{ pushHistory(); setStyles(prev=>prev.map(s=> s.id===id?{...s,rejects:{...(s.rejects||{}),[key]:val||undefined}}:s)); flash(); };
+  const setSkip=(id,key,val)=>{ pushHistory(); setStyles(prev=>prev.map(s=>{ if(s.id!==id) return s; const skips={...(s.skips||{})}; const ap=APPR_OF_SEND[key]; if(val){ skips[key]=val; if(ap) skips[ap]=val; } else { skips[key]=undefined; if(ap) skips[ap]=undefined; } return {...s,skips}; })); flash(); };
   const toggleFlag=(id,flag)=>{ pushHistory(); setStyles(prev=>prev.map(s=>s.id===id?{...s,[flag]:!s[flag]}:s)); flash(); };
   const [bulkOpen,setBulkOpen]=useState(false);
   const [bulkResult,setBulkResult]=useState(null); // {inserts, updates, unchanged, sheetName} | {error}
@@ -625,13 +627,18 @@ export default function App(){
                   const k=cellKey(s.id,st.key);
                   if(!applies){ const bg=bgFor(s.id,st.key,"#f3f1ec"); return <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} style={{ border:"1px solid #ddd", background:bg, color:"#ccc", textAlign:"center", padding:"6px 9px", boxShadow:ringFor(s.id,st.key), position:"relative", overflow:"hidden" }}>—<NoteTri k={k}/></td>; }
                   const hasRev=cs&&cs.rev&&!cs.done;
-                  const bg=bgFor(s.id,st.key,(cs&&(cs.rework||cs.rejected))?"#fcecea":(cs&&cs.actual&&cs.histReject?"#fff4f2":(isNext?"#fff7ec":"#fff")));
+                  const bg=bgFor(s.id,st.key,(cs&&cs.skipped)?"#f1ead9":(cs&&(cs.rework||cs.rejected))?"#fcecea":(cs&&cs.actual&&cs.histReject?"#fff4f2":(isNext?"#fff7ec":"#fff")));
                   return (
                     <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} onDoubleClick={(e)=>{ e.stopPropagation(); if(editable) beginDate(s.id,st.key,"actual"); }}
                       style={{ border:"1px solid #ddd", padding:0, position:"relative", overflow:(editing&&editing.id===s.id&&editing.col===st.key)?"visible":"hidden", background:bg, boxShadow:ringFor(s.id,st.key)||(isNext?"inset 0 0 0 2px #d97706":null), cursor:editable?"cell":"default" }}>
                       <div style={{ minHeight:38, padding:"4px 8px", fontSize:11, color:cs.actual?"#1a1a1a":"#bbb" }}>
                         {showAux && cs.plan && <span style={{ display:"block", fontSize:8, color:"#bcb6a8", lineHeight:1.3 }}>auto {fmt(cs.plan)}{cs.rev?` · rev ${fmt(cs.rev)}`:""}</span>}
-                        {cs.rework ? (
+                        {cs.skipped ? (
+                          <span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}>
+                            <span style={{ fontSize:9, color:"#8a6d3b", fontWeight:700, display:"flex", alignItems:"center", gap:3 }}><SkipForward size={9}/>SKIPPED</span>
+                            <span style={{ fontSize:8, color:"#9a958a" }}>{fmt(cs.skip)}</span>
+                          </span>
+                        ) : cs.rework ? (
                           <span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}>
                             <span style={{ fontSize:9, color:"#b03020", fontWeight:700, display:"flex", alignItems:"center", gap:3 }}><X size={9}/>REDO &amp; RESEND</span>
                             <span style={{ fontSize:9, color:"#7a560f" }}>{hasRev?"→ rev ":"→ "}{fmt(cs.rev||cs.plan)}</span>
@@ -650,8 +657,9 @@ export default function App(){
                           </span>
                         )}
                       </div>
-                      {canRev && (!cs.actual || cs.rework) && (<button title="set revised plan date" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"rev"); }} style={{ position:"absolute", top:3, right:3, border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:1, display:"flex" }}><RotateCcw size={11} color="#6d4aab"/></button>)}
-                      {canRej && !cs.actual && REJECTABLE.includes(st.key) && (<button title={cs.rejected?"clear rejection (remove rework)":"mark REJECTED (log rejection date)"} onClick={(e)=>{ e.stopPropagation(); if(cs.rejected) setReject(s.id,st.key,null); else beginDate(s.id,st.key,"reject"); }} style={{ position:"absolute", top:3, right:20, border:"none", background:cs.rejected?"#b03020":"transparent", borderRadius:2, cursor:"pointer", padding:cs.rejected?2:0, lineHeight:1, display:"flex" }}><X size={cs.rejected?9:11} color={cs.rejected?"#fff":"#b03020"}/></button>)}
+                      {canRev && !cs.skipped && (!cs.actual || cs.rework) && (<button title="set revised plan date" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"rev"); }} style={{ position:"absolute", top:3, right:3, border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:1, display:"flex" }}><RotateCcw size={11} color="#6d4aab"/></button>)}
+                      {canRej && !cs.skipped && !cs.actual && REJECTABLE.includes(st.key) && (<button title={cs.rejected?"clear rejection (remove rework)":"mark REJECTED (log rejection date)"} onClick={(e)=>{ e.stopPropagation(); if(cs.rejected) setReject(s.id,st.key,null); else beginDate(s.id,st.key,"reject"); }} style={{ position:"absolute", top:3, right:20, border:"none", background:cs.rejected?"#b03020":"transparent", borderRadius:2, cursor:"pointer", padding:cs.rejected?2:0, lineHeight:1, display:"flex" }}><X size={cs.rejected?9:11} color={cs.rejected?"#fff":"#b03020"}/></button>)}
+                      {editable && SKIPPABLE_STAGES.includes(st.key) && !cs.actual && (<button title={cs.skipped?"un-skip (restore this activity)":"skip this activity (waive — counts as resolved, not done)"} onClick={(e)=>{ e.stopPropagation(); setSkip(s.id,st.key, cs.skipped?null:iso(TODAY)); }} style={{ position:"absolute", bottom:3, right:3, border:"none", background:cs.skipped?"#8a6d3b":"transparent", borderRadius:2, cursor:"pointer", padding:cs.skipped?2:0, lineHeight:1, display:"flex" }}><SkipForward size={cs.skipped?9:12} color={cs.skipped?"#fff":"#b8a98a"}/></button>)}
                       {cs.rework && canRej && (<button title="clear rework (un-reject the approval)" onClick={(e)=>{ e.stopPropagation(); setReject(s.id, APPR_OF_SEND[st.key], null); }} style={{ position:"absolute", top:3, right:20, border:"none", background:"#b03020", borderRadius:2, cursor:"pointer", padding:2, lineHeight:1, display:"flex" }}><X size={9} color="#fff"/></button>)}
                       {editing&&editing.id===s.id&&editing.col===st.key&&editable && dateEditor(s.id,st.key,editing.mode)}
                       <NoteTri k={k}/><FillHandle id={s.id} col={st.key}/>
