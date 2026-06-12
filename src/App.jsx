@@ -232,9 +232,10 @@ function BranchPill({ b, onJump }){
   </span>);
 }
 
-export default function App(){
+function MerchTracker({ me, onSignOut }){
   const [styles,setStyles]=useState([]); // loaded from Supabase on mount
-  const [role,setRole]=useState("senior");
+  const role=(me&&me.role)||"junior";
+  const [usersOpen,setUsersOpen]=useState(false);
   const [search,setSearch]=useState("");
   const [statusFilter,setStatusFilter]=useState("All");
   const [ownerFilter,setOwnerFilter]=useState("All");   // quick owner toggle
@@ -501,13 +502,14 @@ export default function App(){
 
       <div style={{ background:"#1a1a1a", color:"#f4f0e8", padding:"14px 22px", display:"flex", alignItems:"center", justifyContent:"space-between", borderBottom:"3px solid #d97706" }}>
         <div style={{ display:"flex", alignItems:"baseline", gap:12 }}><span style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:20, letterSpacing:-0.5 }}>MERCH<span style={{color:"#d97706"}}>·</span>TRACKER</span><span style={{ fontSize:10, color:"#9a958c", letterSpacing:1 }}>PRE-PRODUCTION · SPREADSHEET GRID · PROTOTYPE</span></div>
-        <div style={{ display:"flex", alignItems:"center", gap:14 }}><span style={{ fontSize:11, color: saveState==="error"?"#e8746b":saveState==="saving"?"#d9b46a":saveState==="saved"?"#7fd1a8":"#6a665e" }}>{saveState==="error"?"⚠ save failed":saveState==="saving"?"… saving":saveState==="saved"?"● saved to cloud":"○ connected"}</span><div style={{ display:"flex", border:"1px solid #4a463e" }}>{Object.keys(ROLES).map(r=>(<button key={r} onClick={(e)=>{ e.stopPropagation(); setRole(r); }} style={{ fontFamily:"inherit", fontSize:10, padding:"5px 9px", cursor:"pointer", border:"none", background:role===r?"#d97706":"transparent", color:role===r?"#1a1a1a":"#cfc9bf", fontWeight:role===r?700:400 }}>{ROLES[r].label}</button>))}</div></div>
+        <div style={{ display:"flex", alignItems:"center", gap:12 }}><span style={{ fontSize:11, color: saveState==="error"?"#e8746b":saveState==="saving"?"#d9b46a":saveState==="saved"?"#7fd1a8":"#6a665e" }}>{saveState==="error"?"⚠ save failed":saveState==="saving"?"… saving":saveState==="saved"?"● saved to cloud":"○ connected"}</span><span style={{ fontSize:11, color:"#cfc9bf", whiteSpace:"nowrap" }}>{(me&&(me.name||me.email))||""} · <b style={{ color:"#d97706" }}>{(ROLES[role]||{}).label||role}</b></span>{canManageUsers(role) && <button onClick={(e)=>{ e.stopPropagation(); setUsersOpen(true); }} style={{ fontFamily:"inherit", fontSize:10, padding:"5px 9px", cursor:"pointer", border:"1px solid #4a463e", background:"transparent", color:"#cfc9bf" }}>Users</button>}<button onClick={(e)=>{ e.stopPropagation(); onSignOut&&onSignOut(); }} style={{ fontFamily:"inherit", fontSize:10, padding:"5px 9px", cursor:"pointer", border:"1px solid #4a463e", background:"transparent", color:"#cfc9bf" }}>Sign out</button></div>
       </div>
 
       <div style={{ display:"flex", gap:0, padding:"0 22px", background:"#1a1a1a", borderBottom:"1px solid #3a362e" }}>
         {[["tracker","Tracker"],["dashboard","Dashboard"],["todo","To-Do"],["settings","Settings"]].map(([k,lab])=>(<button key={k} onClick={(e)=>{ e.stopPropagation(); setTab(k); }} style={{ fontFamily:"'Archivo',sans-serif", fontWeight:700, fontSize:12, letterSpacing:0.3, padding:"9px 16px", cursor:"pointer", border:"none", borderBottom:tab===k?"3px solid #d97706":"3px solid transparent", background:"transparent", color:tab===k?"#f4f0e8":"#9a958c" }}>{lab}{k==="todo"&&todoItems.length?` · ${todoItems.length}`:""}</button>))}
       </div>
 
+      {usersOpen && <UsersPanel onClose={()=>setUsersOpen(false)}/>}
       {bulkOpen && (<div onClick={()=>{ setBulkOpen(false); setBulkResult(null); }} style={{ position:"fixed", inset:0, background:"rgba(26,26,26,0.55)", zIndex:200, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
         <div onClick={e=>e.stopPropagation()} style={{ background:"#f4f0e8", border:"2px solid #1a1a1a", boxShadow:"8px 8px 0 #1a1a1a", width:560, maxWidth:"100%", maxHeight:"86vh", overflowY:"auto", padding:22, fontFamily:"'JetBrains Mono',monospace" }}>
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:18 }}>Bulk upload styles</div><button onClick={()=>{ setBulkOpen(false); setBulkResult(null); }} style={{ border:"none", background:"transparent", cursor:"pointer" }}><X size={18}/></button></div>
@@ -939,4 +941,67 @@ function SettingsView({ cfg, setCfg, canEdit }){
     <button disabled={!canEdit} onClick={()=>setCfg(DEFAULT_CFG)} style={{ marginTop:16, fontFamily:"inherit", fontSize:11, padding:"7px 14px", cursor:canEdit?"pointer":"not-allowed", border:"1px solid #1a1a1a", background:"#fff", opacity:canEdit?1:0.5 }}>Reset to defaults</button>
     <div style={{ fontSize:9, color:"#aaa", marginTop:10 }}>Changes save automatically and apply to every user's calculations.</div>
   </div>);
+}
+
+// ============================ AUTH LAYER ============================
+function Splash({ text }){ return (<div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"#f4f0e8", fontFamily:"'JetBrains Mono',monospace", color:"#6a665e", fontSize:13 }}>{text}</div>); }
+
+function AuthShell({ children }){ return (<div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"#f4f0e8", fontFamily:"'JetBrains Mono',monospace", padding:20 }}><div style={{ width:360, maxWidth:"100%", background:"#fff", border:"2px solid #1a1a1a", boxShadow:"8px 8px 0 #1a1a1a", padding:26 }}>{children}</div></div>); }
+
+function LoginScreen(){
+  const [email,setEmail]=useState(""); const [pw,setPw]=useState(""); const [mode,setMode]=useState("in"); const [msg,setMsg]=useState(""); const [busy,setBusy]=useState(false);
+  const submit=async()=>{ if(!email.trim()||!pw){ setMsg("Enter email and password."); return; } setMsg(""); setBusy(true);
+    try{ if(mode==="in"){ const { error }=await supabase.auth.signInWithPassword({ email:email.trim(), password:pw }); if(error) throw error; }
+      else { const { error,data }=await supabase.auth.signUp({ email:email.trim(), password:pw }); if(error) throw error; if(!data.session){ setMsg("Account created. If sign-in doesn't happen automatically, check your email to confirm, then sign in."); setMode("in"); } } }
+    catch(e){ setMsg(e.message||String(e)); } setBusy(false); };
+  const inp={ width:"100%", fontFamily:"inherit", fontSize:13, padding:"9px 10px", border:"1px solid #1a1a1a", marginBottom:10, boxSizing:"border-box" };
+  return (<AuthShell>
+    <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:22, marginBottom:2 }}>Merch Tracker</div>
+    <div style={{ fontSize:11, color:"#888", marginBottom:18 }}>{mode==="in"?"Sign in to your account":"Create your account"}</div>
+    <input style={inp} type="email" placeholder="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") submit(); }}/>
+    <input style={inp} type="password" placeholder="password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") submit(); }}/>
+    <button disabled={busy} onClick={submit} style={{ width:"100%", fontFamily:"inherit", fontSize:13, fontWeight:700, padding:"10px", cursor:busy?"wait":"pointer", border:"1px solid #1a1a1a", background:"#1a1a1a", color:"#f4f0e8", marginBottom:10 }}>{busy?"…":(mode==="in"?"Sign in":"Create account")}</button>
+    <div style={{ fontSize:11, textAlign:"center" }}><span style={{ color:"#888" }}>{mode==="in"?"New here? ":"Have an account? "}</span><button onClick={()=>{ setMode(mode==="in"?"up":"in"); setMsg(""); }} style={{ border:"none", background:"transparent", color:"#d97706", cursor:"pointer", fontFamily:"inherit", fontSize:11, fontWeight:700 }}>{mode==="in"?"Create account":"Sign in"}</button></div>
+    {msg && <div style={{ fontSize:11, color:"#c0392b", marginTop:12, lineHeight:1.4 }}>{msg}</div>}
+  </AuthShell>);
+}
+
+function PendingScreen({ email, onSignOut }){
+  return (<AuthShell>
+    <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:18, marginBottom:8 }}>Awaiting access</div>
+    <div style={{ fontSize:12, color:"#555", lineHeight:1.55, marginBottom:16 }}>You're signed in as <b>{email}</b>, but your account hasn't been given a role yet. Ask a Management user to set your role in the <b>Users</b> panel, then refresh this page.</div>
+    <button onClick={onSignOut} style={{ fontFamily:"inherit", fontSize:12, padding:"8px 14px", cursor:"pointer", border:"1px solid #1a1a1a", background:"#fff" }}>Sign out</button>
+  </AuthShell>);
+}
+
+function UsersPanel({ onClose }){
+  const [list,setList]=useState(null); const [busy,setBusy]=useState(false);
+  const load=async()=>{ const { data }=await supabase.from("profiles").select("*").order("created_at",{ ascending:true }); setList(data||[]); };
+  useEffect(()=>{ load(); },[]);
+  const setR=async(id,role)=>{ setBusy(true); await supabase.from("profiles").update({ role }).eq("id",id); await load(); setBusy(false); };
+  const ROLE_OPTS=["pending"].concat(Object.keys(ROLES));
+  return (<div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(26,26,26,0.55)", zIndex:400, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+    <div onClick={e=>e.stopPropagation()} style={{ background:"#f4f0e8", border:"2px solid #1a1a1a", boxShadow:"8px 8px 0 #1a1a1a", width:560, maxWidth:"100%", maxHeight:"86vh", overflowY:"auto", padding:22, fontFamily:"'JetBrains Mono',monospace" }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:18 }}>Users &amp; roles</div><button onClick={onClose} style={{ border:"none", background:"transparent", cursor:"pointer" }}><X size={18}/></button></div>
+      <p style={{ fontSize:11, color:"#666", lineHeight:1.55, marginBottom:12 }}>Each person signs in with their own email + password; their access follows the role you set here. Set anyone to "pending" to suspend access.</p>
+      {list===null ? <div style={{ fontSize:12, color:"#888" }}>Loading…</div> : list.length===0 ? <div style={{ fontSize:12, color:"#888" }}>No users yet — have your team sign up from the login screen.</div> : (
+        <div style={{ border:"1px solid #1a1a1a", background:"#fff" }}>{list.map((u,i)=>(<div key={u.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 10px", borderBottom:i<list.length-1?"1px solid #eee7da":"none" }}>
+          <div style={{ flex:1, minWidth:0 }}><div style={{ fontSize:12, fontWeight:700, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{u.name||u.email}</div><div style={{ fontSize:10, color:"#999", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{u.email}</div></div>
+          <select disabled={busy} value={u.role||"pending"} onChange={e=>setR(u.id,e.target.value)} style={{ fontFamily:"inherit", fontSize:11, padding:"5px 7px", border:"1px solid #1a1a1a", background:u.role==="pending"?"#fbeaea":"#fff7ec" }}>{ROLE_OPTS.map(r=>(<option key={r} value={r}>{r==="pending"?"— pending —":(ROLES[r]||{}).label||r}</option>))}</select>
+        </div>))}</div>
+      )}
+    </div>
+  </div>);
+}
+
+export default function App(){
+  const [session,setSession]=useState(undefined);   // undefined = still loading
+  const [profile,setProfile]=useState(undefined);
+  useEffect(()=>{ supabase.auth.getSession().then(({ data })=>setSession(data.session||null)); const { data:sub }=supabase.auth.onAuthStateChange((_e,s)=>{ setSession(s||null); if(!s) setProfile(null); }); return ()=>{ try{ sub.subscription.unsubscribe(); }catch(e){} }; },[]);
+  useEffect(()=>{ if(session===undefined) return; if(!session){ setProfile(null); return; } let active=true; (async()=>{ const uid=session.user.id; let { data }=await supabase.from("profiles").select("*").eq("id",uid).maybeSingle(); if(!data){ const { count }=await supabase.from("profiles").select("*",{ count:"exact", head:true }); const role=(count===0)?"management":"pending"; const ins=await supabase.from("profiles").insert({ id:uid, email:session.user.email, name:(session.user.email||"").split("@")[0], role }).select().maybeSingle(); data=ins.data; } if(active) setProfile(data||null); })(); return ()=>{ active=false; }; },[session]);
+  const signOut=async()=>{ await supabase.auth.signOut(); setProfile(null); };
+  if(session===undefined || (session && profile===undefined)) return <Splash text="Loading…"/>;
+  if(!session) return <LoginScreen/>;
+  if(!profile || profile.role==="pending" || !ROLES[profile.role]) return <PendingScreen email={session.user.email} onSignOut={signOut}/>;
+  return <MerchTracker me={profile} onSignOut={signOut}/>;
 }
