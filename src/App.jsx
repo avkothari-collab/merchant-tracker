@@ -979,6 +979,8 @@ function UsersPanel({ onClose }){
   const load=async()=>{ const { data }=await supabase.from("profiles").select("*").order("created_at",{ ascending:true }); setList(data||[]); };
   useEffect(()=>{ load(); },[]);
   const setR=async(id,role)=>{ setBusy(true); await supabase.from("profiles").update({ role }).eq("id",id); await load(); setBusy(false); };
+  const editName=(id,name)=>setList(l=>l.map(x=>x.id===id?{...x,name}:x));
+  const saveName=async(id,name)=>{ try{ await supabase.from("profiles").update({ name:(name||"").trim()||null }).eq("id",id); }catch(e){} };
   const ROLE_OPTS=["pending"].concat(Object.keys(ROLES));
   return (<div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(26,26,26,0.55)", zIndex:400, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
     <div onClick={e=>e.stopPropagation()} style={{ background:"#f4f0e8", border:"2px solid #1a1a1a", boxShadow:"8px 8px 0 #1a1a1a", width:560, maxWidth:"100%", maxHeight:"86vh", overflowY:"auto", padding:22, fontFamily:"'JetBrains Mono',monospace" }}>
@@ -986,7 +988,8 @@ function UsersPanel({ onClose }){
       <p style={{ fontSize:11, color:"#666", lineHeight:1.55, marginBottom:12 }}>Each person signs in with their own email + password; their access follows the role you set here. Set anyone to "pending" to suspend access.</p>
       {list===null ? <div style={{ fontSize:12, color:"#888" }}>Loading…</div> : list.length===0 ? <div style={{ fontSize:12, color:"#888" }}>No users yet — have your team sign up from the login screen.</div> : (
         <div style={{ border:"1px solid #1a1a1a", background:"#fff" }}>{list.map((u,i)=>(<div key={u.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 10px", borderBottom:i<list.length-1?"1px solid #eee7da":"none" }}>
-          <div style={{ flex:1, minWidth:0 }}><div style={{ fontSize:12, fontWeight:700, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{u.name||u.email}</div><div style={{ fontSize:10, color:"#999", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{u.email}</div></div>
+          <div style={{ flex:1, minWidth:0 }}><input value={u.name||""} placeholder="(set name)" onChange={e=>editName(u.id,e.target.value)} onBlur={e=>{ e.target.style.border="1px solid transparent"; e.target.style.background="transparent"; saveName(u.id,e.target.value); }} onKeyDown={e=>{ if(e.key==="Enter") e.target.blur(); }} style={{ fontFamily:"inherit", fontSize:12, fontWeight:700, width:"100%", border:"1px solid transparent", background:"transparent", padding:"2px 4px", boxSizing:"border-box" }} onFocus={e=>{ e.target.style.border="1px solid #1a1a1a"; e.target.style.background="#fff"; }} onMouseLeave={e=>{}} />
+<div style={{ fontSize:10, color:"#999", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", padding:"0 4px" }}>{u.email}</div></div>
           <select disabled={busy} value={u.role||"pending"} onChange={e=>setR(u.id,e.target.value)} style={{ fontFamily:"inherit", fontSize:11, padding:"5px 7px", border:"1px solid #1a1a1a", background:u.role==="pending"?"#fbeaea":"#fff7ec" }}>{ROLE_OPTS.map(r=>(<option key={r} value={r}>{r==="pending"?"— pending —":(ROLES[r]||{}).label||r}</option>))}</select>
         </div>))}</div>
       )}
