@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import { Check, Plus, Lock, Filter, X, Copy, ChevronUp, ChevronDown, CornerDownRight, Columns3, MessageSquare, RotateCcw, Droplet, Snowflake, Trash2 } from "lucide-react";
 import * as XLSX from "xlsx";
+import { createPortal } from "react-dom";
 import { supabase } from "./supabaseClient";
 
 /* MERCH TRACKER — Excel-like entry grid PROTOTYPE (v13 Excel as smart base) */
@@ -113,7 +114,7 @@ function computeStyle(s, cfg){
       if(s.ppBypass){ const ready=fabricInHouse||done("fabricIH"); prodFileBranch=ready?bs(`Bypass · ready ${pfDue}`,tn):bs(`Bypass · awaiting fabric`,tn); }
       else { const ready=done("ppAppr"); prodFileBranch=ready?bs(`Ready ${pfDue}`,tn):bs(`Awaiting PP appr`,tn); } } }
   let fabricCountdown;
-  if(fabricInHouse) fabricCountdown={txt:"in-house",n:9e9,tone:"ok"}; else if(fabPlan){ const n=netWorkdays(TODAY,fabPlan); fabricCountdown={txt:n<0?`${-n}d over`:`${n}d`,n,tone:n<0?"late":n<=7?"warn":"ok"}; } else fabricCountdown={txt:"—",n:null,tone:"na"};
+  if(fabricInHouse) fabricCountdown={txt:"in-house",date:fihA,n:9e9,tone:"ok"}; else if(fabPlan){ const n=netWorkdays(TODAY,fabPlan); fabricCountdown={txt:n<0?`${-n}d over`:`${n}d`,date:fabPlan,n,tone:n<0?"late":n<=7?"warn":"ok"}; } else fabricCountdown={txt:"no plan",date:null,n:null,tone:"warn"};
   const releaseGate=addWorkdays(delivery,-GATED);
   let projRelease;
   if(released) projRelease=lastActual;
@@ -133,7 +134,7 @@ function computeStyle(s, cfg){
   if(!released) STAGES.forEach(st=>{ if(appl(st.key)&&!done(st.key)&&predDone(st)) chaseCount[st.owner]=(chaseCount[st.owner]||0)+1; });
   const chaseOwners=Object.entries(chaseCount).map(([owner,count])=>({owner,count}));
   const frontierReady=(k)=>{ if(k==="ppSample") return fabricInHouse && (!s.fitReq || done("fitAppr")); if(k==="prodFile"){ const base = s.ppBypass ? fabricInHouse : done("ppAppr"); return base && (!s.fitReq || done("fitAppr")); } return true; };
-  const frontier=new Set(); Object.values(BRANCH_STAGES).forEach(keys=>{ const nx=keys.find(k=>applies(k)&&!done(k)); if(nx && frontierReady(nx)) frontier.add(nx); });
+  const frontier=new Set(); Object.entries(BRANCH_STAGES).forEach(([bk,keys])=>{ const nx=keys.find(k=>applies(k)&&!done(k)); if(!nx) return; if(fabricInHouse && !s.ppBypass && (bk==="fit"||bk==="print")) return; if(frontierReady(nx)) frontier.add(nx); });
   const lastDoneIn=(keys)=>{ let best=null; keys.forEach(k=>{ const r=get(k); if(r&&r.done&&r.actual&&(!best||r.actual>best.d)) best={l:r.label,d:r.actual}; }); return best; };
   if(fitBranch) fitBranch.last=lastDoneIn(BRANCH_STAGES.fit);
   if(printBranch) printBranch.last=lastDoneIn(BRANCH_STAGES.print);
@@ -145,14 +146,15 @@ function computeStyle(s, cfg){
 
 const ROLES={ management:{label:"Management"}, senior:{label:"Sr Merchant"}, junior:{label:"Jr Merchant"}, cad:{label:"CAD"}, designer:{label:"Designer"}, store:{label:"Store"} };
 const MERCH_ROLES=["management","senior","junior"];
-const SPECIALIST_COLS={ cad:["techpack","fitSend"], designer:["artwork","strikeOff"], store:["labDip","fabricIH"] };
+const SPECIALIST_COLS={ cad:["techpack","fitSend","fitAppr"], designer:["artwork","strikeOff","artAppr"], store:["labDip","fabricIH"] };
 const canMaster=(role)=> MERCH_ROLES.includes(role); // management + senior + junior
 const canAdmin=(role)=> role==="management"||role==="senior";
 const canManageUsers=(role)=> role==="management";
 const canEditRev=(role)=> MERCH_ROLES.includes(role);
-const canEditReject=(role)=> MERCH_ROLES.includes(role);
+const REJECT_ROLES=["management","senior","junior","designer","cad"]; // store excluded; revised stays merchants-only
+const canEditReject=(role,col)=> REJECT_ROLES.includes(role) && canEditCol(role,col);
 const canEditCol=(role,col)=>{ if(MERCH_ROLES.includes(role)){ if(STAGE_KEYS.includes(col)) return true; return canMaster(role); } return (SPECIALIST_COLS[role]||[]).includes(col); };
-const canEdit=(role,col,mode)=> mode==="rev"?canEditRev(role): mode==="reject"?canEditReject(role): canEditCol(role,col);
+const canEdit=(role,col,mode)=> mode==="rev"?canEditRev(role): mode==="reject"?canEditReject(role,col): canEditCol(role,col);
 const TONE_STYLE={ ok:{dot:"#1f6f54",bg:"#eef6f1",fg:"#16523d"}, warn:{dot:"#b4801a",bg:"#fbf4e6",fg:"#7a560f"}, late:{dot:"#c0392b",bg:"#fcecea",fg:"#8c241a"}, done:{dot:"#555",bg:"#efefea",fg:"#444"} };
 const BR_TONE={ ok:{bg:"#eef6f1",fg:"#16523d"}, warn:{bg:"#fbf4e6",fg:"#7a560f"}, late:{bg:"#fcecea",fg:"#8c241a"}, na:{bg:"transparent",fg:"#c4c0b8"}, done:{bg:"#efefea",fg:"#555"} };
 const FLAG_DEFS=[ {key:"fitReq",short:"FIT",title:"Fit sample required"}, {key:"printReq",short:"PRT",title:"Print required"}, {key:"soReq",short:"S/O",title:"Strike-off required"}, {key:"labDipReq",short:"LAB",title:"Lab dip required"}, {key:"ppBypass",short:"BYP",title:"PP bypass — Prod File flows straight from Fabric IH (not PP Appr)"}, {key:"ppNeeded",short:"PP",title:"PP sample required"} ];
@@ -405,7 +407,7 @@ export default function App(){
   const colIndex=(col)=>navCols.indexOf(col);
   const rect=()=>{ if(!sel) return null; const aR=rowIndex(sel.id), aC=colIndex(sel.col); const f=focus||sel; const fR=rowIndex(f.id), fC=colIndex(f.col); return { r1:Math.min(aR,fR), r2:Math.max(aR,fR), c1:Math.min(aC,fC), c2:Math.max(aC,fC) }; };
   const selKeys=useMemo(()=>{ const R=rect(); const set=new Set(); if(!R) return set; for(let r=R.r1;r<=R.r2;r++){ for(let c=R.c1;c<=R.c2;c++){ if(rows[r]) set.add(`${rows[r].s.id}:${navCols[c]}`); } } return set; },[sel,focus,rows,navCols]);
-  const onCellClick=(e,id,col)=>{ e.stopPropagation(); if(gridRef.current) gridRef.current.focus({preventScroll:true}); if(editing){ if(editing.id===id&&editing.col===col) return; finishEditing(); } if(e.shiftKey&&sel){ setFocus({id,col}); scrollToCell(id,col); return; } if(sel&&sel.id===id&&sel.col===col&&!editing&&isEditableCol(col)&&canEdit(role,col,"actual")){ startEdit(id,col); return; } setSel({id,col}); setFocus(null); };
+  const onCellClick=(e,id,col)=>{ e.stopPropagation(); if(filterCol) setFilterCol(null); if(gridRef.current) gridRef.current.focus({preventScroll:true}); if(editing){ if(editing.id===id&&editing.col===col) return; finishEditing(); } if(e.shiftKey&&sel){ setFocus({id,col}); scrollToCell(id,col); return; } if(sel&&sel.id===id&&sel.col===col&&!editing&&isEditableCol(col)&&canEdit(role,col,"actual")){ startEdit(id,col); return; } setSel({id,col}); setFocus(null); };
 
   const moveAnchor=(dr,dc)=>{ if(!sel) return; let r=rowIndex(sel.id)+dr, c=colIndex(sel.col)+dc; r=Math.min(Math.max(r,0),rows.length-1); c=Math.min(Math.max(c,0),navCols.length-1); if(rows[r]){ setSel({id:rows[r].s.id,col:navCols[c]}); setFocus(null); scrollToCell(rows[r].s.id,navCols[c]); } };
   const scrollToCell=(id,col)=>{ requestAnimationFrame(()=>{ const el=document.getElementById(`cell-${id}-${col}`); if(!el) return; el.scrollIntoView({ block:"nearest" }); const wrap=scrollWrapRef.current; if(wrap){ const cr=el.getBoundingClientRect(), wr=wrap.getBoundingClientRect(); const frozen=STYLE_W+6; if(cr.left < wr.left+frozen){ wrap.scrollLeft -= (wr.left+frozen-cr.left)+8; } else if(cr.right > wr.right){ wrap.scrollLeft += (cr.right-wr.right)+8; } } }); };
@@ -605,7 +607,7 @@ export default function App(){
                   let content=null;
                   if(col.kind==="branch"){ const b=col.branch==="fit"?c.fitBranch:col.branch==="print"?c.printBranch:col.branch==="fabric"?c.fabricBranch:col.branch==="pp"?c.ppBranch:c.prodFileBranch; const canJump=b.tone!=="na"&&!c.released; content=<BranchPill b={b} onJump={canJump?()=>jumpToEnter(s.id,branchTarget(s,c,col.branch)):null}/>; }
                   else if(col.key==="overall") content=(<span style={{ display:"inline-flex", flexDirection:"column", gap:2, alignItems:"flex-start" }}><span style={{ display:"inline-flex", alignItems:"center", gap:5, background:t.bg, color:t.fg, padding:"2px 7px", fontSize:10, fontWeight:700 }}><span style={{ width:6,height:6,borderRadius:"50%", background:t.dot }}/>{c.status}</span>{c.lastActual && <span style={{ fontSize:8.5, color:"#9a958a", whiteSpace:"nowrap" }}>last: {fmt(c.lastActual)}{c.lastActualKey?` · ${(STAGES.find(x=>x.key===c.lastActualKey)||{}).label||""}`:""}</span>}</span>);
-                  else if(col.key==="fabricCD") content=<span style={{ fontWeight:700, color:BR_TONE[c.fabricCountdown.tone].fg }}>{c.fabricCountdown.txt}</span>;
+                  else if(col.key==="fabricCD"){ const fc=c.fabricCountdown; content=(<span style={{ display:"inline-flex", flexDirection:"column", lineHeight:1.1 }}><span style={{ fontWeight:700, color:(BR_TONE[fc.tone]||BR_TONE.na).fg }}>{fc.txt}</span>{fc.date && <span style={{ fontSize:8, color:"#9a958a" }}>{fmt(fc.date)}</span>}</span>); }
                   else if(col.key==="proj") content=<span title={`release gate (30wd before delivery): ${fmt(c.releaseGate)}`} style={{ fontWeight:600, color:c.projTone==="late"?"#c0392b":c.projTone==="warn"?"#7a560f":c.projTone==="done"?"#888":"#1f6f54" }}>{fmt(c.projRelease)}{c.projTone==="late"&&!c.released?" ⚠":c.projTone==="ok"?" ✓":""}</span>;
                   else if(col.key==="pct") content=(<div style={{ display:"flex", alignItems:"center", gap:5 }}><div style={{ flex:1, height:6, background:"#eee", position:"relative", minWidth:34 }}><div style={{ position:"absolute", left:0, top:0, bottom:0, width:`${c.pct}%`, background:c.pct===100?"#1f6f54":"#d97706" }}/></div><span style={{ fontSize:9, color:"#666", width:26, textAlign:"right" }}>{c.pct}%</span></div>);
                   else if(col.key==="chase") content=(!c.chaseOwners||c.chaseOwners.length===0)?<span style={{color:"#ccc"}}>—</span>:(<span style={{ display:"flex", gap:3, flexWrap:"wrap" }}>{c.chaseOwners.map(o=>(<span key={o.owner} title={`${o.owner}: ${o.count} open ${o.count>1?"branches":"branch"}`} style={{ fontSize:9, fontWeight:700, padding:"2px 5px", background:(OWNER_COLOR[o.owner]||"#888")+"22", color:OWNER_COLOR[o.owner]||"#555", whiteSpace:"nowrap" }}>{o.owner}{o.count>1?`×${o.count}`:""}</span>))}</span>);
@@ -619,7 +621,7 @@ export default function App(){
                   const applies=st.flag===null||s[st.flag];
                   const cs=c.stages.find(x=>x.key===st.key);
                   const isNext=applies && c.frontier && c.frontier.has(st.key);
-                  const editable=applies&&canEdit(role,st.key,"actual"); const canRev=applies&&canEditRev(role); const canRej=applies&&canEditReject(role);
+                  const editable=applies&&canEdit(role,st.key,"actual"); const canRev=applies&&canEditRev(role); const canRej=applies&&canEditReject(role,st.key);
                   const k=cellKey(s.id,st.key);
                   if(!applies){ const bg=bgFor(s.id,st.key,"#f3f1ec"); return <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} style={{ border:"1px solid #ddd", background:bg, color:"#ccc", textAlign:"center", padding:"6px 9px", boxShadow:ringFor(s.id,st.key), position:"relative", overflow:"hidden" }}>—<NoteTri k={k}/></td>; }
                   const hasRev=cs&&cs.rev&&!cs.done;
@@ -714,7 +716,7 @@ function Th({ col, label, sort, onSort, sticky, left, z, width, onResize, onAuto
 }
 function FilterMenu({ values, allowed, onSet, onClose }){
   const [q,setQ]=useState("");
-  const masterRef=useRef(null); const menuRef=useRef(null); const [flip,setFlip]=useState(false);
+  const masterRef=useRef(null); const anchorRef=useRef(null); const [pos,setPos]=useState(null);
   const isOn=(v)=> !allowed || allowed.includes(v);
   const allOn = !allowed;                       // no filter = every value shown
   const noneOn = allowed && allowed.length===0; // nothing selected = grid empty
@@ -722,9 +724,9 @@ function FilterMenu({ values, allowed, onSet, onClose }){
   const toggle=(v)=>{ const cur = allowed? new Set(allowed): new Set(values); if(cur.has(v)) cur.delete(v); else cur.add(v); const arr=[...cur]; onSet(arr.length===values.length? null : arr); };
   const toggleAll=()=> onSet(allOn? [] : null);  // checked -> deselect all ; otherwise select all
   useEffect(()=>{ if(masterRef.current) masterRef.current.indeterminate = !allOn && !noneOn; },[allOn,noneOn]);
-  useEffect(()=>{ const el=menuRef.current; if(el){ const r=el.getBoundingClientRect(); if(r.right>window.innerWidth-8) setFlip(true); else if(r.left<8) setFlip(false); } },[]);
-  return (
-    <div ref={menuRef} onClick={e=>e.stopPropagation()} style={{ position:"absolute", top:"100%", left:flip?"auto":0, right:flip?0:"auto", marginTop:2, zIndex:95, background:"#fff", color:"#1a1a1a", border:"1px solid #1a1a1a", boxShadow:"4px 4px 0 #1a1a1a", padding:8, width:210, textTransform:"none", letterSpacing:0, fontWeight:400 }}>
+  useEffect(()=>{ const a=anchorRef.current; if(!a) return; const r=a.getBoundingClientRect(); const W=212,H=300; let left=r.left-180; if(left+W>window.innerWidth-8) left=window.innerWidth-8-W; if(left<8) left=8; let top=r.bottom+2; if(top+H>window.innerHeight-8) top=Math.max(8,window.innerHeight-8-H); setPos({top,left}); },[]);
+  const menu=(
+    <div onClick={e=>e.stopPropagation()} style={{ position:"fixed", top:pos?pos.top:-9999, left:pos?pos.left:-9999, zIndex:300, background:"#fff", color:"#1a1a1a", border:"1px solid #1a1a1a", boxShadow:"4px 4px 0 #1a1a1a", padding:8, width:210, textTransform:"none", letterSpacing:0, fontWeight:400, maxHeight:"80vh", overflowY:"auto" }}>
       <input autoFocus value={q} onClick={e=>e.stopPropagation()} onKeyDown={e=>e.stopPropagation()} onChange={e=>setQ(e.target.value)} placeholder="search values…" style={{ width:"100%", fontFamily:"inherit", fontSize:11, padding:"4px 6px", border:"1px solid #ccc", outline:"none", marginBottom:6 }}/>
       <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, fontWeight:700, padding:"3px 0", cursor:"pointer", borderBottom:"1px solid #eee", marginBottom:4 }}><input ref={masterRef} type="checkbox" checked={allOn} onChange={toggleAll}/>(Select All)</label>
       <div style={{ maxHeight:180, overflowY:"auto" }}>
@@ -738,6 +740,7 @@ function FilterMenu({ values, allowed, onSet, onClose }){
       </div>
     </div>
   );
+  return (<><span ref={anchorRef} style={{ position:"absolute", width:0, height:0 }}/>{createPortal(menu, document.body)}</>);
 }
 function FillPanel({ count, role, onApply, onClose }){
   const opts=[{key:"ordRec",label:"Order Date"},{key:"delivery",label:"Delivery Date"}].concat(STAGES.map(s=>({key:s.key,label:s.label+(s.cutoff?" (Fabric IH)":"")}))).filter(o=>canEdit(role,o.key,"actual"));
