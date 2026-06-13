@@ -14,6 +14,7 @@ const THEME_CSS = `
   --muted-1:#999; --muted-2:#888; --muted-3:#666; --muted-4:#555; --muted-5:#444; --muted-6:#bbb; --muted-7:#aaa;
   --line-1:#ddd; --line-2:#ccc; --line-3:#eee;
   --on-dark:#cfc9bf; --on-dark-2:#9a958a; --on-dark-line:#4a463e;
+  --tint-ok:#e0efe6; --fg-ok:#1c6048; --tint-warn:#f6e6a8; --fg-warn:#7a560f; --tint-late:#f4cfc7; --fg-late:#8c241a; --tint-reject:#f0bdb5; --tint-rework:#fbd9a8; --tint-waive:#e9ddc2; --tint-next:#fdecc9; --tint-histrej:#fbe9e6; --revised:#6a45a8;
 }
 [data-theme="clean"] {
   --bg:#eceef1; --surface:#ffffff; --accent-tint:#eef4ff;
@@ -171,8 +172,8 @@ const REJECT_ROLES=["management","senior","junior","designer","cad"]; // store e
 const canEditReject=(role,col)=> REJECT_ROLES.includes(role) && canEditCol(role,col);
 const canEditCol=(role,col)=>{ if(MERCH_ROLES.includes(role)){ if(STAGE_KEYS.includes(col)) return true; return canMaster(role); } return (SPECIALIST_COLS[role]||[]).includes(col); };
 const canEdit=(role,col,mode)=> mode==="rev"?canEditRev(role): mode==="reject"?canEditReject(role,col): canEditCol(role,col);
-const TONE_STYLE={ ok:{dot:"var(--success)",bg:"#eef6f1",fg:"#16523d"}, warn:{dot:"#b4801a",bg:"#fbf4e6",fg:"#7a560f"}, late:{dot:"var(--danger)",bg:"#fcecea",fg:"#8c241a"}, done:{dot:"var(--muted-4)",bg:"#efefea",fg:"var(--muted-5)"} };
-const BR_TONE={ ok:{bg:"#eef6f1",fg:"#16523d"}, warn:{bg:"#fbf4e6",fg:"#7a560f"}, late:{bg:"#fcecea",fg:"#8c241a"}, na:{bg:"transparent",fg:"#c4c0b8"}, done:{bg:"#efefea",fg:"var(--muted-4)"} };
+const TONE_STYLE={ ok:{dot:"var(--success)",bg:"var(--tint-ok)",fg:"var(--fg-ok)"}, warn:{dot:"#b4801a",bg:"var(--tint-warn)",fg:"var(--fg-warn)"}, late:{dot:"var(--danger)",bg:"var(--tint-late)",fg:"var(--fg-late)"}, done:{dot:"var(--muted-4)",bg:"#efefea",fg:"var(--muted-5)"} };
+const BR_TONE={ ok:{bg:"var(--tint-ok)",fg:"var(--fg-ok)"}, warn:{bg:"var(--tint-warn)",fg:"var(--fg-warn)"}, late:{bg:"var(--tint-late)",fg:"var(--fg-late)"}, na:{bg:"transparent",fg:"#c4c0b8"}, done:{bg:"#efefea",fg:"var(--muted-4)"} };
 const FLAG_DEFS=[ {key:"fitReq",short:"FIT",title:"Fit sample required"}, {key:"printReq",short:"PRT",title:"Print required"}, {key:"soReq",short:"S/O",title:"Strike-off required"}, {key:"labDipReq",short:"LAB",title:"Lab dip required"}, {key:"ppBypass",short:"BYP",title:"PP bypass — Prod File flows straight from Fabric IH (not PP Appr)"}, {key:"ppNeeded",short:"PP",title:"PP sample required"} ];
 const FILL_SWATCHES=["var(--accent-tint)","#fde2e1","#e7f3ec","#e3edf9","#f3e8fa","#fff3bf",""];
 
@@ -741,7 +742,7 @@ function MerchTracker({ me, onSignOut }){
                   const k=cellKey(s.id,st.key);
                   if(!applies){ const bg=bgFor(s.id,st.key,"#f3f1ec"); return <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} style={{ border:"1px solid var(--line-1)", background:bg, color:"var(--line-2)", textAlign:"center", padding:"6px 9px", boxShadow:ringFor(s.id,st.key), position:"relative", overflow:"hidden" }}>—<NoteTri k={k}/></td>; }
                   const hasRev=cs&&cs.rev&&!cs.done;
-                  const bg=bgFor(s.id,st.key,(cs&&cs.skipped)?"#f1ead9":(cs&&(cs.rework||cs.rejected))?"#fcecea":(cs&&cs.actual&&cs.histReject?"#fff4f2":(isNext?"var(--accent-tint)":"var(--surface)")));
+                  const bg=bgFor(s.id,st.key,(cs&&cs.skipped)?"var(--tint-waive)":(cs&&cs.rejected)?"var(--tint-reject)":(cs&&cs.rework)?"var(--tint-rework)":(cs&&cs.actual&&cs.histReject?"var(--tint-histrej)":(isNext?"var(--tint-next)":"var(--surface)")));
                   return (
                     <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} onDoubleClick={(e)=>{ e.stopPropagation(); if(editable) beginDate(s.id,st.key,"actual"); }}
                       style={{ border:"1px solid var(--line-1)", padding:0, position:"relative", overflow:(editing&&editing.id===s.id&&editing.col===st.key)?"visible":"hidden", background:bg, boxShadow:ringFor(s.id,st.key)||(isNext?"inset 0 0 0 2px var(--accent)":null), cursor:editable?"cell":"default" }}>
@@ -755,23 +756,23 @@ function MerchTracker({ me, onSignOut }){
                         ) : cs.rework ? (
                           <span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}>
                             <span style={{ fontSize:9, color:"#b03020", fontWeight:700, display:"flex", alignItems:"center", gap:3 }}><X size={9}/>REDO &amp; RESEND</span>
-                            <span style={{ fontSize:9, color:"#7a560f" }}>{hasRev?"→ rev ":"→ "}{fmt(cs.rev||cs.plan)}</span>
+                            <span style={{ fontSize:9, color:hasRev?"var(--revised)":"#7a560f" }}>{hasRev?"→ rev ":"→ "}{fmt(cs.rev||cs.plan)}</span>
                             {editable && <span style={{ fontSize:9, color:"var(--accent)", fontWeight:700 }}>▸ enter resend</span>}
                           </span>
                         ) : cs.actual ? (<span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}><span style={{ display:"flex", alignItems:"center", gap:4 }}><Check size={11} color={OWNER_COLOR[st.owner]}/>{fmt(cs.actual)}</span>{cs.histReject && <span style={{ fontSize:8, color:"#b03020", fontWeight:700 }}>↻ was REJ {fmt(cs.histReject)}</span>}</span>) : cs.rejected ? (
                           <span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}>
                             <span style={{ fontSize:9, color:"#b03020", fontWeight:700, display:"flex", alignItems:"center", gap:3 }}><X size={9}/>REJECTED</span>
                             <span style={{ fontSize:9, color:"#b03020" }}>rej {fmt(cs.reject)}</span>
-                            <span style={{ fontSize:9, color:"#7a560f" }}>re-appr → {fmt(cs.rev||cs.plan)}</span>
+                            <span style={{ fontSize:9, color:hasRev?"var(--revised)":"#7a560f" }}>re-appr → {fmt(cs.rev||cs.plan)}</span>
                           </span>
                         ) : (
                           <span style={{ display:"flex", flexDirection:"column", lineHeight:1.2 }}>
-                            <span style={{ fontSize:9, color:hasRev?"#6d4aab":isNext?"var(--accent)":"#c4c0b8" }}>{hasRev?"rev":st.cutoff?"cutoff":"plan"} {fmt(hasRev?cs.rev:cs.plan)}</span>
+                            <span style={{ fontSize:9, color:hasRev?"var(--revised)":isNext?"var(--accent)":"#c4c0b8" }}>{hasRev?"rev":st.cutoff?"cutoff":"plan"} {fmt(hasRev?cs.rev:cs.plan)}</span>
                             {editable?<span style={{ fontSize:9, color:isNext?"var(--accent)":"#c4c0b8", fontWeight:isNext?700:400 }}>{isNext?"▸ enter":st.cutoff?"log arrival":"—"}</span>:<span style={{ fontSize:9, color:"var(--line-2)", display:"flex", alignItems:"center", gap:3 }}><Lock size={8}/>locked</span>}
                           </span>
                         )}
                       </div>
-                      {canRev && !cs.skipped && (!cs.actual || cs.rework) && (<button title="set revised plan date" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"rev"); }} style={{ position:"absolute", top:3, right:3, border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:1, display:"flex" }}><RotateCcw size={11} color="#6d4aab"/></button>)}
+                      {canRev && !cs.skipped && (!cs.actual || cs.rework) && (<button title="set revised plan date" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"rev"); }} style={{ position:"absolute", top:3, right:3, border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:1, display:"flex" }}><RotateCcw size={11} color="var(--revised)"/></button>)}
                       {canRej && !cs.skipped && !cs.actual && REJECTABLE.includes(st.key) && (<button title={cs.rejected?"clear rejection (remove rework)":"mark REJECTED (log rejection date)"} onClick={(e)=>{ e.stopPropagation(); if(cs.rejected) setReject(s.id,st.key,null); else beginDate(s.id,st.key,"reject"); }} style={{ position:"absolute", top:3, right:20, border:"none", background:cs.rejected?"#b03020":"transparent", borderRadius:2, cursor:"pointer", padding:cs.rejected?2:0, lineHeight:1, display:"flex" }}><X size={cs.rejected?9:11} color={cs.rejected?"var(--surface)":"#b03020"}/></button>)}
                       {canSkp && SKIPPABLE_STAGES.includes(st.key) && !cs.actual && (<button title={cs.skipped?"un-skip (restore this activity)":"skip this activity (waive — counts as resolved, not done)"} onClick={(e)=>{ e.stopPropagation(); if(cs.skipped){ setSkip(s.id,st.key,null); } else if(window.confirm(`Skip / waive "${st.label}" for ${s.styleNo}?\n\nIt will count as RESOLVED (not done) and drop off the to-do. You can un-skip later.`)){ setSkip(s.id,st.key,iso(TODAY)); } }} style={{ position:"absolute", bottom:3, right:3, border:"none", background:cs.skipped?"#8a6d3b":"transparent", borderRadius:2, cursor:"pointer", padding:cs.skipped?2:0, lineHeight:1, display:"flex" }}><SkipForward size={cs.skipped?9:12} color={cs.skipped?"var(--surface)":"#b8a98a"}/></button>)}
                       {cs.rework && canRej && (<button title="clear rework (un-reject the approval)" onClick={(e)=>{ e.stopPropagation(); setReject(s.id, APPR_OF_SEND[st.key], null); }} style={{ position:"absolute", top:3, right:20, border:"none", background:"#b03020", borderRadius:2, cursor:"pointer", padding:2, lineHeight:1, display:"flex" }}><X size={9} color="var(--surface)"/></button>)}
@@ -812,7 +813,7 @@ function MerchTracker({ me, onSignOut }){
         <span style={{ display:"flex", alignItems:"center", gap:5 }}><span style={{ width:14,height:14, boxShadow:"inset 0 0 0 2px var(--info)", display:"inline-block" }}/> active cell · <span style={{ width:14,height:14, background:"#e3edfb", display:"inline-block", marginLeft:4 }}/> range (shift-click / shift-arrows)</span>
         <span><b>Excel keys:</b> Ctrl/Cmd C/V copy-paste (works with Excel too) · Ctrl/Cmd Z / Shift+Z undo-redo · F2 edit · Del clears range · drag the blue corner to fill down · double-click a header edge to auto-fit · click a row number to select the row.</span>
         <span style={{ display:"flex", alignItems:"center", gap:5 }}><Snowflake size={11} color="#2563a6"/> freeze leading columns</span>
-        <span style={{ display:"flex", alignItems:"center", gap:5 }}><RotateCcw size={11} color="#6d4aab"/> set REVISED plan (incl. Fabric IH) — plans cascade from it</span>
+        <span style={{ display:"flex", alignItems:"center", gap:5 }}><RotateCcw size={11} color="var(--revised)"/> set REVISED plan (incl. Fabric IH) — plans cascade from it</span>
         <span style={{ display:"flex", alignItems:"center", gap:5 }}><span style={{ width:0,height:0, borderTop:"8px solid var(--danger)", borderLeft:"8px solid transparent", display:"inline-block" }}/> comment</span>
       </div>
       </>)}
