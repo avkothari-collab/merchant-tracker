@@ -1031,6 +1031,28 @@ function SettingsView({ cfg, setCfg, canEdit }){
 // ============================ AUTH LAYER ============================
 function Splash({ text }){ return (<div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"#f4f0e8", fontFamily:"'JetBrains Mono',monospace", color:"#6a665e", fontSize:13 }}>{text}</div>); }
 
+function UpdateBanner(){
+  const [ready,setReady]=useState(false);
+  const baseRef=useRef(null);
+  useEffect(()=>{
+    let alive=true;
+    const stamp=async()=>{
+      try{ const r=await fetch("/?_v="+Date.now(),{ cache:"no-store" }); if(!r.ok) return null; const t=await r.text(); const m=t.match(/assets\/[A-Za-z0-9_.-]+\.(?:js|css)/g)||[]; return m.length?Array.from(new Set(m)).sort().join("|"):null; }catch(e){ return null; }
+    };
+    (async()=>{ const f=await stamp(); if(alive) baseRef.current=f; })();
+    const iv=setInterval(async()=>{ if(typeof document!=="undefined"&&document.hidden) return; const s=await stamp(); if(alive&&s&&baseRef.current&&s!==baseRef.current) setReady(true); },60000);
+    return ()=>{ alive=false; clearInterval(iv); };
+  },[]);
+  if(!ready) return null;
+  return createPortal(
+    <div style={{ position:"fixed", bottom:18, left:"50%", transform:"translateX(-50%)", zIndex:99999, background:"#1a1a1a", color:"#fff", padding:"9px 14px", borderRadius:6, boxShadow:"0 6px 20px rgba(0,0,0,0.35)", display:"flex", alignItems:"center", gap:11, fontSize:12, fontFamily:"'JetBrains Mono',monospace" }}>
+      <span style={{ width:7, height:7, borderRadius:7, background:"#7fd1a8", display:"inline-block" }}/>
+      <span>New version available.</span>
+      <button onClick={()=>{ window.location.reload(); }} style={{ fontFamily:"inherit", fontSize:12, fontWeight:700, padding:"5px 13px", cursor:"pointer", border:"none", borderRadius:4, background:"#d97706", color:"#fff" }}>Refresh</button>
+      <button onClick={()=>setReady(false)} style={{ fontFamily:"inherit", fontSize:11, padding:"5px 6px", cursor:"pointer", border:"none", background:"transparent", color:"#9b958a" }}>Later</button>
+    </div>, document.body);
+}
+
 function AuthShell({ children }){ return (<div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"#f4f0e8", fontFamily:"'JetBrains Mono',monospace", padding:20 }}><div style={{ width:360, maxWidth:"100%", background:"#fff", border:"2px solid #1a1a1a", boxShadow:"8px 8px 0 #1a1a1a", padding:26 }}>{children}</div></div>); }
 
 function LoginScreen(){
@@ -1094,5 +1116,5 @@ export default function App(){
   if(session===undefined || (session && profile===undefined)) return <Splash text="Loading…"/>;
   if(!session) return <LoginScreen/>;
   if(!profile || profile.role==="pending" || !ROLES[profile.role]) return <PendingScreen email={session.user.email} onSignOut={signOut}/>;
-  return <MerchTracker me={profile} onSignOut={signOut}/>;
+  return (<><MerchTracker me={profile} onSignOut={signOut}/><UpdateBanner/></>);
 }
