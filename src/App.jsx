@@ -1040,7 +1040,7 @@ function UpdateBanner(){
   useEffect(()=>{
     let alive=true;
     const stamp=async()=>{
-      try{ const r=await fetch("/?_v="+Date.now(),{ cache:"no-store" }); if(!r.ok) return null; const t=await r.text(); const m=t.match(/assets\/[A-Za-z0-9_.-]+\.(?:js|css)/g)||[]; return m.length?Array.from(new Set(m)).sort().join("|"):null; }catch(e){ return null; }
+      try{ const r=await fetch("/?_v="+Date.now(),{ cache:"no-store" }); if(!r.ok) return null; const t=await r.text(); return (t&&t.length)?t.trim():null; }catch(e){ return null; }
     };
     (async()=>{ const f=await stamp(); if(alive) baseRef.current=f; })();
     const iv=setInterval(async()=>{ if(typeof document!=="undefined"&&document.hidden) return; const s=await stamp(); if(alive&&s&&baseRef.current&&s!==baseRef.current) setReady(true); },60000);
