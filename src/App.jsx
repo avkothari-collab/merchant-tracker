@@ -310,21 +310,21 @@ function MerchTracker({ me, onSignOut }){
   const rowToStyle=(row,byId)=>({ id:row.id, orderNo:row.order_no||"", sampleFit:row.sample_fit||"", family:row.family||"", styleNo:row.style_no||"", colour:row.colour||"", brand:row.brand||"", fabricType:row.fabric_type||"", owner:row.owner||"", setId:row.set_id||"", setRole:row.set_role||"", age:row.age||"", qty:row.qty||0, ordRec:row.order_date||"", delivery:row.delivery_date||"", fitReq:!!row.fit_req, printReq:!!row.print_req, soReq:!!row.so_req, ppBypass:!!row.pp_bypass, labDipReq:!!row.lab_dip_req, ppNeeded:!!row.pp_needed, remarks:row.remarks||"", actuals:(byId[row.id]&&byId[row.id].actuals)||{}, revs:(byId[row.id]&&byId[row.id].revs)||{}, rejects:(byId[row.id]&&byId[row.id].rejects)||{}, skips:(byId[row.id]&&byId[row.id].skips)||{}, archived:!!row.archived });
   // LOAD everything from Supabase (also used by the Sync button)
   const loadShared=async()=>{ try{
-    const [styRes, sdRes, cmRes] = await Promise.all([
-      supabase.from("styles").select("*").order("id"),
-      supabase.from("stage_dates").select("*"),
-      supabase.from("cell_meta").select("*"),
-    ]);
-    if(styRes.error||!styRes.data){ console.error(styRes.error); return; }
-    const byId={}; (sdRes.data||[]).forEach(r=>{ const e=(byId[r.style_id]=byId[r.style_id]||{actuals:{},revs:{},rejects:{},skips:{}}); if(r.actual_date) e.actuals[r.stage]=r.actual_date; if(r.revised_date) e.revs[r.stage]=r.revised_date; if(r.reject_date) e.rejects[r.stage]=r.reject_date; if(r.skip_date) e.skips[r.stage]=r.skip_date; });
-    const appStyles=styRes.data.map(row=>rowToStyle(row,byId));
+    // Supabase caps a single select() at 1000 rows. With 100+ styles x 13 stages, stage_dates was being silently truncated, so cells beyond row 1000 rendered blank even though the data was in the DB. Fetch EVERY row in pages.
+    const fetchAll=async(table)=>{ let out=[], from=0; const size=1000; for(let i=0;i<100;i++){ const { data, error }=await supabase.from(table).select("*").range(from, from+size-1); if(error){ console.error("load "+table,error); break; } if(!data||!data.length) break; out=out.concat(data); if(data.length<size) break; from+=size; } return out; };
+    const styData = await fetchAll("styles"); styData.sort((a,b)=>(a.id||0)-(b.id||0));
+    if(!styData.length){ console.error("no styles loaded"); return; }
+    const sdData = await fetchAll("stage_dates");
+    const cmData = await fetchAll("cell_meta");
+    const byId={}; sdData.forEach(r=>{ const e=(byId[r.style_id]=byId[r.style_id]||{actuals:{},revs:{},rejects:{},skips:{}}); if(r.actual_date) e.actuals[r.stage]=r.actual_date; if(r.revised_date) e.revs[r.stage]=r.revised_date; if(r.reject_date) e.rejects[r.stage]=r.reject_date; if(r.skip_date) e.skips[r.stage]=r.skip_date; });
+    const appStyles=styData.map(row=>rowToStyle(row,byId));
     setStyles(appStyles);
     const SR={ sty:{}, stg:{}, meta:{} };
     appStyles.forEach(s=>{ SR.sty[s.id]=JSON.stringify(styleToRow(s)); STAGE_KEYS.forEach(k=>{ SR.stg[s.id+":"+k]=JSON.stringify({ style_id:s.id, stage:k, revised_date:(s.revs&&s.revs[k])||null, actual_date:s.actuals[k]||null, reject_date:(s.rejects&&s.rejects[k])||null, skip_date:(s.skips&&s.skips[k])||null }); }); });
-    (cmRes.data||[]).forEach(r=>{ if(r.fill||r.note) SR.meta[r.style_id+":"+r.col]=JSON.stringify({ style_id:r.style_id, col:r.col, fill:r.fill||null, note:r.note||null }); });
+    cmData.forEach(r=>{ if(r.fill||r.note) SR.meta[r.style_id+":"+r.col]=JSON.stringify({ style_id:r.style_id, col:r.col, fill:r.fill||null, note:r.note||null }); });
     savedRef.current=SR;
     try{ const cfgRes=await supabase.from("app_settings").select("data").eq("id","global").maybeSingle(); if(cfgRes&&cfgRes.data&&cfgRes.data.data){ const d=cfgRes.data.data; setCfg({ ...DEFAULT_CFG, ...d, leads:{...DEFAULT_CFG.leads,...(d.leads||{})}, rework:{...DEFAULT_CFG.rework,...(d.rework||{})}, upcoming:{...DEFAULT_CFG.upcoming,...(d.upcoming||{})} }); } }catch(e){ /* settings table optional */ }
-    const f={}, n={}; (cmRes.data||[]).forEach(r=>{ if(r.fill) f[`${r.style_id}:${r.col}`]=r.fill; if(r.note) n[`${r.style_id}:${r.col}`]=r.note; });
+    const f={}, n={}; cmData.forEach(r=>{ if(r.fill) f[`${r.style_id}:${r.col}`]=r.fill; if(r.note) n[`${r.style_id}:${r.col}`]=r.note; });
     setFills(f); setNotes(n); try{ const [cmR,prR]=await Promise.all([ supabase.from("comments").select("*").order("created_at"), supabase.from("profiles").select("id,name,role,email") ]); const cg={}; (cmR.data||[]).forEach(r=>{ const ck=r.style_id+":"+r.col; (cg[ck]=cg[ck]||[]).push(r); }); setComments(cg); setTeam(prR.data||[]); const nR=await supabase.from("notifications").select("*").eq("user_id",me.id).order("created_at",{ascending:false}).limit(100); setInbox(nR.data||[]); const fR=await supabase.from("style_follows").select("style_id").eq("user_id",me.id); setFollows(new Set((fR.data||[]).map(r=>r.style_id))); }catch(e){} loadedRef.current=true; flash();
   }catch(e){ console.error("load failed",e); } };
   useEffect(()=>{ loadShared(); },[]);
@@ -350,19 +350,7 @@ function MerchTracker({ me, onSignOut }){
     // ---- only upsert rows that actually changed since last save: protects other users' concurrent edits ----
     const styRows=styles.map(styleToRow); const styChanged=styRows.filter(r=>SR.sty[r.id]!==JSON.stringify(r));
     if(styChanged.length){ const up1=await supabase.from("styles").upsert(styChanged); if(up1.error) throw up1.error; logStyleAudit(styChanged,SR); }
-    const stgChanged=[]; const heal=[];
-    styles.forEach(s=> STAGE_KEYS.forEach(k=>{ const key=s.id+":"+k;
-      let aD=s.actuals[k]||null, rD=(s.revs&&s.revs[k])||null, jD=(s.rejects&&s.rejects[k])||null, kD=(s.skips&&s.skips[k])||null;
-      let sr=null; try{ sr=JSON.parse(SR.stg[key]||"null"); }catch(e){ sr=null; }
-      if(sr){ // ANTI-CLOBBER: a saved date may only go blank if the user explicitly cleared it this session; otherwise keep it (stale blank ignored) and restore the visible cell
-        if(sr.actual_date && !aD && !clearedRef.current.has(key+":actual")){ aD=sr.actual_date; heal.push([s.id,"actuals",k,aD]); }
-        if(sr.revised_date && !rD && !clearedRef.current.has(key+":revised")){ rD=sr.revised_date; heal.push([s.id,"revs",k,rD]); }
-        if(sr.reject_date && !jD && !clearedRef.current.has(key+":reject")){ jD=sr.reject_date; heal.push([s.id,"rejects",k,jD]); }
-        if(sr.skip_date && !kD && !clearedRef.current.has(key+":skip")){ kD=sr.skip_date; heal.push([s.id,"skips",k,kD]); }
-      }
-      const row={ style_id:s.id, stage:k, revised_date:rD, actual_date:aD, reject_date:jD, skip_date:kD };
-      const j=JSON.stringify(row); if(SR.stg[key]!==j) stgChanged.push({row,key,j}); }));
-    if(heal.length){ setStyles(prev=>prev.map(s=>{ const hs=heal.filter(h=>h[0]===s.id); if(!hs.length) return s; const ns={...s, actuals:{...s.actuals}, revs:{...(s.revs||{})}, rejects:{...(s.rejects||{})}, skips:{...(s.skips||{})} }; hs.forEach(([,bucket,stg,val])=>{ ns[bucket][stg]=val; }); return ns; })); }
+    const stgChanged=[]; styles.forEach(s=> STAGE_KEYS.forEach(k=>{ const row={ style_id:s.id, stage:k, revised_date:(s.revs&&s.revs[k])||null, actual_date:s.actuals[k]||null, reject_date:(s.rejects&&s.rejects[k])||null, skip_date:(s.skips&&s.skips[k])||null }; const key=s.id+":"+k; const j=JSON.stringify(row); if(SR.stg[key]!==j) stgChanged.push({row,key,j}); }));
     if(stgChanged.length){ const up2=await supabase.from("stage_dates").upsert(stgChanged.map(x=>x.row),{ onConflict:"style_id,stage" }); if(up2.error) throw up2.error; logStageAudit(stgChanged,SR); notifyFollowers(stgChanged); }
     const keys=new Set([...Object.keys(fills),...Object.keys(notes)]); const metaChanged=[]; keys.forEach(key=>{ const i=key.indexOf(":"); const row={ style_id:Number(key.slice(0,i)), col:key.slice(i+1), fill:fills[key]||null, note:notes[key]||null }; const j=JSON.stringify(row); if(SR.meta[key]!==j) metaChanged.push({row,key,j}); });
     if(metaChanged.length){ const up3=await supabase.from("cell_meta").upsert(metaChanged.map(x=>x.row),{ onConflict:"style_id,col" }); if(up3.error) throw up3.error; }
