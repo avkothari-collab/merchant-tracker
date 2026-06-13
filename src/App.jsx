@@ -989,10 +989,11 @@ function Splash({ text }){ return (<div style={{ minHeight:"100vh", display:"fle
 function AuthShell({ children }){ return (<div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"#f4f0e8", fontFamily:"'JetBrains Mono',monospace", padding:20 }}><div style={{ width:360, maxWidth:"100%", background:"#fff", border:"2px solid #1a1a1a", boxShadow:"8px 8px 0 #1a1a1a", padding:26 }}>{children}</div></div>); }
 
 function LoginScreen(){
-  const [email,setEmail]=useState(""); const [pw,setPw]=useState(""); const [mode,setMode]=useState("in"); const [msg,setMsg]=useState(""); const [busy,setBusy]=useState(false);
+  const [email,setEmail]=useState(""); const [pw,setPw]=useState(""); const [mode,setMode]=useState("in"); const [msg,setMsg]=useState(""); const [busy,setBusy]=useState(false); const [remember,setRemember]=useState(true);
   const submit=async()=>{ if(!email.trim()||!pw){ setMsg("Enter email and password."); return; } setMsg(""); setBusy(true);
-    try{ if(mode==="in"){ const { error }=await supabase.auth.signInWithPassword({ email:email.trim(), password:pw }); if(error) throw error; }
-      else { const { error,data }=await supabase.auth.signUp({ email:email.trim(), password:pw }); if(error) throw error; if(!data.session){ setMsg("Account created. If sign-in doesn't happen automatically, check your email to confirm, then sign in."); setMode("in"); } } }
+    const stamp=()=>{ try{ localStorage.setItem("mt_login_at", String(Date.now())); localStorage.setItem("mt_remember", remember?"1":"0"); }catch(x){} };
+    try{ if(mode==="in"){ const { error }=await supabase.auth.signInWithPassword({ email:email.trim(), password:pw }); if(error) throw error; stamp(); }
+      else { const { error,data }=await supabase.auth.signUp({ email:email.trim(), password:pw }); if(error) throw error; if(data.session){ stamp(); } if(!data.session){ setMsg("Account created. If sign-in doesn't happen automatically, check your email to confirm, then sign in."); setMode("in"); } } }
     catch(e){ setMsg(e.message||String(e)); } setBusy(false); };
   const inp={ width:"100%", fontFamily:"inherit", fontSize:13, padding:"9px 10px", border:"1px solid #1a1a1a", marginBottom:10, boxSizing:"border-box" };
   return (<AuthShell>
@@ -1000,6 +1001,7 @@ function LoginScreen(){
     <div style={{ fontSize:11, color:"#888", marginBottom:18 }}>{mode==="in"?"Sign in to your account":"Create your account"}</div>
     <input style={inp} type="email" placeholder="email" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") submit(); }}/>
     <input style={inp} type="password" placeholder="password" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") submit(); }}/>
+    <label style={{ display:"flex", alignItems:"center", gap:7, fontSize:11, color:"#555", marginBottom:12, cursor:"pointer" }}><input type="checkbox" checked={remember} onChange={e=>setRemember(e.target.checked)}/>Keep me signed in <span style={{ color:"#999" }}>(else sign out after 12h)</span></label>
     <button disabled={busy} onClick={submit} style={{ width:"100%", fontFamily:"inherit", fontSize:13, fontWeight:700, padding:"10px", cursor:busy?"wait":"pointer", border:"1px solid #1a1a1a", background:"#1a1a1a", color:"#f4f0e8", marginBottom:10 }}>{busy?"…":(mode==="in"?"Sign in":"Create account")}</button>
     <div style={{ fontSize:11, textAlign:"center" }}><span style={{ color:"#888" }}>{mode==="in"?"New here? ":"Have an account? "}</span><button onClick={()=>{ setMode(mode==="in"?"up":"in"); setMsg(""); }} style={{ border:"none", background:"transparent", color:"#d97706", cursor:"pointer", fontFamily:"inherit", fontSize:11, fontWeight:700 }}>{mode==="in"?"Create account":"Sign in"}</button></div>
     {msg && <div style={{ fontSize:11, color:"#c0392b", marginTop:12, lineHeight:1.4 }}>{msg}</div>}
@@ -1042,7 +1044,8 @@ export default function App(){
   const [profile,setProfile]=useState(undefined);
   useEffect(()=>{ supabase.auth.getSession().then(({ data })=>setSession(data.session||null)); const { data:sub }=supabase.auth.onAuthStateChange((_e,s)=>{ setSession(s||null); if(!s) setProfile(null); }); return ()=>{ try{ sub.subscription.unsubscribe(); }catch(e){} }; },[]);
   useEffect(()=>{ if(session===undefined) return; if(!session){ setProfile(null); return; } let active=true; (async()=>{ const uid=session.user.id; let { data }=await supabase.from("profiles").select("*").eq("id",uid).maybeSingle(); if(!data){ const { count }=await supabase.from("profiles").select("*",{ count:"exact", head:true }); const role=(count===0)?"management":"pending"; const ins=await supabase.from("profiles").insert({ id:uid, email:session.user.email, name:(session.user.email||"").split("@")[0], role }).select().maybeSingle(); data=ins.data; } if(active) setProfile(data||null); })(); return ()=>{ active=false; }; },[session]);
-  const signOut=async()=>{ await supabase.auth.signOut(); setProfile(null); };
+  const signOut=async()=>{ await supabase.auth.signOut(); setProfile(null); try{ localStorage.removeItem("mt_login_at"); }catch(e){} };
+  useEffect(()=>{ const check=()=>{ try{ if(localStorage.getItem("mt_remember")==="1") return; const at=parseInt(localStorage.getItem("mt_login_at")||"0",10); if(at && Date.now()-at>12*3600*1000){ supabase.auth.signOut(); } }catch(e){} }; check(); const t=setInterval(check,5*60*1000); return ()=>clearInterval(t); },[]);
   if(session===undefined || (session && profile===undefined)) return <Splash text="Loading…"/>;
   if(!session) return <LoginScreen/>;
   if(!profile || profile.role==="pending" || !ROLES[profile.role]) return <PendingScreen email={session.user.email} onSignOut={signOut}/>;
