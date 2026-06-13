@@ -1040,12 +1040,16 @@ function UpdateBanner(){
   const baseRef=useRef(null);
   useEffect(()=>{
     let alive=true;
-    const stamp=async()=>{
+    const grab=async()=>{
       try{ const r=await fetch("/?_v="+Date.now(),{ cache:"no-store" }); if(!r.ok) return null; const t=await r.text(); return (t&&t.length)?t.trim():null; }catch(e){ return null; }
     };
-    (async()=>{ const f=await stamp(); if(alive) baseRef.current=f; })();
-    const iv=setInterval(async()=>{ if(typeof document!=="undefined"&&document.hidden) return; const s=await stamp(); if(alive&&s&&baseRef.current&&s!==baseRef.current) setReady(true); },60000);
-    return ()=>{ alive=false; clearInterval(iv); };
+    (async()=>{ for(let i=0;i<6 && alive && baseRef.current===null;i++){ const t=await grab(); if(t){ baseRef.current=t; break; } await new Promise(res=>setTimeout(res,2000)); } })();
+    const check=async()=>{ if(typeof document!=="undefined"&&document.hidden) return; if(baseRef.current===null) return; const t=await grab(); if(alive&&t&&t!==baseRef.current) setReady(true); };
+    const t0=setTimeout(check,5000);
+    const iv=setInterval(check,30000);
+    const onVis=()=>{ if(typeof document!=="undefined"&&!document.hidden) check(); };
+    if(typeof document!=="undefined") document.addEventListener("visibilitychange",onVis);
+    return ()=>{ alive=false; clearTimeout(t0); clearInterval(iv); if(typeof document!=="undefined") document.removeEventListener("visibilitychange",onVis); };
   },[]);
   if(!ready) return null;
   return createPortal(
