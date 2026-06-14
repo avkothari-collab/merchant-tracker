@@ -105,21 +105,35 @@ function computeStyle(s, cfg){
   const autoClosed=(k)=>{ const r=get(k); return !!(r&&r.autoClosed); };
   let fitBranch;
   if(!s.fitReq) fitBranch=bs("—","na"); else if(done("fitAppr")) fitBranch=bs(isSkipped("fitAppr")?"Fit Skipped":(lateFIH("fitAppr")?"Fit Approved · after Fabric IH":"Fit Approved"), isSkipped("fitAppr")?"ok":(lateFIH("fitAppr")?"warn":"ok")); else if(rejected("fitAppr")) fitBranch=bs("Fit REJECTED · rework","late"); else if(fabricInHouse) fitBranch=bs(done("fitSend")?"Fit approval pending · blocks PP":"Fit pending · blocks PP","late",{blocksPP:true}); else if(done("fitSend")) fitBranch=bs(`Fit appr ${dueText("fitAppr")}`,TODAY>(get("fitAppr")?.plan||TODAY)?"late":"warn"); else fitBranch=bs(`Fit send ${dueText("fitSend")}`,TODAY>(get("fitSend")?.plan||TODAY)?"late":"warn");
-  let printBranch; const printDone=s.soReq?done("soAppr"):done("artAppr"); const printComp=s.soReq?"soAppr":"artAppr";
-  if(!s.printReq) printBranch=bs("—","na"); else if(printDone) printBranch=bs(autoClosed(printComp)?"Auto-skipped · Fabric IH done":(isSkipped(printComp)?"Print Skipped":(lateFIH(printComp)?"Print Approved · after Fabric IH":"Print Approved")), autoClosed(printComp)?"warn":(isSkipped(printComp)?"ok":(lateFIH(printComp)?"warn":"ok")), { autoClosed:autoClosed(printComp) }); else if(rejected("artAppr")||rejected("soAppr")) printBranch=bs("Print REJECTED · rework","late"); else if(fabricInHouse && !s.ppBypass) printBranch=bs("Auto-skipped · Fabric IH done","warn",{autoClosed:true}); else if(!done("artwork")) printBranch=bs(`Artwork ${dueText("artwork")}`,TODAY>(get("artwork")?.plan||TODAY)?"late":"warn"); else if(!done("artAppr")) printBranch=bs(`Art appr ${dueText("artAppr")}`,"warn"); else if(s.soReq&&!done("strikeOff")) printBranch=bs(`S/O ${dueText("strikeOff")}`,"warn"); else printBranch=bs(`S/O appr ${dueText("soAppr")}`,"warn");
+  let printBranch; const printComp=s.soReq?"soAppr":"artAppr"; const realDone=(k)=>{ const r=get(k); return !!(r&&(r.actual||r.skipped)); }; const printDone=s.soReq?realDone("soAppr"):realDone("artAppr");
+  const printClosedAfterFabric=!!(s.printReq && fabricInHouse && !s.ppBypass && !printDone && !(rejected("artAppr")||rejected("soAppr")));
+  if(!s.printReq) printBranch=bs("—","na");
+  else if(printDone) printBranch=bs(isSkipped(printComp)?"Print Skipped":(lateFIH(printComp)?"Print done after Fabric IH":"Print Approved"), isSkipped(printComp)?"ok":(lateFIH(printComp)?"warn":"ok"), { afterFabricIH: lateFIH(printComp) });
+  else if(rejected("artAppr")||rejected("soAppr")) printBranch=bs("Print REJECTED · rework","late");
+  else if(printClosedAfterFabric) printBranch=bs("Print not complete before Fabric IH","warn",{ crossCheck:true, autoClosed:true });
+  else if(!done("artwork")) printBranch=bs(`Artwork ${dueText("artwork")}`,TODAY>(get("artwork")?.plan||TODAY)?"late":"warn");
+  else if(!done("artAppr")) printBranch=bs(`Art appr ${dueText("artAppr")}`,"warn");
+  else if(s.soReq&&!done("strikeOff")) printBranch=bs(`S/O ${dueText("strikeOff")}`,"warn");
+  else printBranch=bs(`S/O appr ${dueText("soAppr")}`,"warn");
   let fabricBranch; const fabPlan=get("fabricIH")?.plan;
   const fabDue=fabPlan?(TODAY>fabPlan?`IH OVERDUE ${Math.round((TODAY-fabPlan)/ONE_DAY)}d`:`IH due ${fmt(fabPlan)}`):"IH —";
   const fabTone=fabPlan&&TODAY>fabPlan?"late":"warn";
   if(fabricInHouse) fabricBranch=bs("Bulk Fabric In-House","ok"); else if(rejected("labAppr")) fabricBranch=bs("Lab Dip REJECTED · rework","late"); else if(s.labDipReq&&done("labAppr")) fabricBranch=bs(`Lab Dip Appr | ${fabDue}`,fabTone); else if(s.labDipReq&&done("labDip")) fabricBranch=bs(`Lab dip sent, appr pending | ${fabDue}`,"warn"); else if(s.labDipReq) fabricBranch=bs(`Lab dip pending | ${fabDue}`,"warn"); else fabricBranch=bs(fabDue,fabTone);
   let ppBranch;
-  if(!s.ppNeeded) ppBranch=bs("PP Not Required","na"); else if(done("ppAppr")) ppBranch=bs(isSkipped("ppAppr")?"PP Skipped":(lateFIH("ppAppr")?"PP Approved · after Fabric IH":"PP Approved"), isSkipped("ppAppr")?"ok":(lateFIH("ppAppr")?"warn":"ok")); else if(rejected("ppAppr")) ppBranch=bs("PP REJECTED · rework","late"); else if(done("ppSample")) ppBranch=bs(`PP appr ${dueText("ppAppr")}`,"warn"); else if(fabricInHouse) ppBranch=bs(`PP sample ${dueText("ppSample")}`,"warn"); else ppBranch=bs("Awaiting bulk fabric","warn");
+  if(!s.ppNeeded) ppBranch=bs("PP Not Required","na");
+  else if(done("ppAppr")) ppBranch=bs(isSkipped("ppAppr")?"PP Skipped":(lateFIH("ppAppr")?"PP Approved · after Fabric IH":"PP Approved"), isSkipped("ppAppr")?"ok":(lateFIH("ppAppr")?"warn":"ok"));
+  else if(rejected("ppAppr")) ppBranch=bs("PP REJECTED · rework","late");
+  else if(s.fitReq && !done("fitAppr")) ppBranch=bs(done("fitSend")?"Awaiting Fit approval · blocks PP":"Awaiting Fit sample · blocks PP","late",{blocksPP:true});
+  else if(done("ppSample")) ppBranch=bs(`PP appr ${dueText("ppAppr")}`,"warn");
+  else if(fabricInHouse) ppBranch=bs(`PP sample ${dueText("ppSample")}`,"warn");
+  else ppBranch=bs("Awaiting bulk fabric","warn");
   // ---- Production File: a tracked activity; reflects PP bypass vs PP-approval gate ----
   let prodFileBranch;
   { const pfA=actualOf("prodFile"); const pfP=eff["prodFile"]; const pfDue=pfP?`due ${fmt(pfP)}`:"";
     if(pfA){ prodFileBranch=bs(`Released ${fmt(pfA)}`,"ok"); }
     else { const prodGate=addWorkdays(delivery,-CUTD); const overdue=pfP&&pfP<TODAY; const pastGate=pfP&&prodGate&&pfP>prodGate; const tn=(overdue||pastGate)?"late":"warn";
-      if(s.ppBypass || !s.ppNeeded){ const ready=fabricInHouse; const pre=s.ppBypass?"Bypass · ":""; prodFileBranch=ready?bs(`${pre}file ${pfDue}`,tn):bs(`${pre}awaiting fabric`,tn); }
-      else { const ready=done("ppAppr"); prodFileBranch=ready?bs(`Ready ${pfDue}`,tn):bs(`Awaiting PP appr`,tn); } } }
+      if(s.ppBypass || !s.ppNeeded){ const ready=fabricInHouse; const pre=s.ppBypass?"Bypass · ":""; prodFileBranch=!ready?bs(`${pre}awaiting fabric`,tn):(s.fitReq&&!done("fitAppr"))?bs(`${pre}awaiting Fit approval`,"late",{blocksPP:true}):bs(`${pre}file ${pfDue}`,tn); }
+      else { const ready=done("ppAppr"); prodFileBranch=!ready?bs(s.fitReq&&!done("fitAppr")?`Awaiting Fit approval`:"Awaiting PP appr",s.fitReq&&!done("fitAppr")?"late":tn,{blocksPP:s.fitReq&&!done("fitAppr")}):bs(`Ready ${pfDue}`,tn); } } }
   let fabricCountdown;
   if(fabricInHouse) fabricCountdown={txt:"in-house",date:fihA,n:9e9,tone:"ok"}; else if(fabPlan){ const n=netWorkdays(TODAY,fabPlan); fabricCountdown={txt:n<0?`${-n}d over`:`${n}d`,date:fabPlan,n,tone:n<0?"late":n<=7?"warn":"ok"}; } else fabricCountdown={txt:"no plan",date:null,n:null,tone:"warn"};
   const releaseGate=addWorkdays(delivery,-GATED);
@@ -138,7 +152,7 @@ function computeStyle(s, cfg){
   const appl=(k)=>{ const st=stById(k); return st&&(st.flag===null||s[st.flag]); };
   const predDone=(st)=>{ if(st.cutoff) return s.labDipReq?done("labAppr"):true; if(st.pred==="__ord") return true; let p=st.pred; while(p&&p!=="__ord"&&!appl(p)) p=stById(p)?.pred; return (!p||p==="__ord")?true:done(p); };
   const chaseCount={};
-  if(!released) STAGES.forEach(st=>{ if(fabricInHouse && printPreFabricKeys.has(st.key)) return; if(appl(st.key)&&!done(st.key)&&predDone(st)){ const ow=ownerOf(st.key); chaseCount[ow]=(chaseCount[ow]||0)+1; } });
+  if(!released) STAGES.forEach(st=>{ if(fabricInHouse && !s.ppBypass && printPreFabricKeys.has(st.key)) return; if(appl(st.key)&&!done(st.key)&&predDone(st)){ const ow=ownerOf(st.key); chaseCount[ow]=(chaseCount[ow]||0)+1; } });
   const chaseOwners=Object.entries(chaseCount).map(([owner,count])=>({owner,count}));
   const frontierReady=(k)=>{ if(k==="ppSample") return fabricInHouse && (!s.fitReq || done("fitAppr")); if(k==="prodFile"){ const base = (s.ppBypass || !s.ppNeeded) ? fabricInHouse : done("ppAppr"); return base && (!s.fitReq || done("fitAppr")); } return true; };
   const frontier=new Set(); Object.entries(BRANCH_STAGES).forEach(([bk,keys])=>{ const nx=keys.find(k=>applies(k)&&!done(k)); if(!nx) return; if(fabricInHouse && !s.ppBypass && bk==="print") return; if(frontierReady(nx)) frontier.add(nx); });
@@ -933,10 +947,7 @@ function MerchTracker({ me, onSignOut }){
                       <div style={{ minHeight:38, padding:"5px 8px", fontSize:12.5, color:cs.actual?"var(--ink)":"var(--muted-6)" }}>
                         {showAux && cs.plan && <span style={{ display:"block", fontSize:8, color:"#bcb6a8", lineHeight:1.3 }}>auto {fmt(cs.plan)}{cs.rev?` · rev ${fmt(cs.rev)}`:""}</span>}
                         {cs.autoClosed ? (
-                          <span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}>
-                            <span style={{ fontSize:9, color:"#8a6d3b", fontWeight:800, display:"flex", alignItems:"center", gap:3 }}><SkipForward size={9}/>AUTO-SKIPPED</span>
-                            <span style={{ fontSize:8, color:"var(--on-dark-2)" }}>Fabric IH done</span>
-                          </span>
+                          <span style={{ color:"var(--line-2)", fontSize:11 }}>—</span>
                         ) : cs.skipped ? (
                           <span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}>
                             <span style={{ fontSize:9, color:"#8a6d3b", fontWeight:700, display:"flex", alignItems:"center", gap:3 }}><SkipForward size={9}/>SKIPPED</span>
