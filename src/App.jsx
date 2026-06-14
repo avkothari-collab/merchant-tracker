@@ -692,7 +692,7 @@ function MerchTracker({ me, onSignOut }){
       </div>
 
       <div style={{ display:"flex", gap:0, padding:"0 22px", background:"var(--ink)", borderBottom:"1px solid #3a362e" }}>
-        {[["tracker","Tracker"],["dashboard","Dashboard"],["todo","To-Do"],["entrylog","Entry Log"],["settings","Settings"],["help","Help"]].map(([k,lab])=>(<button key={k} onClick={(e)=>{ e.stopPropagation(); setTab(k); if(k==="entrylog") loadAuditRows(); }} style={{ fontFamily:"'Archivo',sans-serif", fontWeight:700, fontSize:12, letterSpacing:0.3, padding:"9px 16px", cursor:"pointer", border:"none", borderBottom:tab===k?"3px solid var(--accent)":"3px solid transparent", background:"transparent", color:tab===k?"var(--bg)":"#9a958c" }}>{lab}{k==="todo"&&todoItems.length?` · ${todoItems.length}`:k==="entrylog"&&errorLog.length?` · ${errorLog.length}`:""}</button>))}
+        {[["tracker","Tracker"],["dashboard","Dashboard"],["management","Management"],["todo","To-Do"],["entrylog","Entry Log"],["settings","Settings"],["help","Help"]].map(([k,lab])=>(<button key={k} onClick={(e)=>{ e.stopPropagation(); setTab(k); if(k==="entrylog") loadAuditRows(); }} style={{ fontFamily:"'Archivo',sans-serif", fontWeight:700, fontSize:12, letterSpacing:0.3, padding:"9px 16px", cursor:"pointer", border:"none", borderBottom:tab===k?"3px solid var(--accent)":"3px solid transparent", background:"transparent", color:tab===k?"var(--bg)":"#9a958c" }}>{lab}{k==="todo"&&todoItems.length?` · ${todoItems.length}`:k==="entrylog"&&errorLog.length?` · ${errorLog.length}`:""}</button>))}
       </div>
 
       {tab==="help" && (<div style={{ padding:"18px 22px 36px" }}>
@@ -720,7 +720,7 @@ function MerchTracker({ me, onSignOut }){
 
           <div style={{ padding:18, fontSize:12, lineHeight:1.6 }}>
             {helpTab==="guide" && <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))", gap:12 }}>
-              <div style={{ border:"1px solid var(--line-2)", borderRadius:12, padding:14, background:"#fffdf8" }}><h3 style={{ margin:"0 0 8px", fontFamily:"'Archivo',sans-serif" }}>What each tab is for</h3><ul style={{ margin:"0 0 0 18px", padding:0 }}><li><b>Tracker:</b> live working sheet.</li><li><b>Dashboard:</b> summary of risk and bottlenecks.</li><li><b>To-Do:</b> overdue and upcoming actions.</li><li><b>Settings:</b> lead days, views and chase labels.</li><li><b>Help:</b> this guide.</li></ul></div>
+              <div style={{ border:"1px solid var(--line-2)", borderRadius:12, padding:14, background:"#fffdf8" }}><h3 style={{ margin:"0 0 8px", fontFamily:"'Archivo',sans-serif" }}>What each tab is for</h3><ul style={{ margin:"0 0 0 18px", padding:0 }}><li><b>Tracker:</b> live working sheet.</li><li><b>Dashboard:</b> daily operational risk and bottlenecks.</li><li><b>Management:</b> management analytics and actual performance.</li><li><b>To-Do:</b> overdue and upcoming actions.</li><li><b>Settings:</b> lead days, views and chase labels.</li><li><b>Help:</b> this guide.</li></ul></div>
               <div style={{ border:"1px solid var(--line-2)", borderRadius:12, padding:14, background:"#fffdf8" }}><h3 style={{ margin:"0 0 8px", fontFamily:"'Archivo',sans-serif" }}>Daily use flow</h3><ol style={{ margin:"0 0 0 18px", padding:0 }}><li>Open a saved view such as My Overdue or Buyer Approval Pending.</li><li>Check Overall / Chase / To-Do.</li><li>Double-click the correct cell and update the date.</li><li>Add comments or remarks where a delay needs explanation.</li><li>Use Review to audit changes and comments.</li></ol></div>
               <div style={{ border:"1px solid var(--line-2)", borderRadius:12, padding:14, background:"#fffdf8" }}><h3 style={{ margin:"0 0 8px", fontFamily:"'Archivo',sans-serif" }}>Safe habits</h3><ul style={{ margin:"0 0 0 18px", padding:0 }}><li>Use staging before replacing live app files.</li><li>Do not bulk upload without checking the preview.</li><li>Use revised dates instead of changing actual dates when plans move.</li><li>Use comments for buyer remarks and delay reasons.</li></ul></div>
             </div>}
@@ -1033,7 +1033,8 @@ function MerchTracker({ me, onSignOut }){
       </div>
       </>)}
 
-      {tab==="dashboard" && <DashboardView computed={computed} todoItems={todoItems} applyDrill={applyDrill} drillTodo={(obj)=>{ setTodoFilter(obj); setTab("todo"); }}/>}
+      {tab==="dashboard" && <OperationalDashboardView computed={computed} todoItems={todoItems} applyDrill={applyDrill} drillTodo={(obj)=>{ setTodoFilter(obj); setTab("todo"); }}/>}
+      {tab==="management" && <ManagementDashboardView computed={computed} todoItems={todoItems} applyDrill={applyDrill} drillTodo={(obj)=>{ setTodoFilter(obj); setTab("todo"); }}/>}
       {tab==="todo" && <TodoView items={todoItems} filter={todoFilter} setFilter={setTodoFilter} onJump={(id,key)=>{ snapCurrent(); resetFilters(); setTab("tracker"); requestAnimationFrame(()=>setTimeout(()=>jumpToEnter(id,key),60)); }}/>}
       {tab==="entrylog" && <EntryLogView auditRows={auditRows} auditBusy={auditBusy} loadAuditRows={loadAuditRows} errorLog={errorLog} clearErrorLog={()=>setErrorLog([])} colLabelOf={colLabelOf} onJump={(id,col)=>{ setTab("tracker"); setTimeout(()=>{ setSel({id:Number(id),col}); setFocus(null); scrollToCell(Number(id),col); },60); }}/>}
       {tab==="settings" && <SettingsView cfg={cfg} setCfg={setCfg} canEdit={canAdmin(role)}/>}
@@ -1151,7 +1152,122 @@ const ndCell={ border:"1px dashed #e8dcc2", padding:"6px 9px", whiteSpace:"nowra
 const ndInput=(w)=>({ border:"none", outline:"none", background:"transparent", fontFamily:"'JetBrains Mono', monospace", fontSize:10, width:w });
 
 /* ========================= DASHBOARD ========================= */
-function DashboardView({ computed, todoItems, applyDrill, drillTodo }){
+function OperationalDashboardView({ computed, todoItems, applyDrill, drillTodo }){
+  const [target,setTarget]=useState("tracker"); // where bar/owner/activity drills go
+  const [df,setDf]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("mt_dashfilter")||"{}"); }catch(e){ return {}; } });
+  useEffect(()=>{ try{ localStorage.setItem("mt_dashfilter", JSON.stringify(df)); }catch(e){} },[df]);
+  const [mgmtOpen,setMgmtOpen]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("mt_mgmt_open")||"{}"); }catch(e){ return {}; } });
+  useEffect(()=>{ try{ localStorage.setItem("mt_mgmt_open", JSON.stringify(mgmtOpen)); }catch(e){} },[mgmtOpen]);
+  const isMgmtOpen=(key)=> mgmtOpen[key]!==false;
+  const toggleMgmt=(key)=>setMgmtOpen(o=>({ ...o, [key]: !isMgmtOpen(key) }));
+  const matchDf=(st,except)=> (except==="order"||!df.order||st.orderNo===df.order) && (except==="fit"||!df.fit||st.sampleFit===df.fit) && (except==="junior"||!df.junior||st.owner===df.junior) && (except==="family"||!df.family||st.family===df.family) && (except==="brand"||!df.brand||st.brand===df.brand) && (except==="fabric"||!df.fabric||st.fabricType===df.fabric) && (except==="colour"||!df.colour||String(st.colour||"").split(/[,/]/).map(x=>x.trim()).includes(df.colour));
+  const distinctC=(key,fn)=>{ const s=new Set(); computed.forEach(({s:st})=>{ if(!matchDf(st,key)) return; fn(st).forEach(v=>{ if(v) s.add(v); }); }); return [...s].sort(); };
+  const orders=distinctC("order",s=>[s.orderNo]); const fits=distinctC("fit",s=>[s.sampleFit]); const juniors=distinctC("junior",s=>[s.owner]); const families=distinctC("family",s=>[s.family]); const brands=distinctC("brand",s=>[s.brand]); const fabrics=distinctC("fabric",s=>[s.fabricType]);
+  const colours=distinctC("colour",s=>String(s.colour||"").split(/[,/]/).map(x=>x.trim()));
+  const fc=computed.filter(({s})=> (!df.order||s.orderNo===df.order) && (!df.fit||s.sampleFit===df.fit) && (!df.junior||s.owner===df.junior) && (!df.family||s.family===df.family) && (!df.brand||s.brand===df.brand) && (!df.fabric||s.fabricType===df.fabric) && (!df.colour||String(s.colour||"").split(/[,/]/).map(x=>x.trim()).includes(df.colour)) );
+  const total=fc.length;
+  const onTrack=fc.filter(({c})=>c.tone==="ok").length;
+  const atRisk=fc.filter(({c})=>c.tone==="late"||c.tone==="warn").length;
+  const released=fc.filter(({c})=>c.released).length;
+  const delRisk=fc.filter(({c})=>String(c.status).startsWith("Delivery risk")).length;
+  // owner load + activity load from the spliced set
+  const ownerLoad={}; const actAgg={};
+  fc.forEach(({c})=>{ if(c.released) return; (c.chaseOwners||[]).forEach(o=>{ ownerLoad[o.owner]=(ownerLoad[o.owner]||0)+1; }); (c.frontier?[...c.frontier]:[]).forEach(k=>{ const r=(c.stages||[]).find(x=>x.key===k); if(!r||r.done) return; const a=actAgg[r.label]=actAgg[r.label]||{n:0,over:0,key:k}; a.n++; if((r.rev||r.plan)&&TODAY>(r.rev||r.plan)) a.over++; }); });
+  const owners=Object.entries(ownerLoad).sort((a,b)=>b[1]-a[1]); const maxOwner=Math.max(1,...owners.map(o=>o[1]));
+  const acts=Object.entries(actAgg).sort((a,b)=>b[1].n-a[1].n); const maxAct=Math.max(1,...acts.map(e=>e[1].n));
+  const overdueAct=acts.reduce((s,[,v])=>s+v.over,0);
+  const phase={ "Pre-Fit":0,"Fit / Print":0,"Lab Dip":0,"Fabric IH":0,"PP / Prod":0 };
+  fc.forEach(({c})=>{ if(c.released) return; const k=c.nextPending&&c.nextPending.key; if(k==="techpack") phase["Pre-Fit"]++; else if(["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"].includes(k)) phase["Fit / Print"]++; else if(["labDip","labAppr"].includes(k)) phase["Lab Dip"]++; else if(k==="fabricIH") phase["Fabric IH"]++; else phase["PP / Prod"]++; });
+  const maxPhase=Math.max(1,...Object.values(phase));
+  const OWNER_COLOR2=OWNER_COLOR;
+  // splice carried into drills so the tracker shows the same slice
+  const spliceCols=()=>{ const cf={}; if(df.order) cf.orderNo=[df.order]; if(df.fit) cf.sampleFit=[df.fit]; if(df.junior) cf.owner=[df.junior]; if(df.family) cf.family=[df.family]; if(df.brand) cf.brand=[df.brand]; if(df.fabric) cf.fabricType=[df.fabric]; return cf; };
+  const spliceSearch=()=> df.colour||"";
+  const goOwner=(o)=>{ if(target==="todo") drillTodo({ owner:o }); else applyDrill({ owner:o, colFilters:spliceCols(), search:spliceSearch() }); };
+  const goAct=(label,key)=>{ if(target==="todo") drillTodo({ activity:label }); else applyDrill({ activity:key, colFilters:spliceCols(), search:spliceSearch() }); };
+  const goStatus=(st,extra)=>applyDrill({ status:st, colFilters:{...spliceCols(),...(extra||{})}, search:spliceSearch() });
+  const card=(label,val,color,onClick)=>(<button onClick={onClick} disabled={!onClick} style={{ flex:1, minWidth:130, textAlign:"left", background:"var(--surface)", border:"1px solid var(--ink)", padding:"14px 16px", cursor:onClick?"pointer":"default", fontFamily:"inherit" }}><div style={{ fontSize:28, fontWeight:800, fontFamily:"'Archivo',sans-serif", color, lineHeight:1 }}>{val}</div><div style={{ fontSize:10, color:"var(--muted-2)", marginTop:5, letterSpacing:0.5, textTransform:"uppercase" }}>{label}{onClick?" ›":""}</div></button>);
+  const sel=(label,val,opts,onChange)=>(<select value={val||""} onChange={e=>onChange(e.target.value||undefined)} style={{ fontFamily:"inherit", fontSize:11, padding:"5px 7px", border:"1px solid var(--ink)", background:val?"var(--accent-tint)":"var(--surface)", maxWidth:150 }}><option value="">{label}: all</option>{opts.map(o=>(<option key={o} value={o}>{o}</option>))}</select>);
+  const anyDf=Object.values(df).some(Boolean);
+  const bar=(items,maxV,colorFn,labelW,onClick,fmtR)=> items.length===0?<div style={{ fontSize:11, color:"var(--muted-1)" }}>Nothing pending.</div>:items.map(([k,v])=>{ const n=typeof v==="number"?v:v.n; return (
+    <button key={k} onClick={()=>onClick(k,v)} style={{ display:"flex", alignItems:"center", gap:8, width:"100%", border:"none", background:"transparent", cursor:"pointer", fontFamily:"inherit", padding:"4px 0" }}>
+      <span style={{ width:labelW, fontSize:10, fontWeight:700, color:colorFn(k), textAlign:"left" }}>{k}</span>
+      <span style={{ flex:1, height:16, background:"#f0ece3", position:"relative" }}><span style={{ position:"absolute", left:0, top:0, bottom:0, width:`${(n/maxV)*100}%`, background:colorFn(k,v) }}/></span>
+      <span style={{ width:54, textAlign:"right", fontSize:10, fontWeight:700 }}>{fmtR?fmtR(v):n}</span>
+    </button>); });
+  const exportDashboardReport=(mode="detailed")=>{
+    const summary=[{ "Report Type":mode==="summary"?"Summary":"Detailed", "Slice Styles":total, "On Track":onTrack, "At Risk":atRisk, "Delivery Risk":delRisk, "Released":released, "Overdue Activities":overdueAct }];
+    const styleRows=fc.map(({s,c})=>({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Sample Fit":s.sampleFit||"", "Family":s.family||"", "Colour":s.colour||"", "Brand":s.brand||"", "Junior":s.owner||"", "Qty":s.qty||0, "Delivery":s.delivery||"", "Status":c.status||"", "Tone":c.tone||"", "Released":c.released?"YES":"", "% Done":c.pct, "Chase":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Next Pending":c.nextPending?c.nextPending.label:"", "Projected Release":c.projRelease?fmt(c.projRelease):"" }));
+    const ownerRows=owners.map(([owner,count])=>({ "Owner / Chase Label":owner, "Open Items":count }));
+    const activityRows=acts.map(([activity,v])=>({ "Activity":activity, "Open Count":v.n, "Overdue Count":v.over, "Stage Key":v.key }));
+    const phaseRows=Object.entries(phase).map(([phaseName,count])=>({ "Phase":phaseName, "Styles":count }));
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(summary),"Summary");
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(ownerRows),"Who to Chase");
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(activityRows),"Open Activities");
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(phaseRows),"Stuck Phases");
+    if(mode!=="summary") XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(styleRows),"Styles in Slice");
+    XLSX.writeFile(wb,"dashboard_"+mode+"_report_"+iso(TODAY)+".xlsx");
+  };
+  return (<div style={{ padding:"16px 22px", maxWidth:1140 }}>
+    {/* splice filter bar */}
+    <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom:14 }}>
+      <span style={{ fontSize:10, fontWeight:700, color:"var(--muted-2)", textTransform:"uppercase", letterSpacing:0.5 }}>Slice:</span>
+      {sel("Order",df.order,orders,v=>setDf(d=>({...d,order:v})))}
+      {sel("Fit",df.fit,fits,v=>setDf(d=>({...d,fit:v})))}
+      {sel("Colour",df.colour,colours,v=>setDf(d=>({...d,colour:v})))}
+      {sel("Junior",df.junior,juniors,v=>setDf(d=>({...d,junior:v})))}
+      {sel("Family",df.family,families,v=>setDf(d=>({...d,family:v})))}
+      {sel("Brand",df.brand,brands,v=>setDf(d=>({...d,brand:v})))}
+      {sel("Fabric",df.fabric,fabrics,v=>setDf(d=>({...d,fabric:v})))}
+      {anyDf && <button onClick={()=>setDf({})} style={{ fontFamily:"inherit", fontSize:10, padding:"5px 9px", cursor:"pointer", border:"1px solid var(--danger)", background:"var(--surface)", color:"var(--danger)", fontWeight:700 }}>clear slice</button>}
+      <span style={{ display:"inline-flex", border:"1px solid var(--ink)", borderRadius:8, overflow:"hidden" }}><button onClick={()=>exportDashboardReport("summary")} title="Export Dashboard summary report" style={{ fontFamily:"inherit", fontSize:10, padding:"5px 8px", cursor:"pointer", border:"none", borderRight:"1px solid var(--ink)", background:"var(--surface)", fontWeight:800 }}>⬇ Summary</button><button onClick={()=>exportDashboardReport("detailed")} title="Export Dashboard detailed report" style={{ fontFamily:"inherit", fontSize:10, padding:"5px 8px", cursor:"pointer", border:"none", background:"var(--surface)", fontWeight:800 }}>Detailed</button></span>
+      <span style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6 }}><span style={{ fontSize:10, color:"var(--muted-2)" }}>drill to:</span><div style={{ display:"flex", border:"1px solid var(--ink)" }}>{["tracker","todo"].map(t=>(<button key={t} onClick={()=>setTarget(t)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:700, padding:"5px 10px", cursor:"pointer", border:"none", borderRight:t==="tracker"?"1px solid var(--ink)":"none", background:target===t?"var(--ink)":"var(--surface)", color:target===t?"var(--bg)":"var(--ink)" }}>{t==="tracker"?"Tracker":"To-Do"}</button>))}</div></span>
+    </div>
+
+    <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
+      {card("Styles (slice)",total,"var(--ink)")}
+      {card("On track",onTrack,"var(--success)",()=>goStatus("On Track"))}
+      {card("At risk",atRisk,"var(--danger)",()=>goStatus("At Risk"))}
+      {card("Delivery risk",delRisk,"var(--danger)",()=>goStatus("All",{ overall:["Delivery risk"] }))}
+      {card("Released",released,"var(--success)",()=>goStatus("Released"))}
+      {card("Overdue activities",overdueAct,"var(--danger)")}
+    </div>
+
+    <div style={{ display:"flex", gap:18, flexWrap:"wrap", marginTop:22 }}>
+      <div style={{ flex:1, minWidth:320, background:"var(--surface)", border:"1px solid var(--ink)", padding:16 }}>
+        <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>WHO TO CHASE — by owner</div>
+        {bar(owners, maxOwner, (o)=>OWNER_COLOR2[o]||"var(--muted-2)", 64, (o)=>goOwner(o))}
+        <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8 }}>Click to open in {target==="todo"?"To-Do":"Tracker"}.</div>
+      </div>
+      <div style={{ flex:1, minWidth:320, background:"var(--surface)", border:"1px solid var(--ink)", padding:16 }}>
+        <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>OPEN ACTIVITIES</div>
+        {acts.length===0?<div style={{ fontSize:11, color:"var(--muted-1)" }}>Nothing due.</div>:acts.map(([label,v])=>(
+          <button key={label} onClick={()=>goAct(label,v.key)} style={{ display:"flex", alignItems:"center", gap:8, width:"100%", border:"none", background:"transparent", cursor:"pointer", fontFamily:"inherit", padding:"4px 0" }}>
+            <span style={{ width:84, fontSize:10, fontWeight:700, color:"var(--muted-5)", textAlign:"left" }}>{label}</span>
+            <span style={{ flex:1, height:16, background:"#f0ece3", position:"relative" }}><span style={{ position:"absolute", left:0, top:0, bottom:0, width:`${(v.n/maxAct)*100}%`, background:v.over?"var(--danger)":"var(--accent)" }}/></span>
+            <span style={{ width:54, textAlign:"right", fontSize:10, fontWeight:700 }}>{v.n}{v.over?<span style={{ color:"var(--danger)" }}> ({v.over})</span>:null}</span>
+          </button>))}
+        <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8 }}>Click to open in {target==="todo"?"To-Do":"Tracker"}. Red = overdue.</div>
+      </div>
+      <div style={{ flex:1, minWidth:320, background:"var(--surface)", border:"1px solid var(--ink)", padding:16 }}>
+        <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>WHERE STYLES ARE STUCK</div>
+        {Object.entries(phase).map(([p,n])=>(
+          <div key={p} style={{ display:"flex", alignItems:"center", gap:8, padding:"4px 0" }}>
+            <span style={{ width:80, fontSize:10, fontWeight:700, color:"var(--muted-4)" }}>{p}</span>
+            <span style={{ flex:1, height:16, background:"#f0ece3", position:"relative" }}><span style={{ position:"absolute", left:0, top:0, bottom:0, width:`${(n/maxPhase)*100}%`, background:p==="Fabric IH"?"var(--danger)":"var(--accent)" }}/></span>
+            <span style={{ width:28, textAlign:"right", fontSize:11, fontWeight:700 }}>{n}</span>
+          </div>))}
+      </div>
+    </div>
+  </div>);
+}
+
+/* ========================= TO-DO ========================= */
+
+
+/* ========================= MANAGEMENT ANALYTICS ========================= */
+function ManagementDashboardView({ computed, todoItems, applyDrill, drillTodo }){
   const [target,setTarget]=useState("tracker"); // where bar/owner/activity drills go
   const [df,setDf]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("mt_dashfilter")||"{}"); }catch(e){ return {}; } });
   useEffect(()=>{ try{ localStorage.setItem("mt_dashfilter", JSON.stringify(df)); }catch(e){} },[df]);
@@ -1181,7 +1297,7 @@ function DashboardView({ computed, todoItems, applyDrill, drillTodo }){
 
   const stageDef=(k)=>STAGES.find(x=>x.key===k)||{};
   const delayRecords=[]; const stagePerf={}; const deptPerf={}; const buyerPerf={}; const ownerDelay={}; const brandDelay={};
-  const addPerf=(bucket,key,label,delay,duration,extra={})=>{ const o=bucket[key]=bucket[key]||{ key, label, n:0, lateN:0, delaySum:0, durSum:0, maxDelay:-999, ...extra }; o.n++; if(delay>0) o.lateN++; o.delaySum+=delay; if(duration!=null) o.durSum+=duration; o.maxDelay=Math.max(o.maxDelay,delay); return o; };
+  const addPerf=(bucket,key,label,delay,duration,extra={})=>{ const o=bucket[key]=bucket[key]||{ key, label, n:0, lateN:0, delaySum:0, durSum:0, durN:0, maxDelay:-999, ...extra }; o.n++; if(delay>0) o.lateN++; o.delaySum+=delay; if(duration!=null){ o.durSum+=duration; o.durN++; } o.maxDelay=Math.max(o.maxDelay,delay); return o; };
   const avg=(n,d)=> d?Math.round((n/d)*10)/10:0;
   fc.forEach(({s,c})=>{
     const byKey={}; (c.stages||[]).forEach(r=>{ byKey[r.key]=r; });
@@ -1203,12 +1319,13 @@ function DashboardView({ computed, todoItems, applyDrill, drillTodo }){
   });
   const stageRows=Object.values(stagePerf).sort((a,b)=>avg(b.delaySum,b.n)-avg(a.delaySum,a.n));
   const deptRows=Object.values(deptPerf).sort((a,b)=>avg(b.delaySum,b.n)-avg(a.delaySum,a.n));
-  const buyerRows=Object.values(buyerPerf).sort((a,b)=>avg(b.durSum,b.n)-avg(a.durSum,a.n)).slice(0,8);
+  const buyerRows=Object.values(buyerPerf).sort((a,b)=>avg(b.durSum,b.durN)-avg(a.durSum,a.durN)).slice(0,8);
   const ownerRows=Object.values(ownerDelay).sort((a,b)=>avg(b.delaySum,b.n)-avg(a.delaySum,a.n)).slice(0,8);
   const brandRows=Object.values(brandDelay).sort((a,b)=>avg(b.delaySum,b.n)-avg(a.delaySum,a.n)).slice(0,8);
   const actualDone=delayRecords.length;
   const avgDelay=actualDone?avg(delayRecords.reduce((s,r)=>s+r.delay,0),actualDone):0;
-  const avgDuration=actualDone?avg(delayRecords.reduce((s,r)=>s+(r.duration||0),0),actualDone):0;
+  const durationDone=delayRecords.filter(r=>r.duration!=null).length;
+  const avgDuration=durationDone?avg(delayRecords.reduce((s,r)=>s+(r.duration!=null?r.duration:0),0),durationDone):0;
   const lateDone=delayRecords.filter(r=>r.delay>0).length;
   const worstDelays=[...delayRecords].sort((a,b)=>b.delay-a.delay).slice(0,8);
 
@@ -1221,18 +1338,46 @@ function DashboardView({ computed, todoItems, applyDrill, drillTodo }){
   const goStageOpen=(key)=>applyDrill({ status:"All", activity:key, colFilters:spliceCols(), search:spliceSearch() });
   const anyDf=Object.values(df).some(Boolean);
 
-  const exportAnalytics=()=>{ const data=stageRows.map(r=>({"Stage":r.label,"Owner":r.owner||"","Completed":r.n,"Late Count":r.lateN,"Avg Delay Days":avg(r.delaySum,r.n),"Avg Actual Duration Days":avg(r.durSum,r.n),"Worst Delay Days":r.maxDelay})); const dept=deptRows.map(r=>({"Department":r.label,"Completed":r.n,"Late Count":r.lateN,"Avg Delay Days":avg(r.delaySum,r.n),"Avg Actual Duration Days":avg(r.durSum,r.n),"Worst Delay Days":r.maxDelay})); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(data),"Stage Performance"); XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(dept),"Department Performance"); XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(worstDelays.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Department":r.dept,"Delay Days":r.delay,"Duration Days":r.duration,"Due":fmt(r.due),"Actual":fmt(r.actual)}))),"Worst Delays"); XLSX.writeFile(wb,"management_analytics_"+iso(TODAY)+".xlsx"); };
+  const exportAnalytics=(mode="detailed")=>{
+    const summary=[{ "Report Type":mode==="summary"?"Summary":"Detailed", "Styles in Slice":total, "On Track":onTrack, "At Risk":atRisk, "Delivery Risk":delRisk, "Released":released, "Release %":completionPct, "Overdue Open Activities":overdueAct, "Completed Stage Entries":actualDone, "Late Completed Entries":lateDone, "Avg Delay Days":avgDelay, "Avg Actual Time Days":avgDuration }];
+    const checks=[
+      { Check:"Status partition", Formula:"On Track + At Risk + Released should equal Styles in Slice", Value:onTrack+atRisk+released, Expected:total, Result:(onTrack+atRisk+released)===total?"OK":"CHECK" },
+      { Check:"Open activity overdue", Formula:"Sum overdue counts from Open Activities", Value:overdueAct, Expected:acts.reduce((a,[,v])=>a+v.over,0), Result:overdueAct===acts.reduce((a,[,v])=>a+v.over,0)?"OK":"CHECK" },
+      { Check:"Completed duration denominator", Formula:"Avg actual time divides only records with known start date", Value:durationDone, Expected:"duration records", Result:"OK" },
+      { Check:"Slice rows", Formula:"All management tables use filtered slice", Value:fc.length, Expected:total, Result:"OK" }
+    ];
+    const currentStyles=fc.map(({s,c})=>({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Fit":s.sampleFit||"", "Family":s.family||"", "Colour":s.colour||"", "Brand":s.brand||"", "Buyer":s.buyer||"", "Junior":s.owner||"", "Qty":s.qty||0, "Delivery":s.delivery||"", "Status":c.status||"", "Tone":c.tone||"", "Released":c.released?"YES":"", "% Done":c.pct, "Chase":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Next Pending":c.nextPending?c.nextPending.label:"", "Projected Release":c.projRelease?fmt(c.projRelease):"" }));
+    const stageData=stageRows.map(r=>({"Stage":r.label,"Owner":r.owner||"","Completed":r.n,"Late Count":r.lateN,"Avg Delay Days":avg(r.delaySum,r.n),"Avg Actual Duration Days":avg(r.durSum,r.durN),"Duration Records":r.durN,"Worst Delay Days":r.maxDelay}));
+    const dept=deptRows.map(r=>({"Department":r.label,"Completed":r.n,"Late Count":r.lateN,"Avg Delay Days":avg(r.delaySum,r.n),"Avg Actual Duration Days":avg(r.durSum,r.durN),"Duration Records":r.durN,"Worst Delay Days":r.maxDelay}));
+    const buyerData=buyerRows.map(r=>({"Buyer / Brand":r.label,"Approvals":r.n,"Late Count":r.lateN,"Avg Approval Time Days":avg(r.durSum,r.durN),"Avg Delay Days":avg(r.delaySum,r.n),"Worst Delay Days":r.maxDelay}));
+    const ownerData=ownerRows.map(r=>({"Owner":r.label,"Completed Entries":r.n,"Late Count":r.lateN,"Avg Delay Days":avg(r.delaySum,r.n),"Avg Actual Time Days":avg(r.durSum,r.durN),"Worst Delay Days":r.maxDelay}));
+    const brandData=brandRows.map(r=>({"Buyer / Brand":r.label,"Completed Entries":r.n,"Late Count":r.lateN,"Avg Delay Days":avg(r.delaySum,r.n),"Avg Actual Time Days":avg(r.durSum,r.durN),"Worst Delay Days":r.maxDelay}));
+    const delayData=worstDelays.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Department":r.dept,"Delay Days":r.delay,"Duration Days":r.duration,"Due":fmt(r.due),"Actual":fmt(r.actual)}));
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(summary),"Summary");
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(checks),"Calculation Checks");
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(stageData),"Stage Performance");
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(dept),"Department Performance");
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(buyerData),"Buyer Approval");
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(ownerData),"Owner Delays");
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(brandData),"Buyer Brand Delays");
+    if(mode!=="summary"){
+      XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(currentStyles),"Current Slice");
+      XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(delayData),"Worst Delays");
+    }
+    XLSX.writeFile(wb,"management_"+mode+"_analytics_"+iso(TODAY)+".xlsx");
+  };
 
   const card=(label,val,color,onClick,sub)=>(<button onClick={onClick} disabled={!onClick} style={{ flex:1, minWidth:136, textAlign:"left", background:"var(--surface)", border:"1px solid var(--line-2)", borderRadius:12, padding:"14px 16px", cursor:onClick?"pointer":"default", fontFamily:"inherit" }}><div style={{ fontSize:28, fontWeight:800, fontFamily:"'Archivo',sans-serif", color, lineHeight:1 }}>{val}</div><div style={{ fontSize:10, color:"var(--muted-2)", marginTop:5, letterSpacing:0.5, textTransform:"uppercase" }}>{label}{onClick?" ›":""}</div>{sub&&<div style={{ fontSize:9, color:"var(--muted-1)", marginTop:4 }}>{sub}</div>}</button>);
   const sel=(label,val,opts,onChange)=>(<select value={val||""} onChange={e=>onChange(e.target.value||undefined)} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 8px", border:"1px solid var(--line-2)", borderRadius:8, background:val?"var(--accent-tint)":"var(--surface)", maxWidth:150 }}><option value="">{label}: all</option>{opts.map(o=>(<option key={o} value={o}>{o}</option>))}</select>);
-  const section=(title,children,sub)=>(<div style={{ flex:1, minWidth:330, background:"var(--surface)", border:"1px solid var(--line-2)", borderRadius:14, padding:16 }}><div style={{ display:"flex", alignItems:"baseline", justifyContent:"space-between", gap:10, marginBottom:12 }}><div><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:14 }}>{title}</div>{sub&&<div style={{ fontSize:10, color:"var(--muted-2)", marginTop:3 }}>{sub}</div>}</div></div>{children}</div>);
-  const rowBtn=(key,label,right,color,onClick,sub)=>(<button key={key} onClick={onClick} disabled={!onClick} style={{ width:"100%", display:"flex", alignItems:"center", gap:8, border:"none", borderBottom:"1px solid var(--line-3)", background:"transparent", cursor:onClick?"pointer":"default", fontFamily:"inherit", padding:"7px 0", textAlign:"left" }}><span style={{ flex:1, minWidth:0 }}><span style={{ display:"block", fontSize:11, fontWeight:800, color:color||"var(--ink)", overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{label}</span>{sub&&<span style={{ display:"block", fontSize:9, color:"var(--muted-2)", marginTop:2, overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{sub}</span>}</span><span style={{ fontSize:11, fontWeight:800, color:color||"var(--ink)", whiteSpace:"nowrap" }}>{right}</span></button>);
+  const section=(key,title,children,sub)=>(<div style={{ flex:1, minWidth:330, background:"var(--surface)", border:"1px solid var(--line-2)", borderRadius:14, overflow:"hidden" }}><button onClick={()=>toggleMgmt(key)} style={{ width:"100%", border:"none", background:isMgmtOpen(key)?"var(--accent-tint)":"var(--surface)", cursor:"pointer", padding:"13px 16px", display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, fontFamily:"inherit", textAlign:"left" }}><span><span style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:14 }}>{title}</span>{sub&&<span style={{ display:"block", fontSize:10, color:"var(--muted-2)", marginTop:3 }}>{sub}</span>}</span><span style={{ fontSize:15, fontWeight:900, color:"var(--muted-3)" }}>{isMgmtOpen(key)?"−":"+"}</span></button>{isMgmtOpen(key)&&<div style={{ padding:"6px 16px 14px", borderTop:"1px solid var(--line-3)" }}>{children}</div>}</div>);
+  const rowBtn=(key,label,right,color,onClick,sub)=>(<button key={key} onClick={onClick} disabled={!onClick} style={{ width:"100%", display:"grid", gridTemplateColumns:"minmax(120px,1fr) 96px", alignItems:"center", gap:10, border:"none", borderBottom:"1px solid var(--line-3)", background:"transparent", cursor:onClick?"pointer":"default", fontFamily:"inherit", padding:"8px 0", textAlign:"left" }}><span style={{ minWidth:0 }}><span style={{ display:"block", fontSize:11, fontWeight:800, color:color||"var(--ink)", overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{label}</span>{sub&&<span style={{ display:"block", fontSize:9, color:"var(--muted-2)", marginTop:2, overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{sub}</span>}</span><span style={{ fontSize:11, fontWeight:800, color:color||"var(--ink)", whiteSpace:"nowrap", textAlign:"right" }}>{right}</span></button>);
   const barLine=(key,label,n,max,color,onClick,right)=>(<button key={key} onClick={onClick} disabled={!onClick} style={{ display:"flex", alignItems:"center", gap:8, width:"100%", border:"none", background:"transparent", cursor:onClick?"pointer":"default", fontFamily:"inherit", padding:"5px 0" }}><span style={{ width:90, fontSize:10, fontWeight:800, color:"var(--muted-4)", textAlign:"left", overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{label}</span><span style={{ flex:1, height:14, background:"#f0ece3", borderRadius:999, overflow:"hidden" }}><span style={{ display:"block", height:"100%", width:`${(n/Math.max(1,max))*100}%`, background:color, borderRadius:999 }}/></span><span style={{ width:58, textAlign:"right", fontSize:10, fontWeight:800 }}>{right||n}</span></button>);
 
   return (<div style={{ padding:"16px 22px", maxWidth:1280 }}>
     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:16, marginBottom:14, flexWrap:"wrap" }}>
-      <div><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:23 }}>Management Dashboard</div><div style={{ fontSize:11.5, color:"var(--muted-2)", marginTop:4, maxWidth:760, lineHeight:1.45 }}>Operational view of current bottlenecks plus actual turnaround performance by stage, department, buyer and owner. All figures respect the slice filters below.</div></div>
-      <button onClick={exportAnalytics} style={{ fontFamily:"inherit", fontSize:11, fontWeight:800, padding:"8px 12px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)", borderRadius:10 }}>⬇ Export analytics</button>
+      <div><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:23 }}>Management Dashboard</div><div style={{ fontSize:11.5, color:"var(--muted-2)", marginTop:4, maxWidth:760, lineHeight:1.45 }}>Operational view of current bottlenecks plus actual turnaround performance by stage, department, buyer and owner. All figures respect the slice filters below. Each table is expandable and drillable.</div></div>
+      <span style={{ display:"inline-flex", border:"1px solid var(--ink)", borderRadius:10, overflow:"hidden" }}><button onClick={()=>exportAnalytics("summary")} title="Export Management summary" style={{ fontFamily:"inherit", fontSize:11, fontWeight:800, padding:"8px 10px", cursor:"pointer", border:"none", borderRight:"1px solid var(--ink)", background:"var(--surface)" }}>⬇ Summary</button><button onClick={()=>exportAnalytics("detailed")} title="Export Management detailed workbook" style={{ fontFamily:"inherit", fontSize:11, fontWeight:800, padding:"8px 10px", cursor:"pointer", border:"none", background:"var(--surface)" }}>Detailed</button></span>
     </div>
 
     <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom:14 }}>
@@ -1241,6 +1386,10 @@ function DashboardView({ computed, todoItems, applyDrill, drillTodo }){
       {anyDf && <button onClick={()=>setDf({})} style={{ fontFamily:"inherit", fontSize:10, padding:"6px 10px", cursor:"pointer", border:"1px solid var(--danger)", background:"var(--surface)", color:"var(--danger)", fontWeight:800, borderRadius:8 }}>clear slice</button>}
       <span style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6 }}><span style={{ fontSize:10, color:"var(--muted-2)" }}>drill to:</span><div style={{ display:"flex", border:"1px solid var(--line-2)", borderRadius:8, overflow:"hidden" }}>{["tracker","todo"].map(t=>(<button key={t} onClick={()=>setTarget(t)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"6px 10px", cursor:"pointer", border:"none", borderRight:t==="tracker"?"1px solid var(--line-2)":"none", background:target===t?"var(--ink)":"var(--surface)", color:target===t?"var(--bg)":"var(--ink)" }}>{t==="tracker"?"Tracker":"To-Do"}</button>))}</div></span>
     </div>
+
+    {anyDf && <div style={{ display:"flex", gap:7, flexWrap:"wrap", margin:"-4px 0 14px" }}>
+      {Object.entries(df).filter(([,v])=>!!v).map(([k,v])=><span key={k} style={{ fontSize:10, fontWeight:800, border:"1px solid var(--line-2)", background:"var(--accent-tint)", borderRadius:999, padding:"4px 8px" }}>{k}: {v}</span>)}
+    </div>}
 
     <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
       {card("Styles in slice",total,"var(--ink)",null,completionPct+"% released")}
@@ -1260,13 +1409,13 @@ function DashboardView({ computed, todoItems, applyDrill, drillTodo }){
     </div>
 
     <div style={{ display:"flex", gap:18, flexWrap:"wrap", marginTop:18 }}>
-      {section("Department actual performance", deptRows.length?deptRows.map(r=>rowBtn(r.key,r.label,`${avg(r.durSum,r.n)}d avg · ${avg(r.delaySum,r.n)}d delay`,r.lateN?"var(--danger)":"var(--success)",null,`${r.n} completed · ${r.lateN} late`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No completed stage dates yet.</div>, "Based on actual date entries")}
-      {section("Stage performance", stageRows.slice(0,10).map(r=>rowBtn(r.key,r.label,`${avg(r.durSum,r.n)}d / ${avg(r.delaySum,r.n)}d`,r.lateN?"var(--danger)":"var(--success)",()=>goStageOpen(r.key),`${r.owner||""} · ${r.n} done · ${r.lateN} late · click opens current pending stage`)), "Actual duration / delay by stage")}
+      {section("Department actual performance", deptRows.length?deptRows.map(r=>rowBtn(r.key,r.label,`${avg(r.durSum,r.durN)}d avg · ${avg(r.delaySum,r.n)}d delay`,r.lateN?"var(--danger)":"var(--success)",null,`${r.n} completed · ${r.lateN} late`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No completed stage dates yet.</div>, "Based on actual date entries")}
+      {section("Stage performance", stageRows.slice(0,10).map(r=>rowBtn(r.key,r.label,`${avg(r.durSum,r.durN)}d / ${avg(r.delaySum,r.n)}d`,r.lateN?"var(--danger)":"var(--success)",()=>goStageOpen(r.key),`${r.owner||""} · ${r.n} done · ${r.lateN} late · click opens current pending stage`)), "Actual duration / delay by stage")}
       {section("Worst completed delays", worstDelays.length?worstDelays.map(r=>rowBtn(r.style+":"+r.stageKey,r.style||r.order,`+${r.delay}d`,r.delay>0?"var(--danger)":"var(--success)",()=>goSearch(r.style),`${r.stage} · ${r.buyer||""} · actual ${fmt(r.actual)}`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No completed delays yet.</div>, "Click opens the style in Tracker")}
     </div>
 
     <div style={{ display:"flex", gap:18, flexWrap:"wrap", marginTop:18 }}>
-      {section("Buyer approval turnaround", buyerRows.length?buyerRows.map(r=>rowBtn(r.key,r.label,`${avg(r.durSum,r.n)}d avg`,r.lateN?"var(--danger)":"var(--success)",()=>goSearch(r.label),`${r.n} approvals · ${r.lateN} late · avg delay ${avg(r.delaySum,r.n)}d`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No buyer approval actuals yet.</div>, "Fit / Art / S-O / Lab / PP approval actuals")}
+      {section("Buyer approval turnaround", buyerRows.length?buyerRows.map(r=>rowBtn(r.key,r.label,`${avg(r.durSum,r.durN)}d avg`,r.lateN?"var(--danger)":"var(--success)",()=>goSearch(r.label),`${r.n} approvals · ${r.lateN} late · avg delay ${avg(r.delaySum,r.n)}d`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No buyer approval actuals yet.</div>, "Fit / Art / S-O / Lab / PP approval actuals")}
       {section("Owner delay ranking", ownerRows.length?ownerRows.map(r=>rowBtn(r.key,r.label,`${avg(r.delaySum,r.n)}d delay`,r.lateN?"var(--danger)":"var(--success)",()=>goSearch(r.label),`${r.n} completed stage entries · ${r.lateN} late`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No owner delay data yet.</div>, "Uses style owner and completed stage delays")}
       {section("Buyer / brand delay ranking", brandRows.length?brandRows.map(r=>rowBtn(r.key,r.label,`${avg(r.delaySum,r.n)}d delay`,r.lateN?"var(--danger)":"var(--success)",()=>goSearch(r.label),`${r.n} completed stage entries · ${r.lateN} late`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No buyer delay data yet.</div>, "Average delay across completed stages")}
     </div>
@@ -1298,6 +1447,19 @@ function TodoView({ items, filter, setFilter, onJump }){
     <span style={{ width:COLW.date, fontSize:9, fontWeight:700, textTransform:"uppercase", color:"#8a857a" }}>Plan Date</span>
     <span style={{ flex:1, fontSize:9, fontWeight:700, textTransform:"uppercase", color:"#8a857a" }}>Days Late / Left</span>
   </div>);
+  const exportTodoReport=(mode="detailed")=>{
+    const data=shown.map(t=>({ "Priority":t.overdue?"Overdue":"Upcoming", "Order No":t.orderNo||"", "Style / Colour":t.isColour?String(t.colour||""):t.styleNo, "Grouped Fabric Count":t.isColour?(t.count||0):"", "Junior":t.junior||"", "Activity":t.activity||"", "Branch":t.branch||"", "Owner / Chase":t.owner||"", "Plan Date":t.exp?fmt(t.exp):"", "Days Late / Left":t.overdue?Math.abs(t.du):t.du, "Style ID":t.id, "Stage Key":t.key }));
+    if(!shown.length){ alert("No To-Do rows to export."); return; }
+    const summary=[{ "Report Type":mode==="summary"?"Summary":"Detailed", "Shown Items":shown.length, "Total Items":items.length, "Overdue":overdue.length, "Upcoming":upcoming.length }];
+    const byOwner={}; const byActivity={};
+    shown.forEach(t=>{ byOwner[t.owner||"(blank)"]=(byOwner[t.owner||"(blank)"]||0)+1; byActivity[t.activity||"(blank)"]=(byActivity[t.activity||"(blank)"]||0)+1; });
+    const wb=XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(summary),"Summary");
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(Object.entries(byOwner).map(([k,v])=>({"Owner / Chase":k,"Items":v}))),"By Owner");
+    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(Object.entries(byActivity).map(([k,v])=>({"Activity":k,"Items":v}))),"By Activity");
+    if(mode!=="summary") XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(data),"To-Do Items");
+    XLSX.writeFile(wb,"todo_"+mode+"_report_"+iso(TODAY)+".xlsx");
+  };
   const row=(t)=>(<button key={(t.isColour?"col-":"")+t.id+t.key} onClick={()=>onJump(t.id,t.key)} style={{ display:"flex", alignItems:"center", gap:10, width:"100%", textAlign:"left", borderLeft:`4px solid ${t.overdue?"var(--danger)":"var(--accent)"}`, borderBottom:"1px solid #eee7da", background:t.isColour?"#fbf8f1":"var(--surface)", cursor:"pointer", fontFamily:"inherit", padding:"7px 12px" }}>
     <span style={{ width:COLW.pri, fontSize:10, fontWeight:700, display:"flex", alignItems:"center", gap:6, color:t.overdue?"var(--danger)":"#7a560f" }}><span style={{ width:8, height:8, borderRadius:"50%", background:t.overdue?"var(--danger)":"var(--accent)" }}/>{t.overdue?"Overdue":"Upcoming"}</span>
     <span style={{ width:COLW.ord, fontSize:10, color:"var(--muted-4)" }}>{t.orderNo||"—"}</span>
@@ -1313,6 +1475,7 @@ function TodoView({ items, filter, setFilter, onJump }){
     <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
       <span style={{ fontSize:10, color:"var(--muted-2)" }}>Showing {shown.length} of {items.length}</span>
       {anyF && <button onClick={()=>{ setTf({}); setFilter&&setFilter({}); }} style={{ fontFamily:"inherit", fontSize:10, padding:"4px 9px", cursor:"pointer", border:"1px solid var(--danger)", background:"var(--surface)", color:"var(--danger)", fontWeight:700 }}>clear filters</button>}
+      <span style={{ marginLeft:"auto", display:"inline-flex", border:"1px solid var(--ink)", borderRadius:8, overflow:"hidden" }}><button onClick={()=>exportTodoReport("summary")} title="Export To-Do summary" style={{ fontFamily:"inherit", fontSize:10, padding:"4px 8px", cursor:"pointer", border:"none", borderRight:"1px solid var(--ink)", background:"var(--surface)", fontWeight:800 }}>⬇ Summary</button><button onClick={()=>exportTodoReport("detailed")} title="Export To-Do detailed rows" style={{ fontFamily:"inherit", fontSize:10, padding:"4px 8px", cursor:"pointer", border:"none", background:"var(--surface)", fontWeight:800 }}>Detailed</button></span>
     </div>
     <div style={{ display:"flex", alignItems:"baseline", gap:12, margin:"4px 0 6px" }}><span style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13 }}>TO-DO · {shown.length}</span>{overdue.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"var(--danger)" }}>{overdue.length} overdue</span>}{upcoming.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"#7a560f" }}>{upcoming.length} upcoming</span>}</div>
     {head}
