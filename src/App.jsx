@@ -289,6 +289,44 @@ const appendReportSheets=(wb,selected)=>{
   });
 };
 
+
+function ReportExportMenu({ title, prefix, sheets, defaultMode="detailed" }){
+  const [open,setOpen]=useState(false);
+  const [mode,setMode]=useState(defaultMode);
+  const [picked,setPicked]=useState(null);
+  const available=(sheets||[]).filter(x=>!x.modes || x.modes.includes(mode));
+  const labels=available.map(x=>x.label);
+  const active=new Set(picked||labels);
+  const toggle=(label)=>{
+    setPicked(prev=>{ const cur=new Set(prev||labels); cur.has(label)?cur.delete(label):cur.add(label); return [...cur]; });
+  };
+  const selectAll=()=>setPicked(labels);
+  const selectNone=()=>setPicked([]);
+  const doExport=()=>{
+    const selected=available.filter(x=>active.has(x.label));
+    if(!selected.length){ alert("Select at least one table/sheet to export."); return; }
+    const wb=XLSX.utils.book_new();
+    appendReportSheets(wb,selected);
+    XLSX.writeFile(wb,`${prefix}_${mode}_report_${iso(TODAY)}.xlsx`);
+    setOpen(false);
+  };
+  return (<span style={{ position:"relative", display:"inline-flex" }}>
+    <button onClick={(e)=>{ e.stopPropagation(); setOpen(o=>!o); }} title={`Export ${title}`} style={{ fontFamily:"inherit", fontSize:10, padding:"6px 10px", cursor:"pointer", border:"1px solid var(--ink)", background:open?"var(--ink)":"var(--surface)", color:open?"var(--bg)":"var(--ink)", fontWeight:800 }}>⬇ Export</button>
+    {open && (<div onClick={e=>e.stopPropagation()} style={{ position:"absolute", top:"100%", right:0, marginTop:5, zIndex:95, width:330, background:"var(--surface)", border:"1px solid var(--ink)", boxShadow:"4px 4px 0 var(--ink)", padding:12 }}>
+      <div style={{ fontSize:11, fontWeight:800, marginBottom:8 }}>Export {title}</div>
+      <div style={{ display:"flex", border:"1px solid var(--ink)", marginBottom:8 }}>
+        {["detailed","summary"].map(m=><button key={m} onClick={()=>{ setMode(m); setPicked(null); }} style={{ flex:1, fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"6px 0", cursor:"pointer", border:"none", borderRight:m==="detailed"?"1px solid var(--ink)":"none", background:mode===m?"var(--ink)":"var(--surface)", color:mode===m?"var(--bg)":"var(--ink)" }}>{m==="detailed"?"Detailed":"Summary"}</button>)}
+      </div>
+      <div style={{ fontSize:9, color:"var(--muted-2)", marginBottom:5 }}>Choose tables/sheets:</div>
+      <div style={{ maxHeight:190, overflowY:"auto", border:"1px solid var(--line-2)", padding:6, marginBottom:8 }}>
+        {available.map((sh,i)=><label key={sh.label} style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, padding:"4px 2px", cursor:"pointer", borderBottom:i===available.length-1?"none":"1px solid var(--line-3)" }}><input type="checkbox" checked={active.has(sh.label)} onChange={()=>toggle(sh.label)}/><span style={{ flex:1 }}>{sh.label}</span><span style={{ color:"var(--muted-1)", fontSize:9 }}>{Array.isArray(sh.data)?sh.data.length:0} rows</span></label>)}
+      </div>
+      <div style={{ display:"flex", gap:6, marginBottom:8 }}><button onClick={selectAll} style={{ ...chip, flex:1 }}>All</button><button onClick={selectNone} style={{ ...chip, flex:1 }}>None</button></div>
+      <div style={{ display:"flex", gap:8 }}><button onClick={doExport} style={{ flex:1, fontFamily:"inherit", fontSize:11, fontWeight:800, padding:7, cursor:"pointer", border:"1px solid var(--ink)", background:"var(--accent)" }}>⬇ Export .xlsx</button><button onClick={()=>setOpen(false)} style={{ fontFamily:"inherit", fontSize:11, padding:"7px 10px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--bg)" }}><X size={12}/></button></div>
+    </div>)}
+  </span>);
+}
+
 function BranchPill({ b, onJump }){
   if(!b) return null; const t=BR_TONE[b.tone]||BR_TONE.na;
   if(b.tone==="na") return <span style={{ color:"var(--line-2)", fontSize:10, fontWeight:700 }}>—</span>;
@@ -1219,6 +1257,14 @@ function OperationalDashboardView({ computed, todoItems, applyDrill, drillTodo }
       <span style={{ flex:1, height:16, background:"#f0ece3", position:"relative" }}><span style={{ position:"absolute", left:0, top:0, bottom:0, width:`${(n/maxV)*100}%`, background:colorFn(k,v) }}/></span>
       <span style={{ width:54, textAlign:"right", fontSize:10, fontWeight:700 }}>{fmtR?fmtR(v):n}</span>
     </button>); });
+  const dashboardSheets=[
+      { label:"Summary", data:summary, modes:["summary","detailed"] },
+      { label:"Who to Chase", data:ownerRows, modes:["summary","detailed"] },
+      { label:"Open Activities", data:activityRows, modes:["summary","detailed"] },
+      { label:"Stuck Phases", data:phaseRows, modes:["summary","detailed"] },
+      { label:"Styles in Slice", data:styleRows, modes:["detailed"] },
+      { label:"Dashboard Breakup", data:dashboardBreakup, modes:["detailed"] },
+  ];
   const exportDashboardReport=(mode="detailed")=>{
     const summary=[{ "Report Type":mode==="summary"?"Summary":"Detailed", "Slice Styles":total, "On Track":onTrack, "At Risk":atRisk, "Delivery Risk":delRisk, "Released":released, "Overdue Activities":overdueAct }];
     const styleRows=fc.map(({s,c})=>({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Sample Fit":s.sampleFit||"", "Family":s.family||"", "Colour":s.colour||"", "Brand":s.brand||"", "Junior":s.owner||"", "Qty":s.qty||0, "Delivery":s.delivery||"", "Status":c.status||"", "Tone":c.tone||"", "Released":c.released?"YES":"", "% Done":c.pct, "Chase":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Next Pending":c.nextPending?c.nextPending.label:"", "Projected Release":c.projRelease?fmt(c.projRelease):"" }));
@@ -1226,15 +1272,7 @@ function OperationalDashboardView({ computed, todoItems, applyDrill, drillTodo }
     const ownerRows=owners.map(([owner,count])=>({ "Owner / Chase Label":owner, "Open Items":count }));
     const activityRows=acts.map(([activity,v])=>({ "Activity":activity, "Open Count":v.n, "Overdue Count":v.over, "Stage Key":v.key }));
     const phaseRows=Object.entries(phase).map(([phaseName,count])=>({ "Phase":phaseName, "Styles":count }));
-    const sheets=[
-      { label:"Summary", data:summary, modes:["summary","detailed"] },
-      { label:"Who to Chase", data:ownerRows, modes:["summary","detailed"] },
-      { label:"Open Activities", data:activityRows, modes:["summary","detailed"] },
-      { label:"Stuck Phases", data:phaseRows, modes:["summary","detailed"] },
-      { label:"Styles in Slice", data:styleRows, modes:["detailed"] },
-      { label:"Dashboard Breakup", data:dashboardBreakup, modes:["detailed"] },
-    ];
-    const selected=pickReportSheets(`Dashboard ${mode}`,sheets,mode); if(!selected) return;
+    const selected=dashboardSheets.filter(x=>!x.modes || x.modes.includes(mode));
     const wb=XLSX.utils.book_new(); appendReportSheets(wb,selected);
     XLSX.writeFile(wb,"dashboard_"+mode+"_report_"+iso(TODAY)+".xlsx");
   };
@@ -1250,7 +1288,7 @@ function OperationalDashboardView({ computed, todoItems, applyDrill, drillTodo }
       {sel("Brand",df.brand,brands,v=>setDf(d=>({...d,brand:v})))}
       {sel("Fabric",df.fabric,fabrics,v=>setDf(d=>({...d,fabric:v})))}
       {anyDf && <button onClick={()=>setDf({})} style={{ fontFamily:"inherit", fontSize:10, padding:"5px 9px", cursor:"pointer", border:"1px solid var(--danger)", background:"var(--surface)", color:"var(--danger)", fontWeight:700 }}>clear slice</button>}
-      <span style={{ display:"inline-flex", border:"1px solid var(--ink)", borderRadius:8, overflow:"hidden" }}><button onClick={()=>exportDashboardReport("summary")} title="Export Dashboard summary report" style={{ fontFamily:"inherit", fontSize:10, padding:"5px 8px", cursor:"pointer", border:"none", borderRight:"1px solid var(--ink)", background:"var(--surface)", fontWeight:800 }}>⬇ Summary</button><button onClick={()=>exportDashboardReport("detailed")} title="Export Dashboard detailed report" style={{ fontFamily:"inherit", fontSize:10, padding:"5px 8px", cursor:"pointer", border:"none", background:"var(--surface)", fontWeight:800 }}>Detailed</button></span>
+      <ReportExportMenu title="Dashboard" prefix="dashboard" sheets={dashboardSheets} defaultMode="detailed" />
       <span style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6 }}><span style={{ fontSize:10, color:"var(--muted-2)" }}>drill to:</span><div style={{ display:"flex", border:"1px solid var(--ink)" }}>{["tracker","todo"].map(t=>(<button key={t} onClick={()=>setTarget(t)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:700, padding:"5px 10px", cursor:"pointer", border:"none", borderRight:t==="tracker"?"1px solid var(--ink)":"none", background:target===t?"var(--ink)":"var(--surface)", color:target===t?"var(--bg)":"var(--ink)" }}>{t==="tracker"?"Tracker":"To-Do"}</button>))}</div></span>
     </div>
 
@@ -1371,6 +1409,18 @@ function ManagementDashboardView({ computed, todoItems, applyDrill, drillTodo })
   const goStageOpen=(key)=>applyDrill({ status:"All", activity:key, colFilters:spliceCols(), search:spliceSearch() });
   const anyDf=Object.values(df).some(Boolean);
 
+  const analyticsSheets=[
+      { label:"Summary", data:summary, modes:["summary","detailed"] },
+      { label:"Calculation Checks", data:checks, modes:["summary","detailed"] },
+      { label:"Stage Performance", data:stageData, modes:["summary","detailed"] },
+      { label:"Department Performance", data:dept, modes:["summary","detailed"] },
+      { label:"Buyer Approval", data:buyerData, modes:["summary","detailed"] },
+      { label:"Owner Delays", data:ownerData, modes:["summary","detailed"] },
+      { label:"Buyer Brand Delays", data:brandData, modes:["summary","detailed"] },
+      { label:"Current Slice", data:currentStyles, modes:["detailed"] },
+      { label:"Worst Delays", data:delayData, modes:["detailed"] },
+      { label:"Calculation Breakup", data:calcBreakup, modes:["detailed"] },
+  ];
   const exportAnalytics=(mode="detailed")=>{
     const summary=[{ "Report Type":mode==="summary"?"Summary":"Detailed", "Styles in Slice":total, "On Track":onTrack, "At Risk":atRisk, "Delivery Risk":delRisk, "Released":released, "Release %":completionPct, "Overdue Open Activities":overdueAct, "Completed Stage Entries":actualDone, "Late Completed Entries":lateDone, "Avg Delay Days":r1(avgDelay), "Avg Actual Time Days":r1(avgDuration) }];
     const checks=[
@@ -1387,19 +1437,7 @@ function ManagementDashboardView({ computed, todoItems, applyDrill, drillTodo })
     const brandData=brandRows.map(r=>({"Buyer / Brand":r.label,"Completed Entries":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Time Days":r1(avg(r.durSum,r.durN)),"Worst Delay Days":r1(r.maxDelay)}));
     const delayData=worstDelays.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Department":r.dept,"Delay Days":r1(r.delay),"Duration Days":r.duration==null?"":r1(r.duration),"Due":fmt(r.due),"Actual":fmt(r.actual)}));
     const calcBreakup=delayRecords.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Stage Key":r.stageKey,"Department":r.dept,"Due Date":fmt(r.due),"Actual Date":fmt(r.actual),"Delay Days":r1(r.delay),"Duration Days":r.duration==null?"":r1(r.duration),"Included in Avg Delay":"YES","Included in Avg Actual Time":r.duration==null?"NO - start date missing":"YES"}));
-    const sheets=[
-      { label:"Summary", data:summary, modes:["summary","detailed"] },
-      { label:"Calculation Checks", data:checks, modes:["summary","detailed"] },
-      { label:"Stage Performance", data:stageData, modes:["summary","detailed"] },
-      { label:"Department Performance", data:dept, modes:["summary","detailed"] },
-      { label:"Buyer Approval", data:buyerData, modes:["summary","detailed"] },
-      { label:"Owner Delays", data:ownerData, modes:["summary","detailed"] },
-      { label:"Buyer Brand Delays", data:brandData, modes:["summary","detailed"] },
-      { label:"Current Slice", data:currentStyles, modes:["detailed"] },
-      { label:"Worst Delays", data:delayData, modes:["detailed"] },
-      { label:"Calculation Breakup", data:calcBreakup, modes:["detailed"] },
-    ];
-    const selected=pickReportSheets(`Management ${mode}`,sheets,mode); if(!selected) return;
+    const selected=analyticsSheets.filter(x=>!x.modes || x.modes.includes(mode));
     const wb=XLSX.utils.book_new(); appendReportSheets(wb,selected);
     XLSX.writeFile(wb,"management_"+mode+"_analytics_"+iso(TODAY)+".xlsx");
   };
@@ -1413,7 +1451,7 @@ function ManagementDashboardView({ computed, todoItems, applyDrill, drillTodo })
   return (<div style={{ padding:"16px 22px", maxWidth:1280 }}>
     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:16, marginBottom:14, flexWrap:"wrap" }}>
       <div><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:23 }}>Management Dashboard</div><div style={{ fontSize:11.5, color:"var(--muted-2)", marginTop:4, maxWidth:760, lineHeight:1.45 }}>Operational view of current bottlenecks plus actual turnaround performance by stage, department, buyer and owner. All figures respect the slice filters below. Each table is expandable and drillable.</div></div>
-      <span style={{ display:"inline-flex", border:"1px solid var(--ink)", borderRadius:10, overflow:"hidden" }}><button onClick={()=>exportAnalytics("summary")} title="Export Management summary" style={{ fontFamily:"inherit", fontSize:11, fontWeight:800, padding:"8px 10px", cursor:"pointer", border:"none", borderRight:"1px solid var(--ink)", background:"var(--surface)" }}>⬇ Summary</button><button onClick={()=>exportAnalytics("detailed")} title="Export Management detailed workbook" style={{ fontFamily:"inherit", fontSize:11, fontWeight:800, padding:"8px 10px", cursor:"pointer", border:"none", background:"var(--surface)" }}>Detailed</button></span>
+      <ReportExportMenu title="Management" prefix="management" sheets={analyticsSheets} defaultMode="detailed" />
     </div>
 
     <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom:14 }}>
@@ -1483,6 +1521,12 @@ function TodoView({ items, filter, setFilter, onJump }){
     <span style={{ width:COLW.date, fontSize:9, fontWeight:700, textTransform:"uppercase", color:"#8a857a" }}>Plan Date</span>
     <span style={{ flex:1, fontSize:9, fontWeight:700, textTransform:"uppercase", color:"#8a857a" }}>Days Late / Left</span>
   </div>);
+  const todoSheets=[
+      { label:"Summary", data:summary, modes:["summary","detailed"] },
+      { label:"By Owner", data:ownerRows, modes:["summary","detailed"] },
+      { label:"By Activity", data:activityRows, modes:["summary","detailed"] },
+      { label:"To-Do Items", data:data, modes:["detailed"] },
+  ];
   const exportTodoReport=(mode="detailed")=>{
     const data=shown.map(t=>({ "Priority":t.overdue?"Overdue":"Upcoming", "Order No":t.orderNo||"", "Style / Colour":t.isColour?String(t.colour||""):t.styleNo, "Grouped Fabric Count":t.isColour?(t.count||0):"", "Junior":t.junior||"", "Activity":t.activity||"", "Branch":t.branch||"", "Owner / Chase":t.owner||"", "Plan Date":t.exp?fmt(t.exp):"", "Days Late / Left":t.overdue?Math.abs(t.du):t.du, "Style ID":t.id, "Stage Key":t.key }));
     if(!shown.length){ alert("No To-Do rows to export."); return; }
@@ -1491,13 +1535,7 @@ function TodoView({ items, filter, setFilter, onJump }){
     shown.forEach(t=>{ byOwner[t.owner||"(blank)"]=(byOwner[t.owner||"(blank)"]||0)+1; byActivity[t.activity||"(blank)"]=(byActivity[t.activity||"(blank)"]||0)+1; });
     const ownerRows=Object.entries(byOwner).map(([k,v])=>({"Owner / Chase":k,"Items":v}));
     const activityRows=Object.entries(byActivity).map(([k,v])=>({"Activity":k,"Items":v}));
-    const sheets=[
-      { label:"Summary", data:summary, modes:["summary","detailed"] },
-      { label:"By Owner", data:ownerRows, modes:["summary","detailed"] },
-      { label:"By Activity", data:activityRows, modes:["summary","detailed"] },
-      { label:"To-Do Items", data:data, modes:["detailed"] },
-    ];
-    const selected=pickReportSheets(`To-Do ${mode}`,sheets,mode); if(!selected) return;
+    const selected=todoSheets.filter(x=>!x.modes || x.modes.includes(mode));
     const wb=XLSX.utils.book_new(); appendReportSheets(wb,selected);
     XLSX.writeFile(wb,"todo_"+mode+"_report_"+iso(TODAY)+".xlsx");
   };
@@ -1516,7 +1554,7 @@ function TodoView({ items, filter, setFilter, onJump }){
     <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
       <span style={{ fontSize:10, color:"var(--muted-2)" }}>Showing {shown.length} of {items.length}</span>
       {anyF && <button onClick={()=>{ setTf({}); setFilter&&setFilter({}); }} style={{ fontFamily:"inherit", fontSize:10, padding:"4px 9px", cursor:"pointer", border:"1px solid var(--danger)", background:"var(--surface)", color:"var(--danger)", fontWeight:700 }}>clear filters</button>}
-      <span style={{ marginLeft:"auto", display:"inline-flex", border:"1px solid var(--ink)", borderRadius:8, overflow:"hidden" }}><button onClick={()=>exportTodoReport("summary")} title="Export To-Do summary" style={{ fontFamily:"inherit", fontSize:10, padding:"4px 8px", cursor:"pointer", border:"none", borderRight:"1px solid var(--ink)", background:"var(--surface)", fontWeight:800 }}>⬇ Summary</button><button onClick={()=>exportTodoReport("detailed")} title="Export To-Do detailed rows" style={{ fontFamily:"inherit", fontSize:10, padding:"4px 8px", cursor:"pointer", border:"none", background:"var(--surface)", fontWeight:800 }}>Detailed</button></span>
+      <span style={{ marginLeft:"auto" }}><ReportExportMenu title="To-Do" prefix="todo" sheets={todoSheets} defaultMode="detailed" /></span>
     </div>
     <div style={{ display:"flex", alignItems:"baseline", gap:12, margin:"4px 0 6px" }}><span style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13 }}>TO-DO · {shown.length}</span>{overdue.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"var(--danger)" }}>{overdue.length} overdue</span>}{upcoming.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"#7a560f" }}>{upcoming.length} upcoming</span>}</div>
     {head}
