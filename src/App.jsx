@@ -59,14 +59,21 @@ const REJECTABLE=["fitAppr","artAppr","soAppr","labAppr","ppAppr"]; // approval 
 const SKIPPABLE_STAGES=["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr","labDip","labAppr","ppSample","ppAppr"]; // activities that can be waived/skipped
 const APPR_OF_SEND={ fitSend:"fitAppr", artwork:"artAppr", strikeOff:"soAppr", labDip:"labAppr", ppSample:"ppAppr" }; // send/make stage -> the approval that can reject it
 const REWORK_DAYS={ fitSend:4, artwork:2, strikeOff:3, labDip:7, ppSample:4 }; // working days added on rejection (redo+resend)
-const applicableStages=(s)=> STAGES.filter(st=> st.flag===null || s[st.flag]);
+const stageApplies=(s,st)=>{
+  if(!st) return false;
+  // Strike-off is only meaningful inside the print branch. If S/O is accidentally ticked while Print is off, keep it out of the chain.
+  if(st.key==="strikeOff" || st.key==="soAppr") return !!(s.printReq && s.soReq);
+  if(st.key==="artwork" || st.key==="artAppr") return !!s.printReq;
+  return st.flag===null || !!s[st.flag];
+};
+const applicableStages=(s)=> STAGES.filter(st=> stageApplies(s,st));
 
 function computeStyle(s, cfg){
   const ordRec=parse(s.ordRec), delivery=parse(s.delivery);
   const leadOf=(st)=>{ const v=cfg&&cfg.leads&&cfg.leads[st.key]; return v==null?st.lead:v; }; const rwOf=(st)=>{ const v=cfg&&cfg.rework&&cfg.rework[st.key]; return v==null?(REWORK_DAYS[st.key]||st.lead):v; }; const ownerOf=(k)=>{ const st=STAGES.find(x=>x.key===k); return (cfg&&cfg.stageOwners&&cfg.stageOwners[k]) || DEFAULT_STAGE_OWNERS[k] || (st&&st.owner) || "Jr Merchant"; }; const CUTD=(cfg&&cfg.fabricCutoff!=null)?cfg.fabricCutoff:FABRIC_CUTOFF_DAYS; const GATED=(cfg&&cfg.relGate!=null)?cfg.relGate:REL_GATE_DAYS;
   const cutoff=addWorkdays(delivery,-CUTD);
   const eff={}, plan={};
-  const applies=(k)=>{ const st=STAGES.find(x=>x.key===k); return st.flag===null||s[st.flag]; };
+  const applies=(k)=>{ const st=STAGES.find(x=>x.key===k); return stageApplies(s,st); };
   const actualOf=(k)=>parse(s.actuals[k]); const revOf=(k)=>parse(s.revs?.[k]); const rejOf=(k)=>parse(s.rejects?.[k]); const skipOf=(k)=>parse(s.skips?.[k]);
   STAGES.forEach(st=>{
     let p;
@@ -91,7 +98,7 @@ function computeStyle(s, cfg){
   const idle=lastActual?Math.max(0,netWorkdays(lastActual,TODAY)):null;
   const get=(k)=>stages.find(r=>r.key===k); const done=(k)=>!!(get(k)&&get(k).done); const rejected=(k)=>{ const r=get(k); return !!(r&&r.rejected); }; const isSkipped=(k)=>{ const r=get(k); return !!(r&&r.skipped); };
   const fabricInHouse=done("fabricIH"); const fihA=actualOf("fabricIH");
-  const isFabricCrossCheck=(r)=>!!(fabricInHouse && !s.ppBypass && r && !r.done && printPreFabricKeys.has(r.key));
+  const isFabricCrossCheck=(r)=>!!(r&&r.autoClosed);
   if(fabricInHouse && nextPending && isFabricCrossCheck(nextPending)){ nextPending=stages.find(r=>!r.done && !isFabricCrossCheck(r)) || null; }
   const lateFIH=(k)=>{ const r=get(k); return !!(fihA && r && r.actual && r.actual>fihA); };
   const lastPlan=stages[stages.length-1]?.plan;
@@ -101,31 +108,41 @@ function computeStyle(s, cfg){
   else if(nextPending&&nextPending.plan&&TODAY>nextPending.plan){ status=`Overdue ${Math.round((TODAY-nextPending.plan)/ONE_DAY)}d`; tone="late"; }
   else if(idle!==null&&idle>=7){ status=`Idle ${idle}d`; tone="warn"; }
   const dueText=(k)=>{ const r=get(k); if(!r||!r.plan) return "pending"; return TODAY>r.plan?`OVERDUE ${Math.round((TODAY-r.plan)/ONE_DAY)}d`:`due ${fmt(r.plan)}`; };
+  const dueTone=(k)=>{ const r=get(k); const d=r&&(r.rev||r.plan); return d&&TODAY>d?"late":"warn"; };
   const bs=(txt,tn,extra={})=>({txt,tone:tn,...extra});
   const autoClosed=(k)=>{ const r=get(k); return !!(r&&r.autoClosed); };
+  const reSentAfterReject=(sendK,apprK)=>{ const sd=actualOf(sendK), rj=rejOf(apprK), ap=actualOf(apprK); return !!(sd&&rj&&!ap&&sd>rj); };
   let fitBranch;
-  if(!s.fitReq) fitBranch=bs("—","na"); else if(done("fitAppr")) fitBranch=bs(isSkipped("fitAppr")?"Fit Skipped":(lateFIH("fitAppr")?"Fit Approved · after Fabric IH":"Fit Approved"), isSkipped("fitAppr")?"ok":(lateFIH("fitAppr")?"warn":"ok")); else if(rejected("fitAppr")) fitBranch=bs("Fit REJECTED · rework","late"); else if(fabricInHouse) fitBranch=bs(done("fitSend")?"Fit approval pending · blocks PP":"Fit pending · blocks PP","late",{blocksPP:true}); else if(done("fitSend")) fitBranch=bs(`Fit appr ${dueText("fitAppr")}`,TODAY>(get("fitAppr")?.plan||TODAY)?"late":"warn"); else fitBranch=bs(`Fit send ${dueText("fitSend")}`,TODAY>(get("fitSend")?.plan||TODAY)?"late":"warn");
+  const fitReSent=reSentAfterReject("fitSend","fitAppr");
+  if(!s.fitReq) fitBranch=bs("—","na"); else if(done("fitAppr")) fitBranch=bs(isSkipped("fitAppr")?"Fit Skipped":(lateFIH("fitAppr")?"Fit Approved · after Fabric IH":"Fit Approved"), isSkipped("fitAppr")?"ok":(lateFIH("fitAppr")?"warn":"ok")); else if(rejected("fitAppr")&&fitReSent) fitBranch=bs(`Fit re-sent · appr ${dueText("fitAppr")}`,dueTone("fitAppr"),{blocksPP:true}); else if(rejected("fitAppr")) fitBranch=bs("Fit REJECTED · rework","late",{blocksPP:true}); else if(fabricInHouse) fitBranch=bs(done("fitSend")?"Fit approval pending · blocks PP":"Fit pending · blocks PP","late",{blocksPP:true}); else if(done("fitSend")) fitBranch=bs(`Fit appr ${dueText("fitAppr")}`,TODAY>(get("fitAppr")?.plan||TODAY)?"late":"warn"); else fitBranch=bs(`Fit send ${dueText("fitSend")}`,TODAY>(get("fitSend")?.plan||TODAY)?"late":"warn");
   let printBranch; const printComp=s.soReq?"soAppr":"artAppr"; const realDone=(k)=>{ const r=get(k); return !!(r&&(r.actual||r.skipped)); }; const printDone=s.soReq?realDone("soAppr"):realDone("artAppr");
   const printClosedAfterFabric=!!(s.printReq && fabricInHouse && !s.ppBypass && !printDone && !(rejected("artAppr")||rejected("soAppr")));
+  const artReSent=reSentAfterReject("artwork","artAppr");
+  const soReSent=reSentAfterReject("strikeOff","soAppr");
   if(!s.printReq) printBranch=bs("—","na");
   else if(printDone) printBranch=bs(isSkipped(printComp)?"Print Skipped":(lateFIH(printComp)?"Print done after Fabric IH":"Print Approved"), isSkipped(printComp)?"ok":(lateFIH(printComp)?"warn":"ok"), { afterFabricIH: lateFIH(printComp) });
+  else if(rejected("artAppr")&&artReSent) printBranch=bs(`Artwork re-sent · appr ${dueText("artAppr")}`,dueTone("artAppr"));
+  else if(rejected("soAppr")&&soReSent) printBranch=bs(`S/O re-sent · appr ${dueText("soAppr")}`,dueTone("soAppr"));
   else if(rejected("artAppr")||rejected("soAppr")) printBranch=bs("Print REJECTED · rework","late");
   else if(printClosedAfterFabric) printBranch=bs("Print not complete before Fabric IH","warn",{ crossCheck:true, autoClosed:true });
   else if(!done("artwork")) printBranch=bs(`Artwork ${dueText("artwork")}`,TODAY>(get("artwork")?.plan||TODAY)?"late":"warn");
-  else if(!done("artAppr")) printBranch=bs(`Art appr ${dueText("artAppr")}`,"warn");
-  else if(s.soReq&&!done("strikeOff")) printBranch=bs(`S/O ${dueText("strikeOff")}`,"warn");
-  else printBranch=bs(`S/O appr ${dueText("soAppr")}`,"warn");
+  else if(!done("artAppr")) printBranch=bs(`Art appr ${dueText("artAppr")}`,dueTone("artAppr"));
+  else if(s.soReq&&!done("strikeOff")) printBranch=bs(`S/O ${dueText("strikeOff")}`,dueTone("strikeOff"));
+  else printBranch=bs(`S/O appr ${dueText("soAppr")}`,dueTone("soAppr"));
   let fabricBranch; const fabPlan=get("fabricIH")?.plan;
   const fabDue=fabPlan?(TODAY>fabPlan?`IH OVERDUE ${Math.round((TODAY-fabPlan)/ONE_DAY)}d`:`IH due ${fmt(fabPlan)}`):"IH —";
   const fabTone=fabPlan&&TODAY>fabPlan?"late":"warn";
-  if(fabricInHouse) fabricBranch=bs("Bulk Fabric In-House","ok"); else if(rejected("labAppr")) fabricBranch=bs("Lab Dip REJECTED · rework","late"); else if(s.labDipReq&&done("labAppr")) fabricBranch=bs(`Lab Dip Appr | ${fabDue}`,fabTone); else if(s.labDipReq&&done("labDip")) fabricBranch=bs(`Lab dip sent, appr pending | ${fabDue}`,"warn"); else if(s.labDipReq) fabricBranch=bs(`Lab dip pending | ${fabDue}`,"warn"); else fabricBranch=bs(fabDue,fabTone);
+  const labReSent=reSentAfterReject("labDip","labAppr");
+  if(fabricInHouse) fabricBranch=bs("Bulk Fabric In-House","ok"); else if(rejected("labAppr")&&labReSent) fabricBranch=bs(`Lab dip re-sent, appr pending | ${fabDue}`,dueTone("labAppr")); else if(rejected("labAppr")) fabricBranch=bs("Lab Dip REJECTED · rework","late"); else if(s.labDipReq&&done("labAppr")) fabricBranch=bs(`Lab Dip Appr | ${fabDue}`,fabTone); else if(s.labDipReq&&done("labDip")) fabricBranch=bs(`Lab dip sent, appr pending | ${fabDue}`,dueTone("labAppr")); else if(s.labDipReq) fabricBranch=bs(`Lab dip pending | ${fabDue}`,dueTone("labDip")); else fabricBranch=bs(fabDue,fabTone);
   let ppBranch;
+  const ppReSent=reSentAfterReject("ppSample","ppAppr");
   if(!s.ppNeeded) ppBranch=bs("PP Not Required","na");
   else if(done("ppAppr")) ppBranch=bs(isSkipped("ppAppr")?"PP Skipped":(lateFIH("ppAppr")?"PP Approved · after Fabric IH":"PP Approved"), isSkipped("ppAppr")?"ok":(lateFIH("ppAppr")?"warn":"ok"));
+  else if(rejected("ppAppr")&&ppReSent) ppBranch=bs(`PP re-sent · appr ${dueText("ppAppr")}`,dueTone("ppAppr"));
   else if(rejected("ppAppr")) ppBranch=bs("PP REJECTED · rework","late");
   else if(s.fitReq && !done("fitAppr")) ppBranch=bs(done("fitSend")?"Awaiting Fit approval · blocks PP":"Awaiting Fit sample · blocks PP","late",{blocksPP:true});
-  else if(done("ppSample")) ppBranch=bs(`PP appr ${dueText("ppAppr")}`,"warn");
-  else if(fabricInHouse) ppBranch=bs(`PP sample ${dueText("ppSample")}`,"warn");
+  else if(done("ppSample")) ppBranch=bs(`PP appr ${dueText("ppAppr")}`,dueTone("ppAppr"));
+  else if(fabricInHouse) ppBranch=bs(`PP sample ${dueText("ppSample")}`,dueTone("ppSample"));
   else ppBranch=bs("Awaiting bulk fabric","warn");
   // ---- Production File: a tracked activity; reflects PP bypass vs PP-approval gate ----
   let prodFileBranch;
@@ -147,15 +164,16 @@ function computeStyle(s, cfg){
   const total=stages.length, doneCount=stages.filter(r=>r.done).length;
   const pct=total?Math.round((doneCount/total)*100):0;
   const ownerToChase=released?"—":nextPending.owner;
-  // ---- parallel chase: owners of every pending stage whose predecessor is done (actionable now) ----
+  // ---- parallel chase: owners of every pending stage that is truly actionable now ----
+  // Keep this aligned with To-Do/frontier: gates such as Fit-before-PP, PP-bypass, and cross-check-closed print stages must apply here too.
   const stById=(k)=>STAGES.find(x=>x.key===k);
-  const appl=(k)=>{ const st=stById(k); return st&&(st.flag===null||s[st.flag]); };
+  const appl=(k)=>{ const st=stById(k); return stageApplies(s,st); };
   const predDone=(st)=>{ if(st.cutoff) return s.labDipReq?done("labAppr"):true; if(st.pred==="__ord") return true; let p=st.pred; while(p&&p!=="__ord"&&!appl(p)) p=stById(p)?.pred; return (!p||p==="__ord")?true:done(p); };
-  const chaseCount={};
-  if(!released) STAGES.forEach(st=>{ if(fabricInHouse && !s.ppBypass && printPreFabricKeys.has(st.key)) return; if(appl(st.key)&&!done(st.key)&&predDone(st)){ const ow=ownerOf(st.key); chaseCount[ow]=(chaseCount[ow]||0)+1; } });
-  const chaseOwners=Object.entries(chaseCount).map(([owner,count])=>({owner,count}));
   const frontierReady=(k)=>{ if(k==="ppSample") return fabricInHouse && (!s.fitReq || done("fitAppr")); if(k==="prodFile"){ const base = (s.ppBypass || !s.ppNeeded) ? fabricInHouse : done("ppAppr"); return base && (!s.fitReq || done("fitAppr")); } return true; };
-  const frontier=new Set(); Object.entries(BRANCH_STAGES).forEach(([bk,keys])=>{ const nx=keys.find(k=>applies(k)&&!done(k)); if(!nx) return; if(fabricInHouse && !s.ppBypass && bk==="print") return; if(frontierReady(nx)) frontier.add(nx); });
+  const chaseCount={};
+  if(!released) STAGES.forEach(st=>{ const rr=get(st.key); if(!rr||rr.autoClosed) return; if(appl(st.key)&&!done(st.key)&&predDone(st)&&frontierReady(st.key)){ const ow=ownerOf(st.key); chaseCount[ow]=(chaseCount[ow]||0)+1; } });
+  const chaseOwners=Object.entries(chaseCount).map(([owner,count])=>({owner,count}));
+  const frontier=new Set(); Object.entries(BRANCH_STAGES).forEach(([bk,keys])=>{ const nx=keys.find(k=>{ const r=get(k); return applies(k)&&r&&!r.done&&!r.autoClosed; }); if(!nx) return; if(frontierReady(nx)) frontier.add(nx); });
   const lastDoneIn=(keys)=>{ let best=null; keys.forEach(k=>{ const r=get(k); if(r&&r.done&&r.actual&&(!best||r.actual>best.d)) best={l:r.label,d:r.actual}; }); return best; };
   if(fitBranch) fitBranch.last=lastDoneIn(BRANCH_STAGES.fit);
   if(printBranch) printBranch.last=lastDoneIn(BRANCH_STAGES.print);
@@ -674,7 +692,7 @@ function MerchTracker({ me, onSignOut }){
       </div>
 
       <div style={{ display:"flex", gap:0, padding:"0 22px", background:"var(--ink)", borderBottom:"1px solid #3a362e" }}>
-        {[["tracker","Tracker"],["dashboard","Dashboard"],["todo","To-Do"],["settings","Settings"],["help","Help"]].map(([k,lab])=>(<button key={k} onClick={(e)=>{ e.stopPropagation(); setTab(k); }} style={{ fontFamily:"'Archivo',sans-serif", fontWeight:700, fontSize:12, letterSpacing:0.3, padding:"9px 16px", cursor:"pointer", border:"none", borderBottom:tab===k?"3px solid var(--accent)":"3px solid transparent", background:"transparent", color:tab===k?"var(--bg)":"#9a958c" }}>{lab}{k==="todo"&&todoItems.length?` · ${todoItems.length}`:""}</button>))}
+        {[["tracker","Tracker"],["dashboard","Dashboard"],["todo","To-Do"],["entrylog","Entry Log"],["settings","Settings"],["help","Help"]].map(([k,lab])=>(<button key={k} onClick={(e)=>{ e.stopPropagation(); setTab(k); if(k==="entrylog") loadAuditRows(); }} style={{ fontFamily:"'Archivo',sans-serif", fontWeight:700, fontSize:12, letterSpacing:0.3, padding:"9px 16px", cursor:"pointer", border:"none", borderBottom:tab===k?"3px solid var(--accent)":"3px solid transparent", background:"transparent", color:tab===k?"var(--bg)":"#9a958c" }}>{lab}{k==="todo"&&todoItems.length?` · ${todoItems.length}`:k==="entrylog"&&errorLog.length?` · ${errorLog.length}`:""}</button>))}
       </div>
 
       {tab==="help" && (<div style={{ padding:"18px 22px 36px" }}>
@@ -933,7 +951,7 @@ function MerchTracker({ me, onSignOut }){
                 })}
 
                 {visStages.map(st=>{
-                  const applies=st.flag===null||s[st.flag];
+                  const applies=stageApplies(s,st);
                   const cs=c.stages.find(x=>x.key===st.key);
                   const isNext=applies && c.frontier && c.frontier.has(st.key);
                   const editable=applies&&canEdit(role,st.key,"actual"); const canRev=applies&&canEditRev(role); const canRej=applies&&canEditReject(role,st.key); const canSkp=applies&&MERCH_ROLES.includes(role);
@@ -1017,9 +1035,63 @@ function MerchTracker({ me, onSignOut }){
 
       {tab==="dashboard" && <DashboardView computed={computed} todoItems={todoItems} applyDrill={applyDrill} drillTodo={(obj)=>{ setTodoFilter(obj); setTab("todo"); }}/>}
       {tab==="todo" && <TodoView items={todoItems} filter={todoFilter} setFilter={setTodoFilter} onJump={(id,key)=>{ snapCurrent(); resetFilters(); setTab("tracker"); requestAnimationFrame(()=>setTimeout(()=>jumpToEnter(id,key),60)); }}/>}
+      {tab==="entrylog" && <EntryLogView auditRows={auditRows} auditBusy={auditBusy} loadAuditRows={loadAuditRows} errorLog={errorLog} clearErrorLog={()=>setErrorLog([])} colLabelOf={colLabelOf} onJump={(id,col)=>{ setTab("tracker"); setTimeout(()=>{ setSel({id:Number(id),col}); setFocus(null); scrollToCell(Number(id),col); },60); }}/>}
       {tab==="settings" && <SettingsView cfg={cfg} setCfg={setCfg} canEdit={canAdmin(role)}/>}
     </div>
   );
+}
+
+
+function EntryLogView({ auditRows, auditBusy, loadAuditRows, errorLog, clearErrorLog, colLabelOf, onJump }){
+  const [mode,setMode]=useState("entries");
+  const [q,setQ]=useState("");
+  const [user,setUser]=useState("All");
+  const [field,setField]=useState("All");
+  const [days,setDays]=useState("30");
+  useEffect(()=>{ loadAuditRows&&loadAuditRows(); },[]);
+  const ts=(t)=>{ try{ const d=new Date(t); return d.toLocaleDateString(undefined,{day:"2-digit",month:"short",year:"numeric"})+" "+d.toLocaleTimeString(undefined,{hour:"2-digit",minute:"2-digit"}); }catch(e){ return ""; } };
+  const label=(c)=> colLabelOf?colLabelOf(c):c;
+  const cutoff=days==="all"?null:(Date.now()-Number(days||30)*86400000);
+  const rows=(auditRows||[]).filter(r=>{
+    if(cutoff && new Date(r.created_at).getTime()<cutoff) return false;
+    if(user!=="All" && String(r.actor_name||"")!==user) return false;
+    if(field!=="All" && String(r.field||"")!==field) return false;
+    const hay=[r.style_no,r.style_id,label(r.col),r.col,r.field,r.old_val,r.new_val,r.actor_name].join(" ").toLowerCase();
+    return !q || hay.includes(q.toLowerCase());
+  });
+  const users=["All",...[...new Set((auditRows||[]).map(r=>r.actor_name).filter(Boolean))].sort()];
+  const fields=["All",...[...new Set((auditRows||[]).map(r=>r.field).filter(Boolean))].sort()];
+  const exportEntries=()=>{ const data=rows.map(r=>({"Time":ts(r.created_at),"User":r.actor_name||"","Style":r.style_no||r.style_id||"","Field / Stage":label(r.col),"Action Type":r.field||"","Old Value":r.old_val||"","New Value":r.new_val||""})); if(!data.length){ alert("No entry log rows to export."); return; } const ws=XLSX.utils.json_to_sheet(data); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Entry Log"); XLSX.writeFile(wb,"entry_log_"+iso(TODAY)+".xlsx"); };
+  const exportErrors=()=>{ const data=(errorLog||[]).map(e=>({"Time":ts(e.at),"Area":e.area||"","Error":e.msg||"","Extra":e.extra||""})); if(!data.length){ alert("No errors to export."); return; } const ws=XLSX.utils.json_to_sheet(data); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Error Log"); XLSX.writeFile(wb,"error_log_"+iso(TODAY)+".xlsx"); };
+  const card={ background:"var(--surface)", border:"1px solid var(--toolbar-line)", borderRadius:14, boxShadow:"var(--card-shadow)" };
+  const input={ fontFamily:"inherit", fontSize:11, padding:"7px 9px", border:"1px solid var(--line-2)", borderRadius:9, background:"var(--surface)", outline:"none" };
+  return (<div style={{ padding:"18px 22px 36px" }}>
+    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:14, flexWrap:"wrap", marginBottom:14 }}>
+      <div><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:22 }}>Entry Log Book</div><div style={{ fontSize:11.5, color:"var(--muted-2)", marginTop:4, maxWidth:720, lineHeight:1.45 }}>Timestamped audit trail for sheet changes and browser-session app errors. Use this for accountability, checking who changed what, and exporting logs for review.</div></div>
+      <div style={{ display:"flex", border:"1px solid var(--line-2)", borderRadius:999, overflow:"hidden", background:"var(--surface)" }}>{[["entries","Entries"],["errors","Errors"]].map(([k,l])=><button key={k} onClick={()=>setMode(k)} style={{ fontFamily:"inherit", fontSize:11, fontWeight:800, padding:"8px 13px", cursor:"pointer", border:"none", background:mode===k?"var(--accent)":"transparent", color:mode===k?"var(--surface)":"var(--muted-3)" }}>{l}{k==="errors"&&errorLog&&errorLog.length?" · "+errorLog.length:""}</button>)}</div>
+    </div>
+    {mode==="entries" && <div style={card}>
+      <div style={{ padding:14, borderBottom:"1px solid var(--line-3)", display:"flex", gap:9, alignItems:"center", flexWrap:"wrap" }}>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search style, field, user, value…" style={{ ...input, minWidth:240, flex:"1 1 260px" }}/>
+        <select value={days} onChange={e=>setDays(e.target.value)} style={input}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="all">All loaded</option></select>
+        <select value={user} onChange={e=>setUser(e.target.value)} style={input}>{users.map(u=><option key={u} value={u}>{u==="All"?"All users":u}</option>)}</select>
+        <select value={field} onChange={e=>setField(e.target.value)} style={input}>{fields.map(f=><option key={f} value={f}>{f==="All"?"All action types":f}</option>)}</select>
+        <button onClick={()=>loadAuditRows&&loadAuditRows()} style={{ ...input, cursor:"pointer", fontWeight:800 }}>Refresh</button>
+        <button onClick={exportEntries} style={{ ...input, cursor:"pointer", fontWeight:800, background:"var(--ink)", color:"var(--surface)" }}>Export</button>
+      </div>
+      <div style={{ padding:"10px 14px", display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:10, borderBottom:"1px solid var(--line-3)" }}>
+        <div><b>{rows.length}</b><div style={{ fontSize:9, color:"var(--muted-1)", textTransform:"uppercase" }}>matching entries</div></div>
+        <div><b>{users.length-1}</b><div style={{ fontSize:9, color:"var(--muted-1)", textTransform:"uppercase" }}>users in log</div></div>
+        <div><b>{fields.length-1}</b><div style={{ fontSize:9, color:"var(--muted-1)", textTransform:"uppercase" }}>action types</div></div>
+      </div>
+      <div style={{ overflowX:"auto" }}><table style={{ width:"100%", borderCollapse:"collapse", fontSize:11 }}><thead><tr>{["Time","User","Style","Field / Stage","Action","Old → New"].map(h=><th key={h} style={{ textAlign:"left", padding:"9px 10px", borderBottom:"1px solid var(--line-2)", color:"var(--muted-2)", fontSize:9, textTransform:"uppercase" }}>{h}</th>)}</tr></thead><tbody>{auditBusy?<tr><td colSpan={6} style={{ padding:22, color:"var(--muted-1)", textAlign:"center" }}>Loading…</td></tr>:rows.length===0?<tr><td colSpan={6} style={{ padding:22, color:"var(--muted-1)", textAlign:"center" }}>No matching entries.</td></tr>:rows.slice(0,500).map(r=><tr key={r.id||String(r.created_at)+String(r.style_id)+String(r.col)} onDoubleClick={()=>r.style_id&&onJump&&onJump(r.style_id,r.col)} title={r.style_id?"Double-click to jump to cell":""} style={{ cursor:r.style_id?"pointer":"default" }}><td style={{ padding:"8px 10px", borderBottom:"1px solid var(--line-3)", whiteSpace:"nowrap", color:"var(--muted-2)" }}>{ts(r.created_at)}</td><td style={{ padding:"8px 10px", borderBottom:"1px solid var(--line-3)", whiteSpace:"nowrap" }}>{r.actor_name||"—"}</td><td style={{ padding:"8px 10px", borderBottom:"1px solid var(--line-3)", fontWeight:800 }}>{r.style_no||r.style_id||"—"}</td><td style={{ padding:"8px 10px", borderBottom:"1px solid var(--line-3)" }}>{label(r.col)}</td><td style={{ padding:"8px 10px", borderBottom:"1px solid var(--line-3)", whiteSpace:"nowrap" }}>{r.field||"value"}</td><td style={{ padding:"8px 10px", borderBottom:"1px solid var(--line-3)" }}><span style={{ color:"var(--danger)" }}>{r.old_val||"—"}</span> <span style={{ color:"var(--muted-1)" }}>→</span> <span style={{ color:"var(--success)" }}>{r.new_val||"—"}</span></td></tr>)}</tbody></table></div>
+      {rows.length>500 && <div style={{ padding:"8px 14px", fontSize:10, color:"var(--muted-1)" }}>Showing first 500 matching entries. Use filters/export for full review.</div>}
+    </div>}
+    {mode==="errors" && <div style={card}>
+      <div style={{ padding:14, borderBottom:"1px solid var(--line-3)", display:"flex", gap:9, justifyContent:"space-between", alignItems:"center", flexWrap:"wrap" }}><div><b>{(errorLog||[]).length}</b> browser-session error(s)<div style={{ fontSize:9, color:"var(--muted-1)", marginTop:2 }}>Errors reset when the browser session clears unless exported.</div></div><span style={{ display:"flex", gap:8 }}><button onClick={exportErrors} style={{ ...input, cursor:"pointer", fontWeight:800, background:"var(--ink)", color:"var(--surface)" }}>Export errors</button><button onClick={clearErrorLog} disabled={!errorLog||!errorLog.length} style={{ ...input, cursor:errorLog&&errorLog.length?"pointer":"not-allowed", fontWeight:800, opacity:errorLog&&errorLog.length?1:0.5 }}>Clear</button></span></div>
+      <div style={{ padding:14 }}>{(!errorLog||!errorLog.length)?<div style={{ color:"var(--muted-1)", fontSize:11, padding:18, textAlign:"center" }}>No app errors logged in this browser session.</div>:errorLog.map(e=><div key={e.id} style={{ padding:"9px 0", borderBottom:"1px solid var(--line-3)", fontSize:11 }}><span style={{ color:"var(--muted-1)", fontSize:9 }}>{ts(e.at)}</span> · <b>{e.area}</b><br/><span style={{ color:"var(--danger)", fontWeight:700 }}>{e.msg}</span>{e.extra&&<span style={{ color:"var(--muted-1)" }}> · {e.extra}</span>}</div>)}</div>
+    </div>}
+  </div>);
 }
 
 function Th({ col, label, sort, onSort, sticky, left, z, width, onResize, onAutoFit, scale, letter, filterActive, filterOpen, filterValues, filterAllowed, onToggleFilter, onSetFilter, onCloseFilter }){
@@ -1083,90 +1155,120 @@ function DashboardView({ computed, todoItems, applyDrill, drillTodo }){
   const [target,setTarget]=useState("tracker"); // where bar/owner/activity drills go
   const [df,setDf]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("mt_dashfilter")||"{}"); }catch(e){ return {}; } });
   useEffect(()=>{ try{ localStorage.setItem("mt_dashfilter", JSON.stringify(df)); }catch(e){} },[df]);
+
   const matchDf=(st,except)=> (except==="order"||!df.order||st.orderNo===df.order) && (except==="fit"||!df.fit||st.sampleFit===df.fit) && (except==="junior"||!df.junior||st.owner===df.junior) && (except==="family"||!df.family||st.family===df.family) && (except==="brand"||!df.brand||st.brand===df.brand) && (except==="fabric"||!df.fabric||st.fabricType===df.fabric) && (except==="colour"||!df.colour||String(st.colour||"").split(/[,/]/).map(x=>x.trim()).includes(df.colour));
-  const distinctC=(key,fn)=>{ const s=new Set(); computed.forEach(({s:st})=>{ if(!matchDf(st,key)) return; fn(st).forEach(v=>{ if(v) s.add(v); }); }); return [...s].sort(); };
+  const distinctC=(key,fn)=>{ const set=new Set(); computed.forEach(({s:st})=>{ if(!matchDf(st,key)) return; fn(st).forEach(v=>{ if(v) set.add(v); }); }); return [...set].sort(); };
   const orders=distinctC("order",s=>[s.orderNo]); const fits=distinctC("fit",s=>[s.sampleFit]); const juniors=distinctC("junior",s=>[s.owner]); const families=distinctC("family",s=>[s.family]); const brands=distinctC("brand",s=>[s.brand]); const fabrics=distinctC("fabric",s=>[s.fabricType]);
   const colours=distinctC("colour",s=>String(s.colour||"").split(/[,/]/).map(x=>x.trim()));
   const fc=computed.filter(({s})=> (!df.order||s.orderNo===df.order) && (!df.fit||s.sampleFit===df.fit) && (!df.junior||s.owner===df.junior) && (!df.family||s.family===df.family) && (!df.brand||s.brand===df.brand) && (!df.fabric||s.fabricType===df.fabric) && (!df.colour||String(s.colour||"").split(/[,/]/).map(x=>x.trim()).includes(df.colour)) );
+
   const total=fc.length;
   const onTrack=fc.filter(({c})=>c.tone==="ok").length;
   const atRisk=fc.filter(({c})=>c.tone==="late"||c.tone==="warn").length;
   const released=fc.filter(({c})=>c.released).length;
   const delRisk=fc.filter(({c})=>String(c.status).startsWith("Delivery risk")).length;
-  // owner load + activity load from the spliced set
+  const completionPct=total?Math.round((released/total)*100):0;
+
   const ownerLoad={}; const actAgg={};
   fc.forEach(({c})=>{ if(c.released) return; (c.chaseOwners||[]).forEach(o=>{ ownerLoad[o.owner]=(ownerLoad[o.owner]||0)+1; }); (c.frontier?[...c.frontier]:[]).forEach(k=>{ const r=(c.stages||[]).find(x=>x.key===k); if(!r||r.done) return; const a=actAgg[r.label]=actAgg[r.label]||{n:0,over:0,key:k}; a.n++; if((r.rev||r.plan)&&TODAY>(r.rev||r.plan)) a.over++; }); });
   const owners=Object.entries(ownerLoad).sort((a,b)=>b[1]-a[1]); const maxOwner=Math.max(1,...owners.map(o=>o[1]));
   const acts=Object.entries(actAgg).sort((a,b)=>b[1].n-a[1].n); const maxAct=Math.max(1,...acts.map(e=>e[1].n));
   const overdueAct=acts.reduce((s,[,v])=>s+v.over,0);
+
   const phase={ "Pre-Fit":0,"Fit / Print":0,"Lab Dip":0,"Fabric IH":0,"PP / Prod":0 };
   fc.forEach(({c})=>{ if(c.released) return; const k=c.nextPending&&c.nextPending.key; if(k==="techpack") phase["Pre-Fit"]++; else if(["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"].includes(k)) phase["Fit / Print"]++; else if(["labDip","labAppr"].includes(k)) phase["Lab Dip"]++; else if(k==="fabricIH") phase["Fabric IH"]++; else phase["PP / Prod"]++; });
   const maxPhase=Math.max(1,...Object.values(phase));
-  const OWNER_COLOR2=OWNER_COLOR;
-  // splice carried into drills so the tracker shows the same slice
+
+  const stageDef=(k)=>STAGES.find(x=>x.key===k)||{};
+  const delayRecords=[]; const stagePerf={}; const deptPerf={}; const buyerPerf={}; const ownerDelay={}; const brandDelay={};
+  const addPerf=(bucket,key,label,delay,duration,extra={})=>{ const o=bucket[key]=bucket[key]||{ key, label, n:0, lateN:0, delaySum:0, durSum:0, maxDelay:-999, ...extra }; o.n++; if(delay>0) o.lateN++; o.delaySum+=delay; if(duration!=null) o.durSum+=duration; o.maxDelay=Math.max(o.maxDelay,delay); return o; };
+  const avg=(n,d)=> d?Math.round((n/d)*10)/10:0;
+  fc.forEach(({s,c})=>{
+    const byKey={}; (c.stages||[]).forEach(r=>{ byKey[r.key]=r; });
+    (c.stages||[]).forEach(r=>{
+      if(!r.actual) return;
+      const due=r.rev||r.plan; if(!due) return;
+      const delay=netWorkdays(due,r.actual)||0;
+      const st=stageDef(r.key); const predKey=st.pred;
+      let start=predKey==="__ord"?parse(s.ordRec):(byKey[predKey]&&byKey[predKey].actual);
+      if(r.key==="fabricIH") start = (s.labDipReq && byKey.labAppr && byKey.labAppr.actual) ? byKey.labAppr.actual : parse(s.ordRec);
+      const duration=start?Math.max(0,netWorkdays(start,r.actual)||0):null;
+      delayRecords.push({ style:s.styleNo, order:s.orderNo, buyer:s.buyer||s.brand||"", owner:s.owner||"", stage:r.label, stageKey:r.key, dept:r.owner, delay, duration, actual:r.actual, due });
+      addPerf(stagePerf,r.key,r.label,delay,duration,{ owner:r.owner });
+      addPerf(deptPerf,r.owner,r.owner,delay,duration);
+      if(r.owner==="Buyer") addPerf(buyerPerf,s.buyer||s.brand||"(No buyer)",s.buyer||s.brand||"(No buyer)",delay,duration);
+      addPerf(ownerDelay,s.owner||"(No owner)",s.owner||"(No owner)",delay,duration);
+      addPerf(brandDelay,s.buyer||s.brand||"(No buyer)",s.buyer||s.brand||"(No buyer)",delay,duration);
+    });
+  });
+  const stageRows=Object.values(stagePerf).sort((a,b)=>avg(b.delaySum,b.n)-avg(a.delaySum,a.n));
+  const deptRows=Object.values(deptPerf).sort((a,b)=>avg(b.delaySum,b.n)-avg(a.delaySum,a.n));
+  const buyerRows=Object.values(buyerPerf).sort((a,b)=>avg(b.durSum,b.n)-avg(a.durSum,a.n)).slice(0,8);
+  const ownerRows=Object.values(ownerDelay).sort((a,b)=>avg(b.delaySum,b.n)-avg(a.delaySum,a.n)).slice(0,8);
+  const brandRows=Object.values(brandDelay).sort((a,b)=>avg(b.delaySum,b.n)-avg(a.delaySum,a.n)).slice(0,8);
+  const actualDone=delayRecords.length;
+  const avgDelay=actualDone?avg(delayRecords.reduce((s,r)=>s+r.delay,0),actualDone):0;
+  const avgDuration=actualDone?avg(delayRecords.reduce((s,r)=>s+(r.duration||0),0),actualDone):0;
+  const lateDone=delayRecords.filter(r=>r.delay>0).length;
+  const worstDelays=[...delayRecords].sort((a,b)=>b.delay-a.delay).slice(0,8);
+
   const spliceCols=()=>{ const cf={}; if(df.order) cf.orderNo=[df.order]; if(df.fit) cf.sampleFit=[df.fit]; if(df.junior) cf.owner=[df.junior]; if(df.family) cf.family=[df.family]; if(df.brand) cf.brand=[df.brand]; if(df.fabric) cf.fabricType=[df.fabric]; return cf; };
   const spliceSearch=()=> df.colour||"";
   const goOwner=(o)=>{ if(target==="todo") drillTodo({ owner:o }); else applyDrill({ owner:o, colFilters:spliceCols(), search:spliceSearch() }); };
   const goAct=(label,key)=>{ if(target==="todo") drillTodo({ activity:label }); else applyDrill({ activity:key, colFilters:spliceCols(), search:spliceSearch() }); };
   const goStatus=(st,extra)=>applyDrill({ status:st, colFilters:{...spliceCols(),...(extra||{})}, search:spliceSearch() });
-  const card=(label,val,color,onClick)=>(<button onClick={onClick} disabled={!onClick} style={{ flex:1, minWidth:130, textAlign:"left", background:"var(--surface)", border:"1px solid var(--ink)", padding:"14px 16px", cursor:onClick?"pointer":"default", fontFamily:"inherit" }}><div style={{ fontSize:28, fontWeight:800, fontFamily:"'Archivo',sans-serif", color, lineHeight:1 }}>{val}</div><div style={{ fontSize:10, color:"var(--muted-2)", marginTop:5, letterSpacing:0.5, textTransform:"uppercase" }}>{label}{onClick?" ›":""}</div></button>);
-  const sel=(label,val,opts,onChange)=>(<select value={val||""} onChange={e=>onChange(e.target.value||undefined)} style={{ fontFamily:"inherit", fontSize:11, padding:"5px 7px", border:"1px solid var(--ink)", background:val?"var(--accent-tint)":"var(--surface)", maxWidth:150 }}><option value="">{label}: all</option>{opts.map(o=>(<option key={o} value={o}>{o}</option>))}</select>);
+  const goSearch=(q)=>applyDrill({ status:"All", colFilters:spliceCols(), search:q||spliceSearch() });
+  const goStageOpen=(key)=>applyDrill({ status:"All", activity:key, colFilters:spliceCols(), search:spliceSearch() });
   const anyDf=Object.values(df).some(Boolean);
-  const bar=(items,maxV,colorFn,labelW,onClick,fmtR)=> items.length===0?<div style={{ fontSize:11, color:"var(--muted-1)" }}>Nothing pending.</div>:items.map(([k,v])=>{ const n=typeof v==="number"?v:v.n; return (
-    <button key={k} onClick={()=>onClick(k,v)} style={{ display:"flex", alignItems:"center", gap:8, width:"100%", border:"none", background:"transparent", cursor:"pointer", fontFamily:"inherit", padding:"4px 0" }}>
-      <span style={{ width:labelW, fontSize:10, fontWeight:700, color:colorFn(k), textAlign:"left" }}>{k}</span>
-      <span style={{ flex:1, height:16, background:"#f0ece3", position:"relative" }}><span style={{ position:"absolute", left:0, top:0, bottom:0, width:`${(n/maxV)*100}%`, background:colorFn(k,v) }}/></span>
-      <span style={{ width:54, textAlign:"right", fontSize:10, fontWeight:700 }}>{fmtR?fmtR(v):n}</span>
-    </button>); });
-  return (<div style={{ padding:"16px 22px", maxWidth:1140 }}>
-    {/* splice filter bar */}
+
+  const exportAnalytics=()=>{ const data=stageRows.map(r=>({"Stage":r.label,"Owner":r.owner||"","Completed":r.n,"Late Count":r.lateN,"Avg Delay Days":avg(r.delaySum,r.n),"Avg Actual Duration Days":avg(r.durSum,r.n),"Worst Delay Days":r.maxDelay})); const dept=deptRows.map(r=>({"Department":r.label,"Completed":r.n,"Late Count":r.lateN,"Avg Delay Days":avg(r.delaySum,r.n),"Avg Actual Duration Days":avg(r.durSum,r.n),"Worst Delay Days":r.maxDelay})); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(data),"Stage Performance"); XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(dept),"Department Performance"); XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(worstDelays.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Department":r.dept,"Delay Days":r.delay,"Duration Days":r.duration,"Due":fmt(r.due),"Actual":fmt(r.actual)}))),"Worst Delays"); XLSX.writeFile(wb,"management_analytics_"+iso(TODAY)+".xlsx"); };
+
+  const card=(label,val,color,onClick,sub)=>(<button onClick={onClick} disabled={!onClick} style={{ flex:1, minWidth:136, textAlign:"left", background:"var(--surface)", border:"1px solid var(--line-2)", borderRadius:12, padding:"14px 16px", cursor:onClick?"pointer":"default", fontFamily:"inherit" }}><div style={{ fontSize:28, fontWeight:800, fontFamily:"'Archivo',sans-serif", color, lineHeight:1 }}>{val}</div><div style={{ fontSize:10, color:"var(--muted-2)", marginTop:5, letterSpacing:0.5, textTransform:"uppercase" }}>{label}{onClick?" ›":""}</div>{sub&&<div style={{ fontSize:9, color:"var(--muted-1)", marginTop:4 }}>{sub}</div>}</button>);
+  const sel=(label,val,opts,onChange)=>(<select value={val||""} onChange={e=>onChange(e.target.value||undefined)} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 8px", border:"1px solid var(--line-2)", borderRadius:8, background:val?"var(--accent-tint)":"var(--surface)", maxWidth:150 }}><option value="">{label}: all</option>{opts.map(o=>(<option key={o} value={o}>{o}</option>))}</select>);
+  const section=(title,children,sub)=>(<div style={{ flex:1, minWidth:330, background:"var(--surface)", border:"1px solid var(--line-2)", borderRadius:14, padding:16 }}><div style={{ display:"flex", alignItems:"baseline", justifyContent:"space-between", gap:10, marginBottom:12 }}><div><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:14 }}>{title}</div>{sub&&<div style={{ fontSize:10, color:"var(--muted-2)", marginTop:3 }}>{sub}</div>}</div></div>{children}</div>);
+  const rowBtn=(key,label,right,color,onClick,sub)=>(<button key={key} onClick={onClick} disabled={!onClick} style={{ width:"100%", display:"flex", alignItems:"center", gap:8, border:"none", borderBottom:"1px solid var(--line-3)", background:"transparent", cursor:onClick?"pointer":"default", fontFamily:"inherit", padding:"7px 0", textAlign:"left" }}><span style={{ flex:1, minWidth:0 }}><span style={{ display:"block", fontSize:11, fontWeight:800, color:color||"var(--ink)", overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{label}</span>{sub&&<span style={{ display:"block", fontSize:9, color:"var(--muted-2)", marginTop:2, overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{sub}</span>}</span><span style={{ fontSize:11, fontWeight:800, color:color||"var(--ink)", whiteSpace:"nowrap" }}>{right}</span></button>);
+  const barLine=(key,label,n,max,color,onClick,right)=>(<button key={key} onClick={onClick} disabled={!onClick} style={{ display:"flex", alignItems:"center", gap:8, width:"100%", border:"none", background:"transparent", cursor:onClick?"pointer":"default", fontFamily:"inherit", padding:"5px 0" }}><span style={{ width:90, fontSize:10, fontWeight:800, color:"var(--muted-4)", textAlign:"left", overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{label}</span><span style={{ flex:1, height:14, background:"#f0ece3", borderRadius:999, overflow:"hidden" }}><span style={{ display:"block", height:"100%", width:`${(n/Math.max(1,max))*100}%`, background:color, borderRadius:999 }}/></span><span style={{ width:58, textAlign:"right", fontSize:10, fontWeight:800 }}>{right||n}</span></button>);
+
+  return (<div style={{ padding:"16px 22px", maxWidth:1280 }}>
+    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:16, marginBottom:14, flexWrap:"wrap" }}>
+      <div><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:23 }}>Management Dashboard</div><div style={{ fontSize:11.5, color:"var(--muted-2)", marginTop:4, maxWidth:760, lineHeight:1.45 }}>Operational view of current bottlenecks plus actual turnaround performance by stage, department, buyer and owner. All figures respect the slice filters below.</div></div>
+      <button onClick={exportAnalytics} style={{ fontFamily:"inherit", fontSize:11, fontWeight:800, padding:"8px 12px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)", borderRadius:10 }}>⬇ Export analytics</button>
+    </div>
+
     <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom:14 }}>
-      <span style={{ fontSize:10, fontWeight:700, color:"var(--muted-2)", textTransform:"uppercase", letterSpacing:0.5 }}>Slice:</span>
-      {sel("Order",df.order,orders,v=>setDf(d=>({...d,order:v})))}
-      {sel("Fit",df.fit,fits,v=>setDf(d=>({...d,fit:v})))}
-      {sel("Colour",df.colour,colours,v=>setDf(d=>({...d,colour:v})))}
-      {sel("Junior",df.junior,juniors,v=>setDf(d=>({...d,junior:v})))}
-      {sel("Family",df.family,families,v=>setDf(d=>({...d,family:v})))}
-      {sel("Brand",df.brand,brands,v=>setDf(d=>({...d,brand:v})))}
-      {sel("Fabric",df.fabric,fabrics,v=>setDf(d=>({...d,fabric:v})))}
-      {anyDf && <button onClick={()=>setDf({})} style={{ fontFamily:"inherit", fontSize:10, padding:"5px 9px", cursor:"pointer", border:"1px solid var(--danger)", background:"var(--surface)", color:"var(--danger)", fontWeight:700 }}>clear slice</button>}
-      <span style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6 }}><span style={{ fontSize:10, color:"var(--muted-2)" }}>drill to:</span><div style={{ display:"flex", border:"1px solid var(--ink)" }}>{["tracker","todo"].map(t=>(<button key={t} onClick={()=>setTarget(t)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:700, padding:"5px 10px", cursor:"pointer", border:"none", borderRight:t==="tracker"?"1px solid var(--ink)":"none", background:target===t?"var(--ink)":"var(--surface)", color:target===t?"var(--bg)":"var(--ink)" }}>{t==="tracker"?"Tracker":"To-Do"}</button>))}</div></span>
+      <span style={{ fontSize:10, fontWeight:800, color:"var(--muted-2)", textTransform:"uppercase", letterSpacing:0.5 }}>Slice:</span>
+      {sel("Order",df.order,orders,v=>setDf(d=>({...d,order:v})))} {sel("Fit",df.fit,fits,v=>setDf(d=>({...d,fit:v})))} {sel("Colour",df.colour,colours,v=>setDf(d=>({...d,colour:v})))} {sel("Junior",df.junior,juniors,v=>setDf(d=>({...d,junior:v})))} {sel("Family",df.family,families,v=>setDf(d=>({...d,family:v})))} {sel("Brand",df.brand,brands,v=>setDf(d=>({...d,brand:v})))} {sel("Fabric",df.fabric,fabrics,v=>setDf(d=>({...d,fabric:v})))}
+      {anyDf && <button onClick={()=>setDf({})} style={{ fontFamily:"inherit", fontSize:10, padding:"6px 10px", cursor:"pointer", border:"1px solid var(--danger)", background:"var(--surface)", color:"var(--danger)", fontWeight:800, borderRadius:8 }}>clear slice</button>}
+      <span style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6 }}><span style={{ fontSize:10, color:"var(--muted-2)" }}>drill to:</span><div style={{ display:"flex", border:"1px solid var(--line-2)", borderRadius:8, overflow:"hidden" }}>{["tracker","todo"].map(t=>(<button key={t} onClick={()=>setTarget(t)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"6px 10px", cursor:"pointer", border:"none", borderRight:t==="tracker"?"1px solid var(--line-2)":"none", background:target===t?"var(--ink)":"var(--surface)", color:target===t?"var(--bg)":"var(--ink)" }}>{t==="tracker"?"Tracker":"To-Do"}</button>))}</div></span>
     </div>
 
     <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
-      {card("Styles (slice)",total,"var(--ink)")}
+      {card("Styles in slice",total,"var(--ink)",null,completionPct+"% released")}
       {card("On track",onTrack,"var(--success)",()=>goStatus("On Track"))}
       {card("At risk",atRisk,"var(--danger)",()=>goStatus("At Risk"))}
       {card("Delivery risk",delRisk,"var(--danger)",()=>goStatus("All",{ overall:["Delivery risk"] }))}
       {card("Released",released,"var(--success)",()=>goStatus("Released"))}
-      {card("Overdue activities",overdueAct,"var(--danger)")}
+      {card("Overdue open activities",overdueAct,"var(--danger)",null,"frontier overdue")}
+      {card("Avg delay",avgDelay+"d",avgDelay>0?"var(--danger)":"var(--success)",null,"completed stages")}
+      {card("Avg actual time",avgDuration+"d","var(--info)",null,"stage cycle time")}
     </div>
 
     <div style={{ display:"flex", gap:18, flexWrap:"wrap", marginTop:22 }}>
-      <div style={{ flex:1, minWidth:320, background:"var(--surface)", border:"1px solid var(--ink)", padding:16 }}>
-        <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>WHO TO CHASE — by owner</div>
-        {bar(owners, maxOwner, (o)=>OWNER_COLOR2[o]||"var(--muted-2)", 64, (o)=>goOwner(o))}
-        <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8 }}>Click to open in {target==="todo"?"To-Do":"Tracker"}.</div>
-      </div>
-      <div style={{ flex:1, minWidth:320, background:"var(--surface)", border:"1px solid var(--ink)", padding:16 }}>
-        <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>OPEN ACTIVITIES</div>
-        {acts.length===0?<div style={{ fontSize:11, color:"var(--muted-1)" }}>Nothing due.</div>:acts.map(([label,v])=>(
-          <button key={label} onClick={()=>goAct(label,v.key)} style={{ display:"flex", alignItems:"center", gap:8, width:"100%", border:"none", background:"transparent", cursor:"pointer", fontFamily:"inherit", padding:"4px 0" }}>
-            <span style={{ width:84, fontSize:10, fontWeight:700, color:"var(--muted-5)", textAlign:"left" }}>{label}</span>
-            <span style={{ flex:1, height:16, background:"#f0ece3", position:"relative" }}><span style={{ position:"absolute", left:0, top:0, bottom:0, width:`${(v.n/maxAct)*100}%`, background:v.over?"var(--danger)":"var(--accent)" }}/></span>
-            <span style={{ width:54, textAlign:"right", fontSize:10, fontWeight:700 }}>{v.n}{v.over?<span style={{ color:"var(--danger)" }}> ({v.over})</span>:null}</span>
-          </button>))}
-        <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8 }}>Click to open in {target==="todo"?"To-Do":"Tracker"}. Red = overdue.</div>
-      </div>
-      <div style={{ flex:1, minWidth:320, background:"var(--surface)", border:"1px solid var(--ink)", padding:16 }}>
-        <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>WHERE STYLES ARE STUCK</div>
-        {Object.entries(phase).map(([p,n])=>(
-          <div key={p} style={{ display:"flex", alignItems:"center", gap:8, padding:"4px 0" }}>
-            <span style={{ width:80, fontSize:10, fontWeight:700, color:"var(--muted-4)" }}>{p}</span>
-            <span style={{ flex:1, height:16, background:"#f0ece3", position:"relative" }}><span style={{ position:"absolute", left:0, top:0, bottom:0, width:`${(n/maxPhase)*100}%`, background:p==="Fabric IH"?"var(--danger)":"var(--accent)" }}/></span>
-            <span style={{ width:28, textAlign:"right", fontSize:11, fontWeight:700 }}>{n}</span>
-          </div>))}
-      </div>
+      {section("Who to chase — current", owners.length?owners.map(([o,n])=>barLine(o,o,n,maxOwner,OWNER_COLOR[o]||"var(--accent)",()=>goOwner(o))):<div style={{ fontSize:11, color:"var(--muted-1)" }}>Nothing pending.</div>, "Open actionable items by chase label")}
+      {section("Open activities", acts.length?acts.map(([label,v])=>barLine(label,label,v.n,maxAct,v.over?"var(--danger)":"var(--accent)",()=>goAct(label,v.key),v.over?`${v.n} (${v.over})`:v.n)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>Nothing due.</div>, "Red count in bracket = overdue")}
+      {section("Where styles are stuck", Object.entries(phase).map(([p,n])=>barLine(p,p,n,maxPhase,p==="Fabric IH"?"var(--danger)":"var(--accent)",null)), "Current next-pending phase")}
+    </div>
+
+    <div style={{ display:"flex", gap:18, flexWrap:"wrap", marginTop:18 }}>
+      {section("Department actual performance", deptRows.length?deptRows.map(r=>rowBtn(r.key,r.label,`${avg(r.durSum,r.n)}d avg · ${avg(r.delaySum,r.n)}d delay`,r.lateN?"var(--danger)":"var(--success)",null,`${r.n} completed · ${r.lateN} late`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No completed stage dates yet.</div>, "Based on actual date entries")}
+      {section("Stage performance", stageRows.slice(0,10).map(r=>rowBtn(r.key,r.label,`${avg(r.durSum,r.n)}d / ${avg(r.delaySum,r.n)}d`,r.lateN?"var(--danger)":"var(--success)",()=>goStageOpen(r.key),`${r.owner||""} · ${r.n} done · ${r.lateN} late · click opens current pending stage`)), "Actual duration / delay by stage")}
+      {section("Worst completed delays", worstDelays.length?worstDelays.map(r=>rowBtn(r.style+":"+r.stageKey,r.style||r.order,`+${r.delay}d`,r.delay>0?"var(--danger)":"var(--success)",()=>goSearch(r.style),`${r.stage} · ${r.buyer||""} · actual ${fmt(r.actual)}`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No completed delays yet.</div>, "Click opens the style in Tracker")}
+    </div>
+
+    <div style={{ display:"flex", gap:18, flexWrap:"wrap", marginTop:18 }}>
+      {section("Buyer approval turnaround", buyerRows.length?buyerRows.map(r=>rowBtn(r.key,r.label,`${avg(r.durSum,r.n)}d avg`,r.lateN?"var(--danger)":"var(--success)",()=>goSearch(r.label),`${r.n} approvals · ${r.lateN} late · avg delay ${avg(r.delaySum,r.n)}d`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No buyer approval actuals yet.</div>, "Fit / Art / S-O / Lab / PP approval actuals")}
+      {section("Owner delay ranking", ownerRows.length?ownerRows.map(r=>rowBtn(r.key,r.label,`${avg(r.delaySum,r.n)}d delay`,r.lateN?"var(--danger)":"var(--success)",()=>goSearch(r.label),`${r.n} completed stage entries · ${r.lateN} late`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No owner delay data yet.</div>, "Uses style owner and completed stage delays")}
+      {section("Buyer / brand delay ranking", brandRows.length?brandRows.map(r=>rowBtn(r.key,r.label,`${avg(r.delaySum,r.n)}d delay`,r.lateN?"var(--danger)":"var(--success)",()=>goSearch(r.label),`${r.n} completed stage entries · ${r.lateN} late`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No buyer delay data yet.</div>, "Average delay across completed stages")}
     </div>
   </div>);
 }
