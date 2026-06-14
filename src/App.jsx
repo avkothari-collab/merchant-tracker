@@ -18,7 +18,7 @@ const THEME_CSS = `
 }
 `;
 const REL_GATE_DAYS = 30, FABRIC_CUTOFF_DAYS = 35, STYLE_W = 190;
-const UPCOMING_DEFAULT = { fitSend:4, artwork:2, strikeOff:3, ppSample:4, fabricIH:15, prodFile:7 }; // working days before a stage that it becomes "upcoming" in the To-Do list
+const UPCOMING_DEFAULT = { fitSend:4, fitAppr:1, artwork:2, artAppr:1, strikeOff:3, soAppr:1, labAppr:1, ppSample:4, ppAppr:1, fabricIH:15, prodFile:7 }; // working days before a stage that it becomes "upcoming" in the To-Do list
 
 const STAGES = [
   { key:"techpack",  label:"Techpack",     lead:3, owner:"Merchant", flag:null, pred:"__ord" },
@@ -992,7 +992,7 @@ function TodoView({ items, filter, setFilter, onJump }){
   const overdue=shown.filter(t=>t.overdue), upcoming=shown.filter(t=>!t.overdue);
   const anyF=Object.values(tf).some(Boolean);
   const COLW={ pri:96, ord:60, sty:170, jr:64, act:92, br:84, own:70, date:84 };
-  const set=(k,v)=>setTf(f=>({ ...f, [k]:v||undefined }));
+  const set=(k,v)=>{ const upd=f=>({ ...(f||{}), [k]:v||undefined }); setTf(upd); setFilter&&setFilter(upd); };
   const hsel=(w,k,opts,first)=>(<select value={tf[k]||""} onChange={e=>set(k,e.target.value)} onClick={e=>e.stopPropagation()} style={{ width:w, fontFamily:"inherit", fontSize:9, padding:"2px 1px", border:"1px solid "+(tf[k]?"var(--accent)":"var(--line-2)"), background:tf[k]?"var(--accent-tint)":"var(--surface)" }}><option value="">{first}</option>{opts.map(o=>(<option key={o} value={o}>{o}</option>))}</select>);
   const head=(<div style={{ display:"flex", alignItems:"flex-end", gap:10, padding:"6px 12px 4px", borderBottom:"2px solid var(--ink)" }}>
     {hsel(COLW.pri,"priority",["Overdue","Upcoming"],"Priority")}
@@ -1040,7 +1040,7 @@ function SettingsView({ cfg, setCfg, canEdit }){
   const head={ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:4 };
   const sub={ fontSize:10, color:"var(--muted-1)", marginBottom:12 };
   const rworkLabels={ fitSend:"Fit (redo & resend)", artwork:"Artwork", strikeOff:"Strike-off", labDip:"Lab Dip", ppSample:"PP Sample" };
-  const upcLabels={ fitSend:"Fit Send", artwork:"Artwork", strikeOff:"Strike-off", ppSample:"PP Sample", fabricIH:"Fabric In-House" };
+  const upcLabels={ fitSend:"Fit Send", fitAppr:"Fit Appr", artwork:"Artwork", artAppr:"Art Appr", strikeOff:"Strike-off", soAppr:"S/O Appr", labAppr:"Lab Dip Appr", ppSample:"PP Sample", ppAppr:"PP Appr", fabricIH:"Fabric In-House", prodFile:"Prod File" };
   return (<div style={{ padding:"18px 22px", maxWidth:1100 }}>
     {!canEdit && <div style={{ fontSize:11, color:"var(--danger)", marginBottom:12 }}>Your role cannot edit these — Management / Senior Merchant only.</div>}
     <div style={{ display:"flex", gap:18, flexWrap:"wrap" }}>
