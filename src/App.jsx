@@ -265,6 +265,30 @@ function CalPopup({ value, onPick, onClose, label, fallback }){
 const navBtn={ border:"none", background:"transparent", cursor:"pointer", fontSize:18, lineHeight:1, padding:"0 6px", fontFamily:"inherit" };
 const chip={ fontSize:10, padding:"4px 6px", border:"1px solid var(--ink)", background:"var(--bg)", cursor:"pointer", fontFamily:"'JetBrains Mono', monospace", fontWeight:600 };
 
+const r1=(v)=>{ const n=Number(v); return Number.isFinite(n)?Math.round(n*10)/10:0; };
+const fmtNum=(v)=>{ const n=r1(v); return Number.isInteger(n)?String(n):n.toFixed(1); };
+const fmtDays=(v)=>`${fmtNum(v)}d`;
+const pickReportSheets=(reportName,sheets,mode)=>{
+  const available=sheets.filter(x=>!x.modes || x.modes.includes(mode) || mode==="custom");
+  const lines=available.map((x,i)=>`${i+1}. ${x.label}`).join("\n");
+  const msg=`${reportName} export\n\nChoose sheets to export by number, comma-separated.\nType ALL for every listed sheet.\n\n${lines}`;
+  const ans=window.prompt(msg, "ALL");
+  if(ans==null) return null;
+  const t=String(ans).trim().toLowerCase();
+  if(!t) return null;
+  if(t==="all"||t==="*") return available;
+  const selected=[]; const seen=new Set();
+  t.split(/[,\s]+/).forEach(part=>{ const idx=Number(part)-1; if(idx>=0&&idx<available.length&&!seen.has(idx)){ seen.add(idx); selected.push(available[idx]); } });
+  return selected.length?selected:null;
+};
+const appendReportSheets=(wb,selected)=>{
+  (selected||[]).forEach(sh=>{
+    const data=Array.isArray(sh.data)?sh.data:[];
+    const safe=String(sh.label||"Sheet").slice(0,31).replace(/[\\/?*\[\]:]/g," ");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data.length?data:[{"No data":""}]), safe);
+  });
+};
+
 function BranchPill({ b, onJump }){
   if(!b) return null; const t=BR_TONE[b.tone]||BR_TONE.na;
   if(b.tone==="na") return <span style={{ color:"var(--line-2)", fontSize:10, fontWeight:700 }}>—</span>;
@@ -1201,12 +1225,15 @@ function OperationalDashboardView({ computed, todoItems, applyDrill, drillTodo }
     const ownerRows=owners.map(([owner,count])=>({ "Owner / Chase Label":owner, "Open Items":count }));
     const activityRows=acts.map(([activity,v])=>({ "Activity":activity, "Open Count":v.n, "Overdue Count":v.over, "Stage Key":v.key }));
     const phaseRows=Object.entries(phase).map(([phaseName,count])=>({ "Phase":phaseName, "Styles":count }));
-    const wb=XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(summary),"Summary");
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(ownerRows),"Who to Chase");
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(activityRows),"Open Activities");
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(phaseRows),"Stuck Phases");
-    if(mode!=="summary") XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(styleRows),"Styles in Slice");
+    const sheets=[
+      { label:"Summary", data:summary, modes:["summary","detailed"] },
+      { label:"Who to Chase", data:ownerRows, modes:["summary","detailed"] },
+      { label:"Open Activities", data:activityRows, modes:["summary","detailed"] },
+      { label:"Stuck Phases", data:phaseRows, modes:["summary","detailed"] },
+      { label:"Styles in Slice", data:styleRows, modes:["detailed"] },
+    ];
+    const selected=pickReportSheets(`Dashboard ${mode}`,sheets,mode); if(!selected) return;
+    const wb=XLSX.utils.book_new(); appendReportSheets(wb,selected);
     XLSX.writeFile(wb,"dashboard_"+mode+"_report_"+iso(TODAY)+".xlsx");
   };
   return (<div style={{ padding:"16px 22px", maxWidth:1140 }}>
@@ -1343,7 +1370,7 @@ function ManagementDashboardView({ computed, todoItems, applyDrill, drillTodo })
   const anyDf=Object.values(df).some(Boolean);
 
   const exportAnalytics=(mode="detailed")=>{
-    const summary=[{ "Report Type":mode==="summary"?"Summary":"Detailed", "Styles in Slice":total, "On Track":onTrack, "At Risk":atRisk, "Delivery Risk":delRisk, "Released":released, "Release %":completionPct, "Overdue Open Activities":overdueAct, "Completed Stage Entries":actualDone, "Late Completed Entries":lateDone, "Avg Delay Days":avgDelay, "Avg Actual Time Days":avgDuration }];
+    const summary=[{ "Report Type":mode==="summary"?"Summary":"Detailed", "Styles in Slice":total, "On Track":onTrack, "At Risk":atRisk, "Delivery Risk":delRisk, "Released":released, "Release %":completionPct, "Overdue Open Activities":overdueAct, "Completed Stage Entries":actualDone, "Late Completed Entries":lateDone, "Avg Delay Days":r1(avgDelay), "Avg Actual Time Days":r1(avgDuration) }];
     const checks=[
       { Check:"Status partition", Formula:"On Track + At Risk + Released should equal Styles in Slice", Value:onTrack+atRisk+released, Expected:total, Result:(onTrack+atRisk+released)===total?"OK":"CHECK" },
       { Check:"Open activity overdue", Formula:"Sum overdue counts from Open Activities", Value:overdueAct, Expected:acts.reduce((a,[,v])=>a+v.over,0), Result:overdueAct===acts.reduce((a,[,v])=>a+v.over,0)?"OK":"CHECK" },
@@ -1351,30 +1378,33 @@ function ManagementDashboardView({ computed, todoItems, applyDrill, drillTodo })
       { Check:"Slice rows", Formula:"All management tables use filtered slice", Value:fc.length, Expected:total, Result:"OK" }
     ];
     const currentStyles=fc.map(({s,c})=>({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Fit":s.sampleFit||"", "Family":s.family||"", "Colour":s.colour||"", "Brand":s.brand||"", "Buyer":s.buyer||"", "Junior":s.owner||"", "Qty":s.qty||0, "Delivery":s.delivery||"", "Status":c.status||"", "Tone":c.tone||"", "Released":c.released?"YES":"", "% Done":c.pct, "Chase":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Next Pending":c.nextPending?c.nextPending.label:"", "Projected Release":c.projRelease?fmt(c.projRelease):"" }));
-    const stageData=stageRows.map(r=>({"Stage":r.label,"Owner":r.owner||"","Completed":r.n,"Late Count":r.lateN,"Avg Delay Days":avg(r.delaySum,r.n),"Avg Actual Duration Days":avg(r.durSum,r.durN),"Duration Records":r.durN,"Worst Delay Days":r.maxDelay}));
-    const dept=deptRows.map(r=>({"Department":r.label,"Completed":r.n,"Late Count":r.lateN,"Avg Delay Days":avg(r.delaySum,r.n),"Avg Actual Duration Days":avg(r.durSum,r.durN),"Duration Records":r.durN,"Worst Delay Days":r.maxDelay}));
-    const buyerData=buyerRows.map(r=>({"Buyer / Brand":r.label,"Approvals":r.n,"Late Count":r.lateN,"Avg Approval Time Days":avg(r.durSum,r.durN),"Avg Delay Days":avg(r.delaySum,r.n),"Worst Delay Days":r.maxDelay}));
-    const ownerData=ownerRows.map(r=>({"Owner":r.label,"Completed Entries":r.n,"Late Count":r.lateN,"Avg Delay Days":avg(r.delaySum,r.n),"Avg Actual Time Days":avg(r.durSum,r.durN),"Worst Delay Days":r.maxDelay}));
-    const brandData=brandRows.map(r=>({"Buyer / Brand":r.label,"Completed Entries":r.n,"Late Count":r.lateN,"Avg Delay Days":avg(r.delaySum,r.n),"Avg Actual Time Days":avg(r.durSum,r.durN),"Worst Delay Days":r.maxDelay}));
-    const delayData=worstDelays.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Department":r.dept,"Delay Days":r.delay,"Duration Days":r.duration,"Due":fmt(r.due),"Actual":fmt(r.actual)}));
-    const wb=XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(summary),"Summary");
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(checks),"Calculation Checks");
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(stageData),"Stage Performance");
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(dept),"Department Performance");
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(buyerData),"Buyer Approval");
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(ownerData),"Owner Delays");
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(brandData),"Buyer Brand Delays");
-    if(mode!=="summary"){
-      XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(currentStyles),"Current Slice");
-      XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(delayData),"Worst Delays");
-    }
+    const stageData=stageRows.map(r=>({"Stage":r.label,"Owner":r.owner||"","Completed":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Duration Days":r1(avg(r.durSum,r.durN)),"Duration Records":r.durN,"Worst Delay Days":r1(r.maxDelay)}));
+    const dept=deptRows.map(r=>({"Department":r.label,"Completed":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Duration Days":r1(avg(r.durSum,r.durN)),"Duration Records":r.durN,"Worst Delay Days":r1(r.maxDelay)}));
+    const buyerData=buyerRows.map(r=>({"Buyer / Brand":r.label,"Approvals":r.n,"Late Count":r.lateN,"Avg Approval Time Days":r1(avg(r.durSum,r.durN)),"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Worst Delay Days":r1(r.maxDelay)}));
+    const ownerData=ownerRows.map(r=>({"Owner":r.label,"Completed Entries":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Time Days":r1(avg(r.durSum,r.durN)),"Worst Delay Days":r1(r.maxDelay)}));
+    const brandData=brandRows.map(r=>({"Buyer / Brand":r.label,"Completed Entries":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Time Days":r1(avg(r.durSum,r.durN)),"Worst Delay Days":r1(r.maxDelay)}));
+    const delayData=worstDelays.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Department":r.dept,"Delay Days":r1(r.delay),"Duration Days":r.duration==null?"":r1(r.duration),"Due":fmt(r.due),"Actual":fmt(r.actual)}));
+    const calcBreakup=delayRecords.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Stage Key":r.stageKey,"Department":r.dept,"Due Date":fmt(r.due),"Actual Date":fmt(r.actual),"Delay Days":r1(r.delay),"Duration Days":r.duration==null?"":r1(r.duration),"Included in Avg Delay":"YES","Included in Avg Actual Time":r.duration==null?"NO - start date missing":"YES"}));
+    const sheets=[
+      { label:"Summary", data:summary, modes:["summary","detailed"] },
+      { label:"Calculation Checks", data:checks, modes:["summary","detailed"] },
+      { label:"Stage Performance", data:stageData, modes:["summary","detailed"] },
+      { label:"Department Performance", data:dept, modes:["summary","detailed"] },
+      { label:"Buyer Approval", data:buyerData, modes:["summary","detailed"] },
+      { label:"Owner Delays", data:ownerData, modes:["summary","detailed"] },
+      { label:"Buyer Brand Delays", data:brandData, modes:["summary","detailed"] },
+      { label:"Current Slice", data:currentStyles, modes:["detailed"] },
+      { label:"Worst Delays", data:delayData, modes:["detailed"] },
+      { label:"Calculation Breakup", data:calcBreakup, modes:["detailed"] },
+    ];
+    const selected=pickReportSheets(`Management ${mode}`,sheets,mode); if(!selected) return;
+    const wb=XLSX.utils.book_new(); appendReportSheets(wb,selected);
     XLSX.writeFile(wb,"management_"+mode+"_analytics_"+iso(TODAY)+".xlsx");
   };
 
   const card=(label,val,color,onClick,sub)=>(<button onClick={onClick} disabled={!onClick} style={{ flex:1, minWidth:136, textAlign:"left", background:"var(--surface)", border:"1px solid var(--line-2)", borderRadius:12, padding:"14px 16px", cursor:onClick?"pointer":"default", fontFamily:"inherit" }}><div style={{ fontSize:28, fontWeight:800, fontFamily:"'Archivo',sans-serif", color, lineHeight:1 }}>{val}</div><div style={{ fontSize:10, color:"var(--muted-2)", marginTop:5, letterSpacing:0.5, textTransform:"uppercase" }}>{label}{onClick?" ›":""}</div>{sub&&<div style={{ fontSize:9, color:"var(--muted-1)", marginTop:4 }}>{sub}</div>}</button>);
   const sel=(label,val,opts,onChange)=>(<select value={val||""} onChange={e=>onChange(e.target.value||undefined)} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 8px", border:"1px solid var(--line-2)", borderRadius:8, background:val?"var(--accent-tint)":"var(--surface)", maxWidth:150 }}><option value="">{label}: all</option>{opts.map(o=>(<option key={o} value={o}>{o}</option>))}</select>);
-  const section=(key,title,children,sub)=>(<div style={{ flex:1, minWidth:330, background:"var(--surface)", border:"1px solid var(--line-2)", borderRadius:14, overflow:"hidden" }}><button onClick={()=>toggleMgmt(key)} style={{ width:"100%", border:"none", background:isMgmtOpen(key)?"var(--accent-tint)":"var(--surface)", cursor:"pointer", padding:"13px 16px", display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, fontFamily:"inherit", textAlign:"left" }}><span><span style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:14 }}>{title}</span>{sub&&<span style={{ display:"block", fontSize:10, color:"var(--muted-2)", marginTop:3 }}>{sub}</span>}</span><span style={{ fontSize:15, fontWeight:900, color:"var(--muted-3)" }}>{isMgmtOpen(key)?"−":"+"}</span></button>{isMgmtOpen(key)&&<div style={{ padding:"6px 16px 14px", borderTop:"1px solid var(--line-3)" }}>{children}</div>}</div>);
+  const section=(title,children,sub)=>{ const key=String(title||"").toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_|_$/g,"")||"section"; return (<div style={{ flex:1, minWidth:330, background:"var(--surface)", border:"1px solid var(--line-2)", borderRadius:14, overflow:"hidden" }}><button onClick={()=>toggleMgmt(key)} style={{ width:"100%", border:"none", background:isMgmtOpen(key)?"var(--accent-tint)":"var(--surface)", cursor:"pointer", padding:"13px 16px", display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, fontFamily:"inherit", textAlign:"left" }}><span><span style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:14 }}>{title}</span>{sub&&<span style={{ display:"block", fontSize:10, color:"var(--muted-2)", marginTop:3 }}>{sub}</span>}</span><span style={{ fontSize:15, fontWeight:900, color:"var(--muted-3)" }}>{isMgmtOpen(key)?"−":"+"}</span></button>{isMgmtOpen(key)&&<div style={{ padding:"6px 16px 14px", borderTop:"1px solid var(--line-3)" }}>{children}</div>}</div>); };
   const rowBtn=(key,label,right,color,onClick,sub)=>(<button key={key} onClick={onClick} disabled={!onClick} style={{ width:"100%", display:"grid", gridTemplateColumns:"minmax(120px,1fr) 96px", alignItems:"center", gap:10, border:"none", borderBottom:"1px solid var(--line-3)", background:"transparent", cursor:onClick?"pointer":"default", fontFamily:"inherit", padding:"8px 0", textAlign:"left" }}><span style={{ minWidth:0 }}><span style={{ display:"block", fontSize:11, fontWeight:800, color:color||"var(--ink)", overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{label}</span>{sub&&<span style={{ display:"block", fontSize:9, color:"var(--muted-2)", marginTop:2, overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{sub}</span>}</span><span style={{ fontSize:11, fontWeight:800, color:color||"var(--ink)", whiteSpace:"nowrap", textAlign:"right" }}>{right}</span></button>);
   const barLine=(key,label,n,max,color,onClick,right)=>(<button key={key} onClick={onClick} disabled={!onClick} style={{ display:"flex", alignItems:"center", gap:8, width:"100%", border:"none", background:"transparent", cursor:onClick?"pointer":"default", fontFamily:"inherit", padding:"5px 0" }}><span style={{ width:90, fontSize:10, fontWeight:800, color:"var(--muted-4)", textAlign:"left", overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{label}</span><span style={{ flex:1, height:14, background:"#f0ece3", borderRadius:999, overflow:"hidden" }}><span style={{ display:"block", height:"100%", width:`${(n/Math.max(1,max))*100}%`, background:color, borderRadius:999 }}/></span><span style={{ width:58, textAlign:"right", fontSize:10, fontWeight:800 }}>{right||n}</span></button>);
 
@@ -1402,8 +1432,8 @@ function ManagementDashboardView({ computed, todoItems, applyDrill, drillTodo })
       {card("Delivery risk",delRisk,"var(--danger)",()=>goStatus("All",{ overall:["Delivery risk"] }))}
       {card("Released",released,"var(--success)",()=>goStatus("Released"))}
       {card("Overdue open activities",overdueAct,"var(--danger)",null,"frontier overdue")}
-      {card("Avg delay",avgDelay+"d",avgDelay>0?"var(--danger)":"var(--success)",null,"completed stages")}
-      {card("Avg actual time",avgDuration+"d","var(--info)",null,"stage cycle time")}
+      {card("Avg delay",fmtDays(avgDelay),avgDelay>0?"var(--danger)":"var(--success)",null,"completed stages")}
+      {card("Avg actual time",fmtDays(avgDuration),"var(--info)",null,"stage cycle time")}
     </div>
 
     <div style={{ display:"flex", gap:18, flexWrap:"wrap", marginTop:22 }}>
@@ -1413,15 +1443,15 @@ function ManagementDashboardView({ computed, todoItems, applyDrill, drillTodo })
     </div>
 
     <div style={{ display:"flex", gap:18, flexWrap:"wrap", marginTop:18 }}>
-      {section("Department actual performance", deptRows.length?deptRows.map(r=>rowBtn(r.key,r.label,`${avg(r.durSum,r.durN)}d avg · ${avg(r.delaySum,r.n)}d delay`,r.lateN?"var(--danger)":"var(--success)",null,`${r.n} completed · ${r.lateN} late`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No completed stage dates yet.</div>, "Based on actual date entries")}
-      {section("Stage performance", stageRows.slice(0,10).map(r=>rowBtn(r.key,r.label,`${avg(r.durSum,r.durN)}d / ${avg(r.delaySum,r.n)}d`,r.lateN?"var(--danger)":"var(--success)",()=>goStageOpen(r.key),`${r.owner||""} · ${r.n} done · ${r.lateN} late · click opens current pending stage`)), "Actual duration / delay by stage")}
-      {section("Worst completed delays", worstDelays.length?worstDelays.map(r=>rowBtn(r.style+":"+r.stageKey,r.style||r.order,`+${r.delay}d`,r.delay>0?"var(--danger)":"var(--success)",()=>goSearch(r.style),`${r.stage} · ${r.buyer||""} · actual ${fmt(r.actual)}`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No completed delays yet.</div>, "Click opens the style in Tracker")}
+      {section("Department actual performance", deptRows.length?deptRows.map(r=>rowBtn(r.key,r.label,`${fmtDays(avg(r.durSum,r.durN))} avg · ${fmtDays(avg(r.delaySum,r.n))} delay`,r.lateN?"var(--danger)":"var(--success)",null,`${r.n} completed · ${r.lateN} late`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No completed stage dates yet.</div>, "Based on actual date entries")}
+      {section("Stage performance", stageRows.slice(0,10).map(r=>rowBtn(r.key,r.label,`${fmtDays(avg(r.durSum,r.durN))} / ${fmtDays(avg(r.delaySum,r.n))}`,r.lateN?"var(--danger)":"var(--success)",()=>goStageOpen(r.key),`${r.owner||""} · ${r.n} done · ${r.lateN} late · click opens current pending stage`)), "Actual duration / delay by stage")}
+      {section("Worst completed delays", worstDelays.length?worstDelays.map(r=>rowBtn(r.style+":"+r.stageKey,r.style||r.order,`+${fmtNum(r.delay)}d`,r.delay>0?"var(--danger)":"var(--success)",()=>goSearch(r.style),`${r.stage} · ${r.buyer||""} · actual ${fmt(r.actual)}`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No completed delays yet.</div>, "Click opens the style in Tracker")}
     </div>
 
     <div style={{ display:"flex", gap:18, flexWrap:"wrap", marginTop:18 }}>
-      {section("Buyer approval turnaround", buyerRows.length?buyerRows.map(r=>rowBtn(r.key,r.label,`${avg(r.durSum,r.durN)}d avg`,r.lateN?"var(--danger)":"var(--success)",()=>goSearch(r.label),`${r.n} approvals · ${r.lateN} late · avg delay ${avg(r.delaySum,r.n)}d`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No buyer approval actuals yet.</div>, "Fit / Art / S-O / Lab / PP approval actuals")}
-      {section("Owner delay ranking", ownerRows.length?ownerRows.map(r=>rowBtn(r.key,r.label,`${avg(r.delaySum,r.n)}d delay`,r.lateN?"var(--danger)":"var(--success)",()=>goSearch(r.label),`${r.n} completed stage entries · ${r.lateN} late`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No owner delay data yet.</div>, "Uses style owner and completed stage delays")}
-      {section("Buyer / brand delay ranking", brandRows.length?brandRows.map(r=>rowBtn(r.key,r.label,`${avg(r.delaySum,r.n)}d delay`,r.lateN?"var(--danger)":"var(--success)",()=>goSearch(r.label),`${r.n} completed stage entries · ${r.lateN} late`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No buyer delay data yet.</div>, "Average delay across completed stages")}
+      {section("Buyer approval turnaround", buyerRows.length?buyerRows.map(r=>rowBtn(r.key,r.label,`${fmtDays(avg(r.durSum,r.durN))} avg`,r.lateN?"var(--danger)":"var(--success)",()=>goSearch(r.label),`${r.n} approvals · ${r.lateN} late · avg delay ${fmtDays(avg(r.delaySum,r.n))}`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No buyer approval actuals yet.</div>, "Fit / Art / S-O / Lab / PP approval actuals")}
+      {section("Owner delay ranking", ownerRows.length?ownerRows.map(r=>rowBtn(r.key,r.label,`${fmtDays(avg(r.delaySum,r.n))} delay`,r.lateN?"var(--danger)":"var(--success)",()=>goSearch(r.label),`${r.n} completed stage entries · ${r.lateN} late`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No owner delay data yet.</div>, "Uses style owner and completed stage delays")}
+      {section("Buyer / brand delay ranking", brandRows.length?brandRows.map(r=>rowBtn(r.key,r.label,`${fmtDays(avg(r.delaySum,r.n))} delay`,r.lateN?"var(--danger)":"var(--success)",()=>goSearch(r.label),`${r.n} completed stage entries · ${r.lateN} late`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No buyer delay data yet.</div>, "Average delay across completed stages")}
     </div>
   </div>);
 }
@@ -1457,11 +1487,16 @@ function TodoView({ items, filter, setFilter, onJump }){
     const summary=[{ "Report Type":mode==="summary"?"Summary":"Detailed", "Shown Items":shown.length, "Total Items":items.length, "Overdue":overdue.length, "Upcoming":upcoming.length }];
     const byOwner={}; const byActivity={};
     shown.forEach(t=>{ byOwner[t.owner||"(blank)"]=(byOwner[t.owner||"(blank)"]||0)+1; byActivity[t.activity||"(blank)"]=(byActivity[t.activity||"(blank)"]||0)+1; });
-    const wb=XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(summary),"Summary");
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(Object.entries(byOwner).map(([k,v])=>({"Owner / Chase":k,"Items":v}))),"By Owner");
-    XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(Object.entries(byActivity).map(([k,v])=>({"Activity":k,"Items":v}))),"By Activity");
-    if(mode!=="summary") XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(data),"To-Do Items");
+    const ownerRows=Object.entries(byOwner).map(([k,v])=>({"Owner / Chase":k,"Items":v}));
+    const activityRows=Object.entries(byActivity).map(([k,v])=>({"Activity":k,"Items":v}));
+    const sheets=[
+      { label:"Summary", data:summary, modes:["summary","detailed"] },
+      { label:"By Owner", data:ownerRows, modes:["summary","detailed"] },
+      { label:"By Activity", data:activityRows, modes:["summary","detailed"] },
+      { label:"To-Do Items", data:data, modes:["detailed"] },
+    ];
+    const selected=pickReportSheets(`To-Do ${mode}`,sheets,mode); if(!selected) return;
+    const wb=XLSX.utils.book_new(); appendReportSheets(wb,selected);
     XLSX.writeFile(wb,"todo_"+mode+"_report_"+iso(TODAY)+".xlsx");
   };
   const row=(t)=>(<button key={(t.isColour?"col-":"")+t.id+t.key} onClick={()=>onJump(t.id,t.key)} style={{ display:"flex", alignItems:"center", gap:10, width:"100%", textAlign:"left", borderLeft:`4px solid ${t.overdue?"var(--danger)":"var(--accent)"}`, borderBottom:"1px solid #eee7da", background:t.isColour?"#fbf8f1":"var(--surface)", cursor:"pointer", fontFamily:"inherit", padding:"7px 12px" }}>
