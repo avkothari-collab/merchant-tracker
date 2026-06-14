@@ -4,7 +4,7 @@ import * as XLSX from "xlsx";
 import { createPortal } from "react-dom";
 import { supabase } from "./supabaseClient";
 
-/* MERCH TRACKER — compact grid, v9 visual polish: calmer palette + two-level toolbar */
+/* MERCH TRACKER — compact grid, v11 UI polish: clean pills + calmer settings */
 
 const FONT = `@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;800&family=JetBrains+Mono:wght@400;500;700&display=swap');`;
 const THEME_CSS = `
@@ -14,6 +14,7 @@ const THEME_CSS = `
   --muted-1:#9b9488; --muted-2:#7d766b; --muted-3:#655f56; --muted-4:#4f493f; --muted-5:#403a32; --muted-6:#c8c0b4; --muted-7:#b8afa3;
   --line-1:#e5ded2; --line-2:#d4cabd; --line-3:#eee7dc;
   --toolbar-bg:#fffaf1; --toolbar-line:#e3d7c7; --toolbar-subtle:#f1eadf;
+  --pill-shadow:0 1px 0 rgba(31,31,29,0.06); --card-shadow:0 1px 2px rgba(31,31,29,0.04);
   --on-dark:#d8d1c4; --on-dark-2:#a9a095; --on-dark-line:#4a463e;
   --tint-ok:#e5f1ea; --fg-ok:#1c6048; --tint-warn:#f8e9b7; --fg-warn:#7a560f; --tint-late:#f6d3cb; --fg-late:#8c241a; --tint-reject:#f0bdb5; --tint-rework:#fbd9a8; --tint-waive:#e9ddc2; --tint-next:#fdecc9; --tint-histrej:#fbe9e6; --revised:#6a45a8;
 }
@@ -224,10 +225,10 @@ const chip={ fontSize:10, padding:"4px 6px", border:"1px solid var(--ink)", back
 
 function BranchPill({ b, onJump }){
   if(!b) return null; const t=BR_TONE[b.tone]||BR_TONE.na;
-  if(b.tone==="na") return <span style={{ color:"var(--line-2)", fontSize:10 }}>{b.txt}</span>;
-  return (<span style={{ display:"inline-flex", flexDirection:"column", alignItems:"flex-start", gap:1, maxWidth:"100%" }}>
-    <span onClick={(e)=>{ if(onJump){ e.stopPropagation(); onJump(); } }} title={`${b.txt}  ·  click → jump to enter`} style={{ display:"inline-flex", alignItems:"center", gap:3, background:t.bg, color:t.fg, padding:"2px 7px", fontSize:9.5, fontWeight:600, whiteSpace:"nowrap", maxWidth:"100%", overflow:"hidden", textOverflow:"ellipsis", cursor:onJump?"pointer":"default", textDecoration:onJump?"underline dotted":"none" }}>{b.txt}{onJump && <CornerDownRight size={9} style={{ flexShrink:0 }}/>}</span>
-    {b.last && <span style={{ fontSize:8, color:"var(--on-dark-2)", whiteSpace:"nowrap" }}>✓ {b.last.l} · {fmt(b.last.d)}</span>}
+  if(b.tone==="na") return <span style={{ color:"var(--line-2)", fontSize:10, fontWeight:700 }}>—</span>;
+  return (<span style={{ display:"inline-flex", flexDirection:"column", alignItems:"flex-start", gap:3, maxWidth:"100%" }}>
+    <span onClick={(e)=>{ if(onJump){ e.stopPropagation(); onJump(); } }} title={`${b.txt}  ·  click → jump to enter`} style={{ display:"inline-flex", alignItems:"center", gap:4, background:t.bg, color:t.fg, border:"1px solid rgba(31,31,29,0.08)", borderRadius:999, boxShadow:"var(--pill-shadow)", padding:"3px 8px", fontSize:9.5, lineHeight:1.15, fontWeight:800, whiteSpace:"nowrap", maxWidth:"100%", overflow:"hidden", textOverflow:"ellipsis", cursor:onJump?"pointer":"default", textDecoration:onJump?"underline dotted":"none", textUnderlineOffset:3 }}>{b.txt}{onJump && <CornerDownRight size={9} style={{ flexShrink:0 }}/>}</span>
+    {b.last && <span style={{ fontSize:8.5, color:"var(--on-dark-2)", whiteSpace:"nowrap", paddingLeft:4 }}>✓ {b.last.l} · {fmt(b.last.d)}</span>}
   </span>);
 }
 
@@ -241,6 +242,8 @@ function MerchTracker({ me, onSignOut }){
   const [usersOpen,setUsersOpen]=useState(false);
   const [textScale,setTextScale]=useState(()=>{ try{ const v=parseFloat(localStorage.getItem("mt_textscale")); return (v&&v>=0.6&&v<=2.0)?v:1; }catch(e){ return 1; } });
   const bumpScale=(d)=>setTextScale(v=>{ const n=Math.min(2.0,Math.max(0.6,Math.round((v+d)*100)/100)); try{ localStorage.setItem("mt_textscale",String(n)); }catch(e){} return n; });
+  const [tableWeight,setTableWeight]=useState(()=>{ try{ const v=parseInt(localStorage.getItem("mt_table_weight"),10); return (isFinite(v)&&v>=400&&v<=800)?v:600; }catch(e){ return 600; } });
+  const bumpTableWeight=(d)=>setTableWeight(v=>{ const n=Math.min(800,Math.max(400,Math.round((v+d)/50)*50)); try{ localStorage.setItem("mt_table_weight",String(n)); }catch(e){} return n; });
   const PF=(()=>{ try{ return JSON.parse(localStorage.getItem("mt_trackfilters")||"{}"); }catch(e){ return {}; } })();
   const [search,setSearch]=useState(PF.search||"");
   const [searchCol,setSearchCol]=useState(PF.searchCol||"auto");
@@ -651,73 +654,72 @@ function MerchTracker({ me, onSignOut }){
       </div>
 
       {tab==="help" && (<div style={{ padding:"18px 22px 36px" }}>
-        <div style={{ background:"var(--surface)", border:"1px solid var(--ink)", boxShadow:"4px 4px 0 var(--ink)", maxWidth:980 }}>
-          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"14px 16px", borderBottom:"1px solid var(--line-3)" }}>
+        <div style={{ background:"var(--surface)", border:"1px solid var(--line-2)", boxShadow:"2px 2px 0 rgba(0,0,0,0.08)", borderRadius:14, maxWidth:1120, overflow:"hidden" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:16, padding:"18px 20px", borderBottom:"1px solid var(--line-3)", background:"#fffdf8" }}>
             <div>
-              <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:20 }}>Help centre</div>
-              <div style={{ fontSize:10, color:"var(--muted-2)", marginTop:3 }}>User guide, FAQ, entry guide, and logic guide for the merch tracker.</div>
+              <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:23, marginBottom:4 }}>Help centre</div>
+              <div style={{ fontSize:12, color:"var(--muted-3)", lineHeight:1.55, maxWidth:760 }}>Simple operating guide for the Merch Tracker. Start with the cards below, then open the section you need.</div>
             </div>
+            <div style={{ fontSize:10, color:"var(--muted-2)", background:"var(--bg)", border:"1px solid var(--line-2)", borderRadius:999, padding:"6px 10px", whiteSpace:"nowrap" }}>Read-only · no data changes here</div>
           </div>
-          <div style={{ display:"flex", gap:0, borderBottom:"1px solid var(--line-3)", flexWrap:"wrap" }}>{[["guide","User guide"],["faq","FAQ"],["entry","Entry guide"],["logic","Logic guide"]].map(([k,l])=><button key={k} onClick={(e)=>{ e.stopPropagation(); setHelpTab(k); }} style={{ fontFamily:"inherit", fontSize:11, fontWeight:700, padding:"10px 14px", cursor:"pointer", border:"none", borderRight:"1px solid var(--line-3)", background:helpTab===k?"var(--accent)":"var(--surface)", color:helpTab===k?"var(--ink)":"var(--muted-3)" }}>{l}</button>)}</div>
+
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(210px,1fr))", gap:10, padding:14, background:"#fbf8f1", borderBottom:"1px solid var(--line-3)" }}>
+            {[
+              ["1", "Enter the row", "Add Style No, Order No, colour, qty, order date and delivery."],
+              ["2", "Mark dates", "Double-click stage cells to enter actual dates. Use revised/reject only when needed."],
+              ["3", "Chase the blocker", "Use Overall, Chase, To-Do and Review to see what needs action."],
+              ["4", "Review before bulk changes", "Upload shows mapping, duplicates, missing fields and old → new changes before applying."]
+            ].map(([n,t,d])=><div key={n} style={{ background:"var(--surface)", border:"1px solid var(--line-2)", borderRadius:12, padding:12 }}><div style={{ width:24, height:24, borderRadius:12, background:"var(--accent)", color:"var(--ink)", fontWeight:800, display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, marginBottom:8 }}>{n}</div><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:14, marginBottom:4 }}>{t}</div><div style={{ fontSize:11, color:"var(--muted-3)", lineHeight:1.45 }}>{d}</div></div>)}
+          </div>
+
+          <div style={{ display:"flex", gap:8, flexWrap:"wrap", padding:"12px 14px", borderBottom:"1px solid var(--line-3)", background:"var(--surface)" }}>
+            {[["guide","Start here"],["entry","Data entry"],["buttons","Button guide"],["faq","FAQ"],["logic","Logic"]].map(([k,l])=><button key={k} onClick={(e)=>{ e.stopPropagation(); setHelpTab(k); }} style={{ fontFamily:"inherit", fontSize:11, fontWeight:800, padding:"8px 13px", cursor:"pointer", border:"1px solid "+(helpTab===k?"var(--accent)":"var(--line-2)"), borderRadius:999, background:helpTab===k?"var(--accent-tint)":"var(--surface)", color:helpTab===k?"var(--ink)":"var(--muted-3)" }}>{l}</button>)}
+          </div>
+
           <div style={{ padding:18, fontSize:12, lineHeight:1.6 }}>
-            {helpTab==="guide" && <div>
-              <h3 style={{ fontFamily:"'Archivo',sans-serif", marginTop:0, marginBottom:6 }}>Daily user guide</h3>
-              <p style={{ marginTop:0, color:"var(--muted-3)" }}>Use this section as the working manual for merchandisers, CAD, designer, store/fabric, senior merchants, and management.</p>
-              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))", gap:12 }}>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>1. Main tabs</h4><ul style={{ margin:"0 0 0 18px", padding:0 }}><li><b>Tracker:</b> live sheet for order/style entry and stage dates.</li><li><b>Dashboard:</b> management summary and bottleneck overview.</li><li><b>To-Do:</b> overdue and upcoming actionable tasks.</li><li><b>Settings:</b> lead days, labels, chase labels, role views, and tracker configuration.</li><li><b>Help:</b> guide, FAQ, entry rules, and logic explanation.</li></ul></div>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>2. Grid basics</h4><ul style={{ margin:"0 0 0 18px", padding:0 }}><li>Single-click selects a cell.</li><li>Double-click or press <b>F2</b> to edit.</li><li><b>Enter</b> saves and moves down.</li><li><b>Tab</b> saves and moves right.</li><li><b>Esc</b> exits the current selection/edit.</li><li>Use <b>Ctrl/Cmd+C</b> and <b>Ctrl/Cmd+V</b> for copy-paste.</li></ul></div>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>3. Working with dates</h4><ul style={{ margin:"0 0 0 18px", padding:0 }}><li>Stage date cells normally store <b>Actual Date</b>.</li><li>Revised dates are used when the planned date changes before completion.</li><li>Rejected dates are used on buyer approval stages only.</li><li>Skip/waive is only for formally not-required activities.</li><li>Sundays are ignored in workday calculations.</li></ul></div>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>4. Filters and saved views</h4><ul style={{ margin:"0 0 0 18px", padding:0 }}><li>Search by style, colour, fit, order, owner, buyer, age, fabric, or remarks.</li><li>Use status filters for All, At Risk, On Track, and Released.</li><li>Use saved views for My Overdue, Due This Week, Buyer Approval Pending, Fabric Pending, PP Pending, Delivery Risk, Followed, Rework, and Released.</li><li>Use Clear Filters to return to the full active tracker.</li></ul></div>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>5. Review centre</h4><ul style={{ margin:"0 0 0 18px", padding:0 }}><li><b>Changes to sheet:</b> recent audit trail of old value to new value.</li><li><b>All comments:</b> all comments across the tracker.</li><li><b>Comments involving me:</b> comments authored by you, mentioning you, or connected to you.</li><li><b>Error log:</b> browser-session errors for load/save/export/upload.</li></ul></div>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>6. Upload styles</h4><ul style={{ margin:"0 0 0 18px", padding:0 }}><li>Upload uses <b>Order No + Style No</b> as the unique key.</li><li>Missing Order No or Style No is blocked.</li><li>Duplicate Order No + Style No inside the upload is blocked.</li><li>Changed existing rows show old value → uploaded value before apply.</li><li>Use the downloadable upload report to correct rejected rows.</li></ul></div>
-              </div>
+            {helpTab==="guide" && <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))", gap:12 }}>
+              <div style={{ border:"1px solid var(--line-2)", borderRadius:12, padding:14, background:"#fffdf8" }}><h3 style={{ margin:"0 0 8px", fontFamily:"'Archivo',sans-serif" }}>What each tab is for</h3><ul style={{ margin:"0 0 0 18px", padding:0 }}><li><b>Tracker:</b> live working sheet.</li><li><b>Dashboard:</b> summary of risk and bottlenecks.</li><li><b>To-Do:</b> overdue and upcoming actions.</li><li><b>Settings:</b> lead days, views and chase labels.</li><li><b>Help:</b> this guide.</li></ul></div>
+              <div style={{ border:"1px solid var(--line-2)", borderRadius:12, padding:14, background:"#fffdf8" }}><h3 style={{ margin:"0 0 8px", fontFamily:"'Archivo',sans-serif" }}>Daily use flow</h3><ol style={{ margin:"0 0 0 18px", padding:0 }}><li>Open a saved view such as My Overdue or Buyer Approval Pending.</li><li>Check Overall / Chase / To-Do.</li><li>Double-click the correct cell and update the date.</li><li>Add comments or remarks where a delay needs explanation.</li><li>Use Review to audit changes and comments.</li></ol></div>
+              <div style={{ border:"1px solid var(--line-2)", borderRadius:12, padding:14, background:"#fffdf8" }}><h3 style={{ margin:"0 0 8px", fontFamily:"'Archivo',sans-serif" }}>Safe habits</h3><ul style={{ margin:"0 0 0 18px", padding:0 }}><li>Use staging before replacing live app files.</li><li>Do not bulk upload without checking the preview.</li><li>Use revised dates instead of changing actual dates when plans move.</li><li>Use comments for buyer remarks and delay reasons.</li></ul></div>
             </div>}
-            {helpTab==="faq" && <div>
-              <h3 style={{ fontFamily:"'Archivo',sans-serif", marginTop:0, marginBottom:8 }}>FAQ</h3>
-              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))", gap:10 }}>
-                {[ 
-                  ["Why is a cell amber?", "It is pending, upcoming, or waiting on a planned action. Amber usually means chase soon, not necessarily late."],
-                  ["Why is a cell red?", "It is overdue, rejected, or creating delivery/release risk. Red items should be chased before normal pending items."],
-                  ["Why is a cell green?", "The activity is complete, waived properly, released, or otherwise okay."],
-                  ["Can the same Style No appear twice?", "Yes, only when Order No is different. The system treats Order No + Style No as the unique key."],
-                  ["What happens when I upload an existing style?", "It is treated as an update. If colour, qty, delivery, owner, or other attributes changed, you must confirm before applying."],
-                  ["Does Chase link to actual users?", "No. Chase labels are editable text labels in Settings. They are not tied to login users or permissions."],
-                  ["Do Chase labels affect permissions?", "No. They only affect Chase and To-Do display labels. Login roles still control editing permissions."],
-                  ["Can I change the label Merchant/CAD/Buyer?", "Yes. Go to Settings and edit Chase Labels by Stage using the dropdown or custom text box."],
-                  ["What is Show auto+rev?", "It reveals planned/revised context so users can see why a date is due, late, or shifted."],
-                  ["What does Sync do?", "It reloads shared cloud data and pulls changes made by teammates."],
-                  ["What does Follow do?", "Following a style lets you receive notifications when that style is updated."],
-                  ["Does Help change data?", "No. Help is read-only."],
-                ].map(([q,a])=><div key={q} style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:"10px 12px" }}><div style={{ fontWeight:800, color:"var(--ink)", marginBottom:4 }}>{q}</div><div style={{ color:"var(--muted-3)" }}>{a}</div></div>)}
-              </div>
+
+            {helpTab==="entry" && <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(250px,1fr))", gap:12 }}>
+              {[
+                ["Required row fields", ["Style No", "Order No", "Order Date", "Delivery Date"]],
+                ["Stage dates", ["Actual date = activity completed", "Revised date = plan changed", "Reject date = buyer rejected", "Skip/Waive = not required"]],
+                ["Upload rules", ["Order No + Style No is the unique key", "Missing Order/Style is blocked", "Duplicate keys in upload are blocked", "Changed attributes require confirmation"]],
+                ["Comments", ["Use @name to mention teammates", "Resolve when action is closed", "Review shows all comments and comments involving you"]]
+              ].map(([t,items])=><div key={t} style={{ border:"1px solid var(--line-2)", borderRadius:12, padding:14, background:"#fffdf8" }}><h3 style={{ margin:"0 0 8px", fontFamily:"'Archivo',sans-serif" }}>{t}</h3><ul style={{ margin:"0 0 0 18px", padding:0 }}>{items.map(x=><li key={x}>{x}</li>)}</ul></div>)}
             </div>}
-            {helpTab==="entry" && <div>
-              <h3 style={{ fontFamily:"'Archivo',sans-serif", marginTop:0, marginBottom:6 }}>Entry guide</h3>
-              <p style={{ marginTop:0, color:"var(--muted-3)" }}>Use this as the data-entry rulebook. The tracker is only useful if the right date type is entered in the right place.</p>
-              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))", gap:12 }}>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>Style master fields</h4><ul style={{ margin:"0 0 0 18px", padding:0 }}><li><b>Order No:</b> buyer/order/tranche reference. Mandatory.</li><li><b>Style No:</b> style code. Mandatory.</li><li><b>Colour:</b> colour name or shade.</li><li><b>Qty:</b> order quantity.</li><li><b>Order Date:</b> date order is received.</li><li><b>Delivery:</b> required delivery date.</li><li><b>Remarks:</b> short reason for delay, risk, or special instruction.</li></ul></div>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>Requirement toggles</h4><ul style={{ margin:"0 0 0 18px", padding:0 }}><li><b>FIT:</b> fit sample process required.</li><li><b>PRT:</b> artwork/print approval required.</li><li><b>S/O:</b> strike-off required after artwork approval.</li><li><b>LAB:</b> lab dip required before fabric.</li><li><b>BYP:</b> PP bypass; Production File can follow Fabric IH.</li><li><b>PP:</b> PP sample required.</li></ul></div>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>Actual date</h4><p style={{ margin:"0 0 6px" }}>Enter actual date only when the activity really happened.</p><ul style={{ margin:"0 0 0 18px", padding:0 }}><li>Fit Send = sample actually sent.</li><li>Fit Appr = buyer actually approved fit.</li><li>Artwork = artwork actually sent.</li><li>Fabric IH = bulk fabric actually in-house.</li><li>Prod File = production file actually released.</li></ul></div>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>Revised date</h4><ul style={{ margin:"0 0 0 18px", padding:0 }}><li>Use when the planned date has changed after a meeting/follow-up.</li><li>Do not use revised date as a fake actual.</li><li>Actual date always overrides revised date.</li><li>If a rejection happens, old revised dates before rejection are ignored.</li></ul></div>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>Reject</h4><ul style={{ margin:"0 0 0 18px", padding:0 }}><li>Use only on approval stages: Fit Appr, Art Appr, S/O Appr, Lab Dip Appr, PP Appr.</li><li>Rejecting an approval creates rework/resend pressure on the linked send stage.</li><li>Enter the approval actual date after the revised/resent activity is approved.</li></ul></div>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>Skip / waive</h4><ul style={{ margin:"0 0 0 18px", padding:0 }}><li>Use only when the buyer/team confirms the activity is not required.</li><li>Do not skip to hide late work.</li><li>Skipped stages count as done for flow purposes.</li></ul></div>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>Comments</h4><ul style={{ margin:"0 0 0 18px", padding:0 }}><li>Comment on the exact cell where the issue belongs.</li><li>Use @Name to involve a teammate.</li><li>Resolve the thread when the issue is closed.</li><li>Review centre shows all comment activity.</li></ul></div>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>Do / do not</h4><ul style={{ margin:"0 0 0 18px", padding:0 }}><li><b>Do</b> enter dates daily.</li><li><b>Do</b> add remarks for delays.</li><li><b>Do not</b> overwrite someone else without checking presence/edit warning.</li><li><b>Do not</b> bulk upload without reviewing discrepancies.</li></ul></div>
-              </div>
+
+            {helpTab==="buttons" && <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))", gap:12 }}>
+              {[
+                ["Search & filters", ["Search: find style/order/colour text", "Saved View: apply common preset filters", "Status/Chase/Activity: narrow visible rows", "Clear: remove active filters"]],
+                ["Data actions", ["Upload styles: import/update rows from Excel", "Export: download filtered data", "Fill date: bulk-fill one date column"]],
+                ["View tools", ["Role/Column view: show useful columns", "Columns: hide/show or auto-fit", "Freeze: keep left columns visible", "A/B controls: text size and boldness"]],
+                ["Edit & review", ["Find/Replace: search and replace text fields", "Copy/Paste special: copy full stage state", "Review: changes, comments and errors", "Sync: pull latest shared data"]]
+              ].map(([t,items])=><div key={t} style={{ border:"1px solid var(--line-2)", borderRadius:12, padding:14, background:"#fffdf8" }}><h3 style={{ margin:"0 0 8px", fontFamily:"'Archivo',sans-serif" }}>{t}</h3><ul style={{ margin:"0 0 0 18px", padding:0 }}>{items.map(x=><li key={x}>{x}</li>)}</ul></div>)}
             </div>}
-            {helpTab==="logic" && <div>
-              <h3 style={{ fontFamily:"'Archivo',sans-serif", marginTop:0, marginBottom:6 }}>Logic guide</h3>
-              <p style={{ marginTop:0, color:"var(--muted-3)" }}>This explains how the tracker decides plan dates, overdue status, chase owner label, and release risk.</p>
-              <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(300px,1fr))", gap:12 }}>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>Base flow</h4><ol style={{ margin:"0 0 0 18px", padding:0 }}><li>Order Received</li><li>Techpack</li><li>Fit branch, if FIT is required</li><li>Artwork / Print branch, if PRT is required</li><li>Lab Dip branch, if LAB is required</li><li>Fabric In-House</li><li>PP branch, if PP is required and not bypassed</li><li>Production File</li></ol></div>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>Date priority</h4><p style={{ margin:"0 0 6px" }}>The effective date used downstream is:</p><div style={{ fontWeight:800, color:"var(--accent)", marginBottom:6 }}>Actual &gt; Skip &gt; Revised &gt; Auto Plan</div><ul style={{ margin:"0 0 0 18px", padding:0 }}><li>Actual means done.</li><li>Skip means formally waived.</li><li>Revised means new planned target.</li><li>Auto Plan is system-calculated.</li></ul></div>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>Working days</h4><ul style={{ margin:"0 0 0 18px", padding:0 }}><li>Sundays are ignored.</li><li>Lead days are configurable in Settings.</li><li>Upcoming windows are configurable in Settings.</li><li>Fabric IH is planned from delivery minus the configured fabric cutoff.</li></ul></div>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>Branch logic</h4><ul style={{ margin:"0 0 0 18px", padding:0 }}><li><b>Fit:</b> Fit Send → Fit Approval.</li><li><b>Print:</b> Artwork → Art Approval → Strike-off → S/O Approval when required.</li><li><b>Fabric:</b> Lab Dip → Lab Approval → Fabric IH when lab dip is required.</li><li><b>PP:</b> PP Sample → PP Approval when PP is required.</li><li><b>Prod File:</b> follows PP Approval, unless PP is bypassed/not required, then follows Fabric IH.</li></ul></div>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>Rejection logic</h4><ul style={{ margin:"0 0 0 18px", padding:0 }}><li>Rejected approval marks the branch as rework.</li><li>The linked send/make activity receives rework lead days.</li><li>Fresh revised/actual dates after rejection drive the new chain.</li><li>Old revised dates before rejection are ignored.</li></ul></div>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>Chase / To-Do logic</h4><ul style={{ margin:"0 0 0 18px", padding:0 }}><li>Chase is based on actionable pending stages whose predecessor is complete or not needed.</li><li>Chase label comes from Settings → Chase Labels by Stage.</li><li>These are text labels only; they do not link to users.</li><li>Overdue items appear before upcoming items.</li><li>Fabric IH can appear earlier using its special upcoming window.</li></ul></div>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>Release risk</h4><ul style={{ margin:"0 0 0 18px", padding:0 }}><li>The tracker projects Production File release.</li><li>Release gate is delivery minus the configured release gate days.</li><li>If projected release is after the gate, status becomes Delivery Risk.</li><li>If release is close to the gate, status becomes Tight.</li></ul></div>
-                <div style={{ border:"1px solid var(--line-2)", background:"#fffdf8", padding:12 }}><h4 style={{ margin:"0 0 6px", fontFamily:"'Archivo',sans-serif" }}>Upload logic</h4><ul style={{ margin:"0 0 0 18px", padding:0 }}><li>Unique key is Order No + Style No.</li><li>Exact duplicate keys inside upload are blocked.</li><li>Existing key with changed attributes becomes a discrepancy review.</li><li>New key becomes a new insert.</li><li>User must confirm apply/skip before data changes.</li></ul></div>
-              </div>
+
+            {helpTab==="faq" && <div style={{ display:"grid", gap:9 }}>
+              {[
+                ["Why is a style red?", "The next actionable stage is overdue, rejected, or the projected release is risky."],
+                ["What is Chase?", "The current person/department label responsible for the next actionable pending stage. Labels are editable in Settings."],
+                ["What is the difference between actual and revised?", "Actual means completed. Revised means the planned date changed but the activity is not complete."],
+                ["Can the same Style No repeat?", "Yes, only if the Order No is different. The upload key is Order No + Style No."],
+                ["Does Help change anything?", "No. The Help tab is read-only."],
+                ["When should I use Review?", "Use it to check recent changes, all comments, comments involving you and browser-session errors."]
+              ].map(([q,a])=><div key={q} style={{ border:"1px solid var(--line-2)", borderRadius:12, padding:"11px 13px", background:"#fffdf8" }}><div style={{ fontWeight:800, marginBottom:3 }}>{q}</div><div style={{ color:"var(--muted-3)" }}>{a}</div></div>)}
+            </div>}
+
+            {helpTab==="logic" && <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))", gap:12 }}>
+              {[
+                ["Date priority", ["Actual date wins first", "Then skip/waive date", "Then revised date", "Then auto-plan date"]],
+                ["Working days", ["Sunday is ignored", "Lead days are working days", "Fabric IH is planned from delivery minus cutoff"]],
+                ["Flow", ["Order → Techpack → Fit/Print/Lab", "Fabric IH gates PP", "Prod File follows PP Approval unless PP is bypassed/not needed"]],
+                ["Rejections", ["Rejected approval triggers rework", "Old revised dates before rejection are ignored", "Fresh actual/revised dates after rejection rebuild the chain"]],
+                ["Risk", ["Delivery risk appears when projected Production File release misses the release gate", "Tight appears when release is close to the gate"]]
+              ].map(([t,items])=><div key={t} style={{ border:"1px solid var(--line-2)", borderRadius:12, padding:14, background:"#fffdf8" }}><h3 style={{ margin:"0 0 8px", fontFamily:"'Archivo',sans-serif" }}>{t}</h3><ul style={{ margin:"0 0 0 18px", padding:0 }}>{items.map(x=><li key={x}>{x}</li>)}</ul></div>)}
             </div>}
           </div>
         </div>
@@ -805,6 +807,7 @@ function MerchTracker({ me, onSignOut }){
           </select>
         </div>
         <div style={{ display:"flex", alignItems:"center", border:"1px solid var(--ink)" }} title="data text size"><button onClick={(e)=>{ e.stopPropagation(); bumpScale(-0.05); }} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 9px", cursor:"pointer", border:"none", borderRight:"1px solid var(--ink)", background:"var(--surface)", fontWeight:700 }}>A−</button><span style={{ fontSize:9, color:"var(--muted-2)", padding:"0 6px", minWidth:34, textAlign:"center" }}>{Math.round(textScale*100)}%</span><button onClick={(e)=>{ e.stopPropagation(); bumpScale(0.05); }} style={{ fontFamily:"inherit", fontSize:13, padding:"6px 9px", cursor:"pointer", border:"none", borderLeft:"1px solid var(--ink)", background:"var(--surface)", fontWeight:700 }}>A+</button></div>
+        <div style={{ display:"flex", alignItems:"center", border:"1px solid var(--ink)" }} title="table text boldness"><button onClick={(e)=>{ e.stopPropagation(); bumpTableWeight(-50); }} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 9px", cursor:"pointer", border:"none", borderRight:"1px solid var(--ink)", background:"var(--surface)", fontWeight:700 }}>B−</button><span style={{ fontSize:9, color:"var(--muted-2)", padding:"0 6px", minWidth:38, textAlign:"center" }}>{tableWeight}</span><button onClick={(e)=>{ e.stopPropagation(); bumpTableWeight(50); }} style={{ fontFamily:"inherit", fontSize:12, padding:"6px 9px", cursor:"pointer", border:"none", borderLeft:"1px solid var(--ink)", background:"var(--surface)", fontWeight:800 }}>B+</button></div>
         <button onClick={(e)=>{ e.stopPropagation(); setShowAux(v=>!v); }} title="show every cell's auto + revised dates alongside the actual" style={{ fontFamily:"inherit", fontSize:11, fontWeight:showAux?700:400, padding:"6px 11px", cursor:"pointer", border:"1px solid var(--ink)", background:showAux?"var(--accent)":"var(--surface)", color:"var(--ink)", display:"flex", alignItems:"center", gap:6 }}>{showAux?"✓ auto+rev shown":"show auto+rev"}</button>
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap", background:"var(--toolbar-bg)", border:"1px solid var(--toolbar-line)", borderRadius:6, padding:"5px 7px", boxShadow:"0 1px 0 rgba(0,0,0,0.03)" }}>
@@ -848,7 +851,7 @@ function MerchTracker({ me, onSignOut }){
         </div>
       </div>
 
-      {(() => { const chips=[]; const chip=(key,label,onX)=>chips.push(<span key={key} style={{ display:"inline-flex", alignItems:"center", gap:5, background:"var(--accent-tint)", border:"1px solid var(--accent)", borderRadius:3, padding:"2px 4px 2px 7px", fontSize:10 }}>{label}<button onClick={onX} title="remove this filter" style={{ border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:0, color:"var(--muted-2)", display:"inline-flex" }}><X size={11}/></button></span>);
+      {(() => { const chips=[]; const chip=(key,label,onX)=>chips.push(<span key={key} style={{ display:"inline-flex", alignItems:"center", gap:5, background:"var(--accent-tint)", border:"1px solid rgba(201,111,22,0.22)", borderRadius:999, padding:"4px 6px 4px 9px", fontSize:10, fontWeight:700, boxShadow:"var(--pill-shadow)" }}>{label}<button onClick={onX} title="remove this filter" style={{ border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:0, color:"var(--muted-2)", display:"inline-flex" }}><X size={11}/></button></span>);
         if(search) chip("q",(searchCol==="auto"?"search":searchCol)+": "+search, ()=>setSearch(""));
         if(statusFilter!=="All") chip("st","status: "+statusFilter, ()=>setStatusFilter("All"));
         if(ownerFilter!=="All") chip("ow","owner: "+ownerFilter, ()=>setOwnerFilter("All"));
@@ -864,7 +867,7 @@ function MerchTracker({ me, onSignOut }){
       {showJump && <button onClick={jumpToTop} title="Back to controls / top" style={{ position:"fixed", bottom:24, right:24, zIndex:70, width:42, height:42, borderRadius:21, border:"1px solid var(--ink)", background:"var(--accent)", color:"var(--ink)", boxShadow:"2px 2px 0 var(--ink)", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}><ChevronUp size={20}/></button>}
 
       <div ref={scrollWrapRef} style={{ overflow:"auto", padding:"0 22px", maxHeight:"calc(100vh - 210px)" }}>
-        <table role="grid" aria-label="Pre-production tracker grid. Arrow keys to move, Escape to exit, Tab to leave the grid." style={{ borderCollapse:"separate", borderSpacing:0, zoom:textScale, fontSize:11, tableLayout:"fixed", userSelect:dragSel?"none":"auto" }}>
+        <table role="grid" aria-label="Pre-production tracker grid. Arrow keys to move, Escape to exit, Tab to leave the grid." style={{ borderCollapse:"separate", borderSpacing:0, zoom:textScale, fontSize:11, fontWeight:tableWeight, tableLayout:"fixed", userSelect:dragSel?"none":"auto" }}>
           <colgroup>
             <col style={{ width:widthOf("__style") }}/>
             {visInfo.map(c=><col key={c.key} style={{ width:widthOf(c.key) }}/>)}
@@ -894,7 +897,7 @@ function MerchTracker({ me, onSignOut }){
                   if(col.kind==="date"){ const bg=bgFor(s.id,col.key,"var(--surface)"); return (<td key={col.key} id={`cell-${s.id}-${col.key}`} onClick={(e)=>onCellClick(e,s.id,col.key)} onDoubleClick={(e)=>{ e.stopPropagation(); if(canEdit(role,col.key,"actual")) beginDate(s.id,col.key,"actual"); }} style={{ border:"1px solid var(--line-1)", padding:"6px 9px", whiteSpace:"nowrap", boxShadow:ringFor(s.id,col.key), cursor:"cell", position:"relative", overflow:(editing&&editing.id===s.id&&editing.col===col.key)?"visible":"hidden", background:bg, ...freezeStyle(col.key,bg) }}>{fmt(parse(s[col.key]))||<span style={{color:"var(--line-2)"}}>—</span>}{editing&&editing.id===s.id&&editing.col===col.key && dateEditor(s.id,col.key,editing.mode)}<PeerTag who={peerOn(s.id,col.key)}/><NoteTri k={k}/><FillHandle id={s.id} col={col.key}/></td>); }
                   let content=null;
                   if(col.kind==="branch"){ const b=col.branch==="fit"?c.fitBranch:col.branch==="print"?c.printBranch:col.branch==="fabric"?c.fabricBranch:col.branch==="pp"?c.ppBranch:c.prodFileBranch; const canJump=b.tone!=="na"&&!c.released; content=<BranchPill b={b} onJump={canJump?()=>jumpToEnter(s.id,branchTarget(s,c,col.branch)):null}/>; }
-                  else if(col.key==="overall") content=(<span style={{ display:"inline-flex", flexDirection:"column", gap:2, alignItems:"flex-start" }}><span style={{ display:"inline-flex", alignItems:"center", gap:5, background:t.bg, color:t.fg, padding:"2px 7px", fontSize:10, fontWeight:700 }}><span style={{ width:6,height:6,borderRadius:"50%", background:t.dot }}/>{c.status}</span>{c.lastActual && <span style={{ fontSize:8.5, color:"var(--on-dark-2)", whiteSpace:"nowrap" }}>last: {fmt(c.lastActual)}{c.lastActualKey?` · ${(STAGES.find(x=>x.key===c.lastActualKey)||{}).label||""}`:""}</span>}</span>);
+                  else if(col.key==="overall") content=(<span style={{ display:"inline-flex", flexDirection:"column", gap:2, alignItems:"flex-start" }}><span style={{ display:"inline-flex", alignItems:"center", gap:5, background:t.bg, color:t.fg, border:"1px solid rgba(31,31,29,0.08)", borderRadius:999, boxShadow:"var(--pill-shadow)", padding:"3px 9px", fontSize:10, lineHeight:1.15, fontWeight:800 }}><span style={{ width:6,height:6,borderRadius:"50%", background:t.dot, flex:"0 0 auto" }}/>{c.status}</span>{c.lastActual && <span style={{ fontSize:8.5, color:"var(--on-dark-2)", whiteSpace:"nowrap" }}>last: {fmt(c.lastActual)}{c.lastActualKey?` · ${(STAGES.find(x=>x.key===c.lastActualKey)||{}).label||""}`:""}</span>}</span>);
                   else if(col.key==="fabricCD"){ const fc=c.fabricCountdown; content=(<span style={{ display:"inline-flex", flexDirection:"column", lineHeight:1.1 }}><span style={{ fontWeight:700, color:(BR_TONE[fc.tone]||BR_TONE.na).fg }}>{fc.txt}</span>{fc.date && <span style={{ fontSize:8, color:"var(--on-dark-2)" }}>{fmt(fc.date)}</span>}</span>); }
                   else if(col.key==="proj") content=<span title={`release gate (30wd before delivery): ${fmt(c.releaseGate)}`} style={{ fontWeight:600, color:c.projTone==="late"?"var(--danger)":c.projTone==="warn"?"#7a560f":c.projTone==="done"?"var(--muted-2)":"var(--success)" }}>{fmt(c.projRelease)}{c.projTone==="late"&&!c.released?" ⚠":c.projTone==="ok"?" ✓":""}</span>;
                   else if(col.key==="pct") content=(<div style={{ display:"flex", alignItems:"center", gap:5 }}><div style={{ flex:1, height:6, background:"var(--line-3)", position:"relative", minWidth:34 }}><div style={{ position:"absolute", left:0, top:0, bottom:0, width:`${c.pct}%`, background:c.pct===100?"var(--success)":"var(--accent)" }}/></div><span style={{ fontSize:9, color:"var(--muted-3)", width:26, textAlign:"right" }}>{c.pct}%</span></div>);
@@ -1198,42 +1201,30 @@ function SettingsView({ cfg, setCfg, canEdit }){
   const setUpc=(k,val)=> setCfg(c=>({ ...c, upcoming:{ ...c.upcoming, [k]: val===""?undefined:Math.max(0,Number(val)||0) } }));
   const setStageOwner=(k,val)=> setCfg(c=>({ ...c, stageOwners:{ ...(c.stageOwners||DEFAULT_CFG.stageOwners), [k]: val||DEFAULT_STAGE_OWNERS[k] } }));
   const setTop=(k,val)=> setCfg(c=>({ ...c, [k]: val===""?undefined:Math.max(0,Number(val)||0) }));
-  const inp=(value,onChange)=>(<input type="number" min="0" disabled={!canEdit} value={num(value)} onChange={e=>onChange(e.target.value)} style={{ width:58, fontFamily:"inherit", fontSize:12, padding:"4px 6px", border:"1px solid var(--muted-6)", outline:"none", background:canEdit?"var(--surface)":"#f3f1ec" }}/>);
-  const ownerSel=(value,onChange)=>{ const v=value||"Jr Merchant"; const isPreset=CHASE_LABELS.includes(v); return (<span style={{ display:"flex", gap:5, alignItems:"center" }}><select disabled={!canEdit} value={isPreset?v:"__custom"} onChange={e=>{ if(e.target.value!=="__custom") onChange(e.target.value); }} title="Quick role labels only — not linked to user permissions" style={{ width:122, fontFamily:"inherit", fontSize:11, padding:"4px 6px", border:"1px solid var(--muted-6)", outline:"none", background:canEdit?"var(--surface)":"#f3f1ec" }}>{CHASE_LABELS.map(o=><option key={o} value={o}>{o}</option>)}<option value="__custom">Custom…</option></select><input disabled={!canEdit} value={v} onChange={e=>onChange(e.target.value)} placeholder="custom label" title="Type any label to show in Chase and To-Do" style={{ width:132, fontFamily:"inherit", fontSize:11, padding:"4px 6px", border:"1px solid var(--muted-6)", outline:"none", background:canEdit?"var(--surface)":"#f3f1ec" }}/></span>); };
-  const box={ background:"var(--surface)", border:"1px solid var(--ink)", padding:16, minWidth:300, flex:1 };
-  const head={ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:4 };
-  const sub={ fontSize:10, color:"var(--muted-1)", marginBottom:12 };
+  const [open,setOpen]=useState(()=>{ try{ return localStorage.getItem("mt_settings_open")||"leads"; }catch(e){ return "leads"; } });
+  useEffect(()=>{ try{ localStorage.setItem("mt_settings_open",open); }catch(e){} },[open]);
+  const inputStyle={ width:64, fontFamily:"inherit", fontSize:12, fontWeight:700, padding:"5px 7px", border:"1px solid var(--line-2)", borderRadius:8, outline:"none", background:canEdit?"var(--surface)":"#f3f1ec", color:"var(--ink)", textAlign:"center" };
+  const inp=(value,onChange)=>(<input type="number" min="0" disabled={!canEdit} value={num(value)} onChange={e=>onChange(e.target.value)} style={inputStyle}/>);
+  const ownerSel=(value,onChange)=>{ const v=value||"Jr Merchant"; const isPreset=CHASE_LABELS.includes(v); return (<span style={{ display:"flex", gap:6, alignItems:"center", flexWrap:"wrap", justifyContent:"flex-end" }}><select disabled={!canEdit} value={isPreset?v:"__custom"} onChange={e=>{ if(e.target.value!=="__custom") onChange(e.target.value); }} title="Quick role labels only — not linked to user permissions" style={{ width:132, fontFamily:"inherit", fontSize:11, fontWeight:700, padding:"5px 7px", border:"1px solid var(--line-2)", borderRadius:8, outline:"none", background:canEdit?"var(--surface)":"#f3f1ec" }}>{CHASE_LABELS.map(o=><option key={o} value={o}>{o}</option>)}<option value="__custom">Custom…</option></select><input disabled={!canEdit} value={v} onChange={e=>onChange(e.target.value)} placeholder="custom label" title="Type any label to show in Chase and To-Do" style={{ width:140, fontFamily:"inherit", fontSize:11, fontWeight:700, padding:"5px 7px", border:"1px solid var(--line-2)", borderRadius:8, outline:"none", background:canEdit?"var(--surface)":"#f3f1ec" }}/></span>); };
+  const section={ background:"var(--surface)", border:"1px solid var(--toolbar-line)", borderRadius:14, boxShadow:"var(--card-shadow)", overflow:"hidden" };
+  const sectionHead=(id,title,desc,count)=>(<button onClick={()=>setOpen(open===id?"":id)} style={{ width:"100%", display:"flex", alignItems:"center", gap:12, textAlign:"left", cursor:"pointer", border:"none", background:open===id?"var(--accent-tint)":"var(--surface)", padding:"13px 15px", fontFamily:"inherit" }}><span style={{ width:28, height:28, borderRadius:14, background:open===id?"var(--accent)":"var(--toolbar-subtle)", color:open===id?"var(--surface)":"var(--muted-3)", display:"inline-flex", alignItems:"center", justifyContent:"center", fontWeight:800 }}>{open===id?"−":"+"}</span><span style={{ flex:1, minWidth:0 }}><span style={{ display:"block", fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:14, color:"var(--ink)" }}>{title}</span><span style={{ display:"block", fontSize:10.5, color:"var(--muted-2)", marginTop:2 }}>{desc}</span></span>{count && <span style={{ fontSize:9, fontWeight:800, color:"var(--muted-2)", border:"1px solid var(--line-2)", borderRadius:999, padding:"3px 7px", background:"var(--surface)" }}>{count}</span>}</button>);
+  const row=(label,control,hint)=>(<div style={{ display:"grid", gridTemplateColumns:"minmax(160px,1fr) auto", gap:12, alignItems:"center", padding:"8px 0", borderTop:"1px solid var(--line-3)", fontSize:11.5 }}><span><b>{label}</b>{hint && <span style={{ display:"block", fontSize:9.5, color:"var(--muted-1)", marginTop:2 }}>{hint}</span>}</span>{control}</div>);
   const rworkLabels={ fitSend:"Fit (redo & resend)", artwork:"Artwork", strikeOff:"Strike-off", labDip:"Lab Dip", ppSample:"PP Sample" };
   const upcLabels={ techpack:"Techpack", fitSend:"Fit Send", fitAppr:"Fit Appr", artwork:"Artwork", artAppr:"Art Appr", strikeOff:"Strike-off", soAppr:"S/O Appr", labDip:"Lab Dip", labAppr:"Lab Dip Appr", ppSample:"PP Sample", ppAppr:"PP Appr", fabricIH:"Fabric In-House", prodFile:"Prod File" };
-  return (<div style={{ padding:"18px 22px", maxWidth:1100 }}>
-    {!canEdit && <div style={{ fontSize:11, color:"var(--danger)", marginBottom:12 }}>Your role cannot edit these — Management / Senior Merchant only.</div>}
-    <div style={{ display:"flex", gap:18, flexWrap:"wrap" }}>
-      <div style={box}>
-        <div style={head}>STAGE LEAD TIMES</div><div style={sub}>Working days each stage takes after its predecessor.</div>
-        {STAGES.map(st=>(<div key={st.key} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"3px 0", fontSize:11 }}><span>{st.label}</span>{inp(cfg.leads[st.key], v=>setLead(st.key,v))}</div>))}
-      </div>
-      <div style={box}>
-        <div style={head}>CHASE LABELS BY STAGE</div><div style={sub}>Controls the Chase column and To-Do owner label only. Pick from role labels or type your own. This does not link to users or permissions.</div>
-        {STAGES.map(st=>(<div key={st.key} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"3px 0", fontSize:11, gap:10 }}><span>{st.label}</span>{ownerSel((cfg.stageOwners&&cfg.stageOwners[st.key])||DEFAULT_STAGE_OWNERS[st.key], v=>setStageOwner(st.key,v))}</div>))}
-      </div>
-      <div style={{ display:"flex", flexDirection:"column", gap:18, flex:1, minWidth:300 }}>
-        <div style={box}>
-          <div style={head}>REWORK DAYS (on rejection)</div><div style={sub}>Working days added on a rejection, before re-send.</div>
-          {Object.keys(rworkLabels).map(k=>(<div key={k} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"3px 0", fontSize:11 }}><span>{rworkLabels[k]}</span>{inp(cfg.rework[k], v=>setRew(k,v))}</div>))}
-        </div>
-        <div style={box}>
-          <div style={head}>DELIVERY GATES</div><div style={sub}>Working days before delivery.</div>
-          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"3px 0", fontSize:11 }}><span>Fabric cut-off (Fabric IH by)</span>{inp(cfg.fabricCutoff, v=>setTop("fabricCutoff",v))}</div>
-          <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"3px 0", fontSize:11 }}><span>Release gate (prod must start by)</span>{inp(cfg.relGate, v=>setTop("relGate",v))}</div>
-        </div>
-      </div>
-      <div style={box}>
-        <div style={head}>TO-DO WATCH WINDOWS</div><div style={sub}>Working days before due that an activity becomes "upcoming".</div>
-        {Object.keys(upcLabels).map(k=>(<div key={k} style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"3px 0", fontSize:11 }}><span>{upcLabels[k]}</span>{inp(cfg.upcoming[k], v=>setUpc(k,v))}</div>))}
-      </div>
+  return (<div style={{ padding:"18px 22px", maxWidth:1180 }}>
+    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:16, marginBottom:14, flexWrap:"wrap" }}>
+      <div><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:22, letterSpacing:-0.2 }}>Settings</div><div style={{ fontSize:11.5, color:"var(--muted-2)", maxWidth:650, lineHeight:1.45, marginTop:4 }}>Operational configuration for the tracker. These settings change planning labels and date calculations for everyone, so they are grouped into calmer sections.</div></div>
+      <span style={{ fontSize:10, fontWeight:800, color:canEdit?"var(--success)":"var(--danger)", background:canEdit?"var(--tint-ok)":"var(--tint-late)", border:"1px solid rgba(31,31,29,0.08)", borderRadius:999, padding:"6px 10px", whiteSpace:"nowrap" }}>{canEdit?"Editable: Management / Senior":"View only"}</span>
     </div>
-    <button disabled={!canEdit} onClick={()=>setCfg(DEFAULT_CFG)} style={{ marginTop:16, fontFamily:"inherit", fontSize:11, padding:"7px 14px", cursor:canEdit?"pointer":"not-allowed", border:"1px solid var(--ink)", background:"var(--surface)", opacity:canEdit?1:0.5 }}>Reset to defaults</button>
-    <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:10 }}>Changes save automatically and apply to every user's calculations.</div>
+    {!canEdit && <div style={{ fontSize:11, color:"var(--danger)", marginBottom:12, background:"var(--tint-late)", border:"1px solid rgba(180,35,24,0.18)", borderRadius:10, padding:"9px 11px" }}>Your role cannot edit these settings.</div>}
+    <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(360px,1fr))", gap:14 }}>
+      <div style={section}>{sectionHead("leads","Stage lead times","Working days each stage takes after its predecessor.",STAGES.length+" stages")}{open==="leads" && <div style={{ padding:"4px 15px 14px" }}>{STAGES.map(st=><React.Fragment key={st.key}>{row(st.label, inp(cfg.leads[st.key], v=>setLead(st.key,v)))}</React.Fragment>)}</div>}</div>
+      <div style={section}>{sectionHead("chase","Chase labels by stage","Labels shown in Chase and To-Do only. Not linked to users or permissions.",STAGES.length+" labels")}{open==="chase" && <div style={{ padding:"4px 15px 14px" }}>{STAGES.map(st=><React.Fragment key={st.key}>{row(st.label, ownerSel((cfg.stageOwners&&cfg.stageOwners[st.key])||DEFAULT_STAGE_OWNERS[st.key], v=>setStageOwner(st.key,v)))}</React.Fragment>)}</div>}</div>
+      <div style={section}>{sectionHead("rework","Rework days","Extra working days after rejection before the next re-send.",Object.keys(rworkLabels).length+" rules")}{open==="rework" && <div style={{ padding:"4px 15px 14px" }}>{Object.keys(rworkLabels).map(k=><React.Fragment key={k}>{row(rworkLabels[k], inp(cfg.rework[k], v=>setRew(k,v)))}</React.Fragment>)}</div>}</div>
+      <div style={section}>{sectionHead("gates","Delivery gates","Working-day cutoffs counted backwards from delivery.","2 gates")}{open==="gates" && <div style={{ padding:"4px 15px 14px" }}>{row("Fabric cut-off", inp(cfg.fabricCutoff, v=>setTop("fabricCutoff",v)), "Fabric IH target from delivery date")}{row("Release gate", inp(cfg.relGate, v=>setTop("relGate",v)), "Prod file / release risk gate")}</div>}</div>
+      <div style={{ ...section, gridColumn:"1 / -1" }}>{sectionHead("upcoming","To-Do watch windows","How early a pending activity appears as upcoming.",Object.keys(upcLabels).length+" windows")}{open==="upcoming" && <div style={{ padding:"4px 15px 14px", display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))", columnGap:18 }}>{Object.keys(upcLabels).map(k=><React.Fragment key={k}>{row(upcLabels[k], inp(cfg.upcoming[k], v=>setUpc(k,v)))}</React.Fragment>)}</div>}</div>
+    </div>
+    <div style={{ display:"flex", alignItems:"center", gap:10, marginTop:16, flexWrap:"wrap" }}><button disabled={!canEdit} onClick={()=>setCfg(DEFAULT_CFG)} style={{ fontFamily:"inherit", fontSize:11, fontWeight:800, padding:"8px 14px", cursor:canEdit?"pointer":"not-allowed", border:"1px solid var(--line-2)", borderRadius:9, background:"var(--surface)", opacity:canEdit?1:0.5 }}>Reset to defaults</button><span style={{ fontSize:9.5, color:"var(--muted-2)" }}>Changes save automatically and apply to every user's calculations.</span></div>
   </div>);
 }
 
