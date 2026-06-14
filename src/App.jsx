@@ -18,7 +18,7 @@ const THEME_CSS = `
 }
 `;
 const REL_GATE_DAYS = 30, FABRIC_CUTOFF_DAYS = 35, STYLE_W = 190;
-const UPCOMING_DEFAULT = { fitSend:4, fitAppr:1, artwork:2, artAppr:1, strikeOff:3, soAppr:1, labAppr:1, ppSample:4, ppAppr:1, fabricIH:15, prodFile:7 }; // working days before a stage that it becomes "upcoming" in the To-Do list
+const UPCOMING_DEFAULT = { techpack:2, fitSend:4, fitAppr:1, artwork:2, artAppr:1, strikeOff:3, soAppr:1, labDip:5, labAppr:1, ppSample:4, ppAppr:1, fabricIH:15, prodFile:7 }; // working days before a stage that it becomes "upcoming" in the To-Do list
 
 const STAGES = [
   { key:"techpack",  label:"Techpack",     lead:3, owner:"Merchant", flag:null, pred:"__ord" },
@@ -400,6 +400,7 @@ function MerchTracker({ me, onSignOut }){
     else if(mode==="detail"){ data=rows.map(({s,c})=>{ const open=blockers(c); const o={ "Order No":s.orderNo, "Style No":s.styleNo, "Sample Fit":s.sampleFit, "Family":s.family, "Colour":s.colour, "Brand":s.brand, "Buyer":s.buyer||"", "Age Group":s.age||"", "Fabric Type":s.fabricType, "Owner":s.owner, "Qty":s.qty, "Order Date":fmtIso(s.ordRec), "Delivery":fmtIso(s.delivery), "FIT":s.fitReq?"Y":"-", "PRT":s.printReq?"Y":"-", "S-O":s.soReq?"Y":"-", "LAB":s.labDipReq?"Y":"-", "BYP":s.ppBypass?"Y":"-", "PP":s.ppNeeded?"Y":"-" }; pairs(o,s,c,false); o["% Done"]=c.pct+"%"; o["Float"]=(c.float!=null?c.float+"d":""); o["Idle"]=(c.idle!=null?c.idle+"d":""); o["Proj. Release"]=c.projRelease?fmtY(c.projRelease):""; o["Released"]=c.released?"YES":""; o["Pending / blockers"]=c.released?"released":(open.join("; ")||"none"); o["Remarks"]=s.remarks||""; o["Status"]=c.status; return o; }); name="detailed_summary"; sheet="Detailed"; }
     else if(mode==="internal"){ data=rows.map(({s,c})=>{ const o={ "Order No":s.orderNo, "Style No":s.styleNo, "Sample Fit":s.sampleFit, "Family":s.family, "Colour":s.colour, "Buyer":s.buyer||"", "Age Group":s.age||"", "Qty":s.qty, "Delivery":fmtIso(s.delivery), "Status":c.status }; pairs(o,s,c,true); return o; }); name="internal_plan_buf"+B+"d"; }
     else { data=rows.map(({s,c})=>{ const o={ "Order No":s.orderNo, "Style No":s.styleNo, "Sample Fit":s.sampleFit, "Family":s.family, "Colour":s.colour, "Brand":s.brand, "Buyer":s.buyer||"", "Age Group":s.age||"", "Fabric Type":s.fabricType, "Junior":s.owner, "Qty":s.qty, "Order Date":fmtIso(s.ordRec), "Delivery":fmtIso(s.delivery), "Status":c.status }; STAGES.forEach(st=>{ o[st.label]=actCell(s,c,st.key); }); return o; }); name="merch_tracker"; }
+    if(data&&data.length){ Object.keys(data[0]).forEach(k=>{ if(data.every(r=>r[k]==="n/a")) data.forEach(r=>{ delete r[k]; }); }); }
     const ws=XLSX.utils.json_to_sheet(data); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,sheet); XLSX.writeFile(wb,name+"_"+iso(TODAY)+".xlsx"); }catch(e){ alert("Export failed: "+(e.message||e)); } };
   const archiveFiltered=(val)=>{ const ids=new Set(rows.map(r=>r.s.id)); if(!ids.size) return; if(!window.confirm(`${val?"Archive":"Restore"} ${ids.size} style(s)? Archived styles are hidden from the active sheet — this is reversible.`)) return; pushHistory(); setStyles(prev=>prev.map(s=> ids.has(s.id)?{...s,archived:val}:s)); flash(); };
   const deleteStyle=async(id)=>{ if(!window.confirm("Delete this style row? This removes it for everyone and cannot be undone.")) return; pushHistory(); setStyles(prev=>prev.filter(s=>s.id!==id)); flash(); try{ await supabase.from("stage_dates").delete().eq("style_id",id); await supabase.from("cell_meta").delete().eq("style_id",id); await supabase.from("styles").delete().eq("id",id); }catch(e){ console.error("delete failed",e); } };
@@ -1040,7 +1041,7 @@ function SettingsView({ cfg, setCfg, canEdit }){
   const head={ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:4 };
   const sub={ fontSize:10, color:"var(--muted-1)", marginBottom:12 };
   const rworkLabels={ fitSend:"Fit (redo & resend)", artwork:"Artwork", strikeOff:"Strike-off", labDip:"Lab Dip", ppSample:"PP Sample" };
-  const upcLabels={ fitSend:"Fit Send", fitAppr:"Fit Appr", artwork:"Artwork", artAppr:"Art Appr", strikeOff:"Strike-off", soAppr:"S/O Appr", labAppr:"Lab Dip Appr", ppSample:"PP Sample", ppAppr:"PP Appr", fabricIH:"Fabric In-House", prodFile:"Prod File" };
+  const upcLabels={ techpack:"Techpack", fitSend:"Fit Send", fitAppr:"Fit Appr", artwork:"Artwork", artAppr:"Art Appr", strikeOff:"Strike-off", soAppr:"S/O Appr", labDip:"Lab Dip", labAppr:"Lab Dip Appr", ppSample:"PP Sample", ppAppr:"PP Appr", fabricIH:"Fabric In-House", prodFile:"Prod File" };
   return (<div style={{ padding:"18px 22px", maxWidth:1100 }}>
     {!canEdit && <div style={{ fontSize:11, color:"var(--danger)", marginBottom:12 }}>Your role cannot edit these — Management / Senior Merchant only.</div>}
     <div style={{ display:"flex", gap:18, flexWrap:"wrap" }}>
