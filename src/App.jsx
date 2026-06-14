@@ -1271,6 +1271,10 @@ function ManagementDashboardView({ computed, todoItems, applyDrill, drillTodo })
   const [target,setTarget]=useState("tracker"); // where bar/owner/activity drills go
   const [df,setDf]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("mt_dashfilter")||"{}"); }catch(e){ return {}; } });
   useEffect(()=>{ try{ localStorage.setItem("mt_dashfilter", JSON.stringify(df)); }catch(e){} },[df]);
+  const [mgmtOpen,setMgmtOpen]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("mt_mgmt_open")||"{}"); }catch(e){ return {}; } });
+  useEffect(()=>{ try{ localStorage.setItem("mt_mgmt_open", JSON.stringify(mgmtOpen)); }catch(e){} },[mgmtOpen]);
+  const isMgmtOpen=(key)=> mgmtOpen[key]!==false;
+  const toggleMgmt=(key)=>setMgmtOpen(o=>({ ...o, [key]: !isMgmtOpen(key) }));
 
   const matchDf=(st,except)=> (except==="order"||!df.order||st.orderNo===df.order) && (except==="fit"||!df.fit||st.sampleFit===df.fit) && (except==="junior"||!df.junior||st.owner===df.junior) && (except==="family"||!df.family||st.family===df.family) && (except==="brand"||!df.brand||st.brand===df.brand) && (except==="fabric"||!df.fabric||st.fabricType===df.fabric) && (except==="colour"||!df.colour||String(st.colour||"").split(/[,/]/).map(x=>x.trim()).includes(df.colour));
   const distinctC=(key,fn)=>{ const set=new Set(); computed.forEach(({s:st})=>{ if(!matchDf(st,key)) return; fn(st).forEach(v=>{ if(v) set.add(v); }); }); return [...set].sort(); };
