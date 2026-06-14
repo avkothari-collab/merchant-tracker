@@ -248,6 +248,9 @@ function MerchTracker({ me, onSignOut }){
   const [followFilter,setFollowFilter]=useState(PF.followFilter||false);
   const [viewSnap,setViewSnap]=useState(null); // saved tracker view before a drill, for one-click restore
   const scrollWrapRef=useRef(null);
+  const [showJump,setShowJump]=useState(false);
+  useEffect(()=>{ const onScroll=()=>{ const w=scrollWrapRef.current; setShowJump((window.scrollY||0)>200 || (w&&w.scrollTop>300)); }; window.addEventListener("scroll",onScroll,{passive:true}); const w=scrollWrapRef.current; if(w) w.addEventListener("scroll",onScroll,{passive:true}); return ()=>{ window.removeEventListener("scroll",onScroll); if(w) w.removeEventListener("scroll",onScroll); }; },[]);
+  const jumpToTop=()=>{ try{ window.scrollTo({top:0,behavior:"smooth"}); }catch(e){ window.scrollTo(0,0); } const w=scrollWrapRef.current; if(w){ try{ w.scrollTo({top:0,behavior:"smooth"}); }catch(e){ w.scrollTop=0; } } };
   const [saved,setSaved]=useState(false);
   const [fillOpen,setFillOpen]=useState(false);
   const [colsOpen,setColsOpen]=useState(false);
@@ -683,6 +686,20 @@ function MerchTracker({ me, onSignOut }){
         <span style={{ display:"inline-flex", alignItems:"center", gap:4, marginLeft:6 }} title="type a cell like A9 and press Enter to jump there"><span style={{ fontSize:9, color:"var(--muted-2)" }}>Go to</span><input value={nameBox} onChange={e=>setNameBox(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") gotoCell(nameBox); }} onFocus={e=>e.target.select()} placeholder="A9" style={{ width:54, fontFamily:"inherit", fontSize:11, fontWeight:700, textTransform:"uppercase", padding:"3px 6px", border:"1px solid var(--ink)", textAlign:"center", color:"var(--accent)" }}/></span><span style={{ marginLeft:8 }}>{clip?<span style={{color:"#2563a6"}}>📋 {clip.h}×{clip.w} copied — select & Ctrl/Cmd+V to paste</span>:(sel?<>selected: <b style={{ color:"var(--accent)" }}>{cellRef(sel)}{focus&&(focus.id!==sel.id||focus.col!==sel.col)?(":"+cellRef(focus)):""}</b> · {styles.find(s=>s.id===sel.id)?.styleNo} · {sel.col==="__style"?"Style":(INFO_COLS.find(c=>c.key===sel.col)?.label||STAGES.find(s=>s.key===sel.col)?.label||sel.col)}</>:"click a cell to format / comment")}</span>
       </div>
 
+      {(() => { const chips=[]; const chip=(key,label,onX)=>chips.push(<span key={key} style={{ display:"inline-flex", alignItems:"center", gap:5, background:"var(--accent-tint)", border:"1px solid var(--accent)", borderRadius:3, padding:"2px 4px 2px 7px", fontSize:10 }}>{label}<button onClick={onX} title="remove this filter" style={{ border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:0, color:"var(--muted-2)", display:"inline-flex" }}><X size={11}/></button></span>);
+        if(search) chip("q",(searchCol==="auto"?"search":searchCol)+": "+search, ()=>setSearch(""));
+        if(statusFilter!=="All") chip("st","status: "+statusFilter, ()=>setStatusFilter("All"));
+        if(ownerFilter!=="All") chip("ow","owner: "+ownerFilter, ()=>setOwnerFilter("All"));
+        if(activityFilter) chip("ac","activity: "+((STAGES.find(x=>x.key===activityFilter)||{}).label||activityFilter), ()=>setActivityFilter(null));
+        if(followFilter) chip("fo","following only", ()=>setFollowFilter(false));
+        if(archiveView!=="active") chip("ar","view: "+archiveView, ()=>setArchiveView("active"));
+        Object.keys(colFilters||{}).forEach(col=>{ const lab=(INFO_COLS.find(c=>c.key===col)||{}).label||(STAGES.find(x=>x.key===col)||{}).label||col; chip("c-"+col, lab+": "+((colFilters[col]||[]).length)+" sel", ()=>setColFilters(f=>{ const n={...f}; delete n[col]; return n; })); });
+        if(!chips.length) return null;
+        return <div style={{ display:"flex", alignItems:"center", gap:7, flexWrap:"wrap", padding:"7px 22px 0" }}><span style={{ fontSize:10, fontWeight:700, color:"var(--muted-2)" }}>Active filters:</span>{chips}<button onClick={clearAllFilters} style={{ fontSize:10, fontWeight:700, border:"1px solid var(--ink)", background:"var(--surface)", cursor:"pointer", padding:"2px 8px", marginLeft:2 }}>Clear all</button></div>;
+      })()}
+
+      {showJump && <button onClick={jumpToTop} title="Back to controls / top" style={{ position:"fixed", bottom:24, right:24, zIndex:70, width:42, height:42, borderRadius:21, border:"1px solid var(--ink)", background:"var(--accent)", color:"var(--ink)", boxShadow:"2px 2px 0 var(--ink)", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}><ChevronUp size={20}/></button>}
+
       <div ref={scrollWrapRef} style={{ overflow:"auto", padding:"0 22px", maxHeight:"calc(100vh - 210px)" }}>
         <table role="grid" aria-label="Pre-production tracker grid. Arrow keys to move, Escape to exit, Tab to leave the grid." style={{ borderCollapse:"separate", borderSpacing:0, zoom:textScale, fontSize:11, tableLayout:"fixed", userSelect:dragSel?"none":"auto" }}>
           <colgroup>
@@ -800,12 +817,9 @@ function MerchTracker({ me, onSignOut }){
         </table>
       </div>
 
-      <div style={{ padding:"16px 22px", display:"flex", gap:18, flexWrap:"wrap", fontSize:10, color:"#777" }}>
-        <span style={{ display:"flex", alignItems:"center", gap:5 }}><span style={{ width:14,height:14, boxShadow:"inset 0 0 0 2px var(--info)", display:"inline-block" }}/> active cell · <span style={{ width:14,height:14, background:"#e3edfb", display:"inline-block", marginLeft:4 }}/> range (shift-click / shift-arrows)</span>
-        <span><b>Excel keys:</b> Ctrl/Cmd C/V copy-paste (works with Excel too) · Ctrl/Cmd Z / Shift+Z undo-redo · F2 edit · Del clears range · drag the blue corner to fill down · double-click a header edge to auto-fit · click a row number to select the row.</span>
-        <span style={{ display:"flex", alignItems:"center", gap:5 }}><Snowflake size={11} color="#2563a6"/> freeze leading columns</span>
-        <span style={{ display:"flex", alignItems:"center", gap:5 }}><RotateCcw size={11} color="var(--revised)"/> set REVISED plan (incl. Fabric IH) — plans cascade from it</span>
-        <span style={{ display:"flex", alignItems:"center", gap:5 }}><span style={{ width:0,height:0, borderTop:"8px solid var(--danger)", borderLeft:"8px solid transparent", display:"inline-block" }}/> comment</span>
+      <div style={{ padding:"10px 22px", display:"flex", gap:16, flexWrap:"wrap", alignItems:"center", fontSize:11, borderTop:"1px solid var(--line-3)" }}>
+        {(() => { const rs=rows; const n=rs.length; const rel=rs.filter(r=>r.c.released).length; const risk=rs.filter(r=>r.c.tone==="late"||r.c.tone==="warn").length; const ok=rs.filter(r=>(r.c.tone==="ok")&&!r.c.released).length; const qty=rs.reduce((a,r)=>a+(Number(r.s.qty)||0),0); const avg=n?Math.round(rs.reduce((a,r)=>a+(r.c.pct||0),0)/n):0; return <span style={{ display:"flex", gap:14, flexWrap:"wrap", alignItems:"center" }}><span><b>{n}</b> styles</span><span style={{ color:"var(--danger)" }}><b>{risk}</b> at risk</span><span><b>{ok}</b> on track</span><span><b>{rel}</b> released</span><span>total qty <b>{qty.toLocaleString()}</b></span><span>avg <b>{avg}%</b> done</span></span>; })()}
+        <span style={{ marginLeft:"auto", fontSize:9, color:"var(--muted-7)", display:"flex", alignItems:"center", gap:4, flexWrap:"wrap" }}>Ctrl/Cmd C·V copy-paste · Z / Shift+Z undo-redo · F2 edit · Del clears · drag blue corner to fill · <span style={{ width:0,height:0, borderTop:"7px solid var(--danger)", borderLeft:"7px solid transparent", display:"inline-block" }}/> comment · <RotateCcw size={10} color="var(--revised)"/> revised plan · <Snowflake size={10} color="#2563a6"/> freeze cols</span>
       </div>
       </>)}
 
