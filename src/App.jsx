@@ -18,7 +18,7 @@ const THEME_CSS = `
 }
 `;
 const REL_GATE_DAYS = 30, FABRIC_CUTOFF_DAYS = 35, STYLE_W = 190;
-const UPCOMING_DEFAULT = { fitSend:4, artwork:2, strikeOff:3, ppSample:4, fabricIH:15 }; // working days before a stage that it becomes "upcoming" in the To-Do list
+const UPCOMING_DEFAULT = { fitSend:4, artwork:2, strikeOff:3, ppSample:4, fabricIH:15, prodFile:7 }; // working days before a stage that it becomes "upcoming" in the To-Do list
 
 const STAGES = [
   { key:"techpack",  label:"Techpack",     lead:3, owner:"Merchant", flag:null, pred:"__ord" },
@@ -86,7 +86,7 @@ function computeStyle(s, cfg){
   STAGES.forEach(st=>{
     let p;
     if(st.cutoff){ const base=s.labDipReq?(eff["labAppr"]||eff["labDip"]||ordRec):ordRec; p=s.labDipReq?new Date(Math.max(addWorkdays(base,15)?.getTime()||0, cutoff.getTime())):cutoff; }
-    else { let predEff; if(st.key==="prodFile") predEff = s.ppBypass ? eff["fabricIH"] : eff["ppAppr"]; else predEff = st.pred==="__ord"?ordRec:eff[st.pred]; if((st.key==="ppSample"||st.key==="prodFile") && s.fitReq && eff["fitAppr"]) predEff = new Date(Math.max((predEff&&predEff.getTime())||0, eff["fitAppr"].getTime())); p=addWorkdays(predEff||ordRec, leadOf(st)); }
+    else { let predEff; if(st.key==="prodFile") predEff = (s.ppBypass || !s.ppNeeded) ? eff["fabricIH"] : eff["ppAppr"]; else predEff = st.pred==="__ord"?ordRec:eff[st.pred]; if((st.key==="ppSample"||st.key==="prodFile") && s.fitReq && eff["fitAppr"]) predEff = new Date(Math.max((predEff&&predEff.getTime())||0, eff["fitAppr"].getTime())); p=addWorkdays(predEff||ordRec, leadOf(st)); }
     const apprK=APPR_OF_SEND[st.key]; const rejAppr = !!(apprK && rejOf(apprK) && !actualOf(apprK));
     const selfRej = REJECTABLE.includes(st.key) && rejOf(st.key) && !actualOf(st.key);
     if(rejAppr){ const rjd=rejOf(apprK); const auto=addWorkdays(rjd, rwOf(st)); const a=actualOf(st.key); const rv=revOf(st.key); plan[st.key]=auto;
@@ -124,14 +124,14 @@ function computeStyle(s, cfg){
   { const pfA=actualOf("prodFile"); const pfP=eff["prodFile"]; const pfDue=pfP?`due ${fmt(pfP)}`:"";
     if(pfA){ prodFileBranch=bs(`Released ${fmt(pfA)}`,"ok"); }
     else { const prodGate=addWorkdays(delivery,-CUTD); const overdue=pfP&&pfP<TODAY; const pastGate=pfP&&prodGate&&pfP>prodGate; const tn=(overdue||pastGate)?"late":"warn";
-      if(s.ppBypass){ const ready=fabricInHouse||done("fabricIH"); prodFileBranch=ready?bs(`Bypass · ready ${pfDue}`,tn):bs(`Bypass · awaiting fabric`,tn); }
+      if(s.ppBypass || !s.ppNeeded){ const ready=fabricInHouse; const pre=s.ppBypass?"Bypass · ":""; prodFileBranch=ready?bs(`${pre}file ${pfDue}`,tn):bs(`${pre}awaiting fabric`,tn); }
       else { const ready=done("ppAppr"); prodFileBranch=ready?bs(`Ready ${pfDue}`,tn):bs(`Awaiting PP appr`,tn); } } }
   let fabricCountdown;
   if(fabricInHouse) fabricCountdown={txt:"in-house",date:fihA,n:9e9,tone:"ok"}; else if(fabPlan){ const n=netWorkdays(TODAY,fabPlan); fabricCountdown={txt:n<0?`${-n}d over`:`${n}d`,date:fabPlan,n,tone:n<0?"late":n<=7?"warn":"ok"}; } else fabricCountdown={txt:"no plan",date:null,n:null,tone:"warn"};
   const releaseGate=addWorkdays(delivery,-GATED);
   let projRelease;
   if(released) projRelease=lastActual;
-  else { let cur=eff["fabricIH"]; const chain = s.ppBypass ? ["prodFile"] : ["ppSample","ppAppr","prodFile"]; chain.forEach(k=>{ if(!applies(k)) return; const a=actualOf(k), r=revOf(k); const st=STAGES.find(x=>x.key===k); if(a) cur=a; else if(r) cur=r; else cur=addWorkdays(cur,leadOf(st)); }); projRelease=cur; }
+  else { let cur=eff["fabricIH"]; const chain = (s.ppBypass || !s.ppNeeded) ? ["prodFile"] : ["ppSample","ppAppr","prodFile"]; chain.forEach(k=>{ if(!applies(k)) return; const a=actualOf(k), r=revOf(k); const st=STAGES.find(x=>x.key===k); if(a) cur=a; else if(r) cur=r; else cur=addWorkdays(cur,leadOf(st)); }); projRelease=cur; }
   const gateGap=projRelease&&releaseGate?Math.round((releaseGate-projRelease)/ONE_DAY):null;
   const releaseOnTrack=projRelease&&releaseGate?projRelease<=releaseGate:true;
   const projTone=released?"done":(!releaseOnTrack?"late":(gateGap!=null&&gateGap<=5?"warn":"ok"));
@@ -146,7 +146,7 @@ function computeStyle(s, cfg){
   const chaseCount={};
   if(!released) STAGES.forEach(st=>{ if(appl(st.key)&&!done(st.key)&&predDone(st)) chaseCount[st.owner]=(chaseCount[st.owner]||0)+1; });
   const chaseOwners=Object.entries(chaseCount).map(([owner,count])=>({owner,count}));
-  const frontierReady=(k)=>{ if(k==="ppSample") return fabricInHouse && (!s.fitReq || done("fitAppr")); if(k==="prodFile"){ const base = s.ppBypass ? fabricInHouse : done("ppAppr"); return base && (!s.fitReq || done("fitAppr")); } return true; };
+  const frontierReady=(k)=>{ if(k==="ppSample") return fabricInHouse && (!s.fitReq || done("fitAppr")); if(k==="prodFile"){ const base = (s.ppBypass || !s.ppNeeded) ? fabricInHouse : done("ppAppr"); return base && (!s.fitReq || done("fitAppr")); } return true; };
   const frontier=new Set(); Object.entries(BRANCH_STAGES).forEach(([bk,keys])=>{ const nx=keys.find(k=>applies(k)&&!done(k)); if(!nx) return; if(fabricInHouse && !s.ppBypass && (bk==="fit"||bk==="print")) return; if(frontierReady(nx)) frontier.add(nx); });
   const lastDoneIn=(keys)=>{ let best=null; keys.forEach(k=>{ const r=get(k); if(r&&r.done&&r.actual&&(!best||r.actual>best.d)) best={l:r.label,d:r.actual}; }); return best; };
   if(fitBranch) fitBranch.last=lastDoneIn(BRANCH_STAGES.fit);
@@ -1021,13 +1021,10 @@ function TodoView({ items, filter, setFilter, onJump }){
       <span style={{ fontSize:10, color:"var(--muted-2)" }}>Showing {shown.length} of {items.length}</span>
       {anyF && <button onClick={()=>{ setTf({}); setFilter&&setFilter({}); }} style={{ fontFamily:"inherit", fontSize:10, padding:"4px 9px", cursor:"pointer", border:"1px solid var(--danger)", background:"var(--surface)", color:"var(--danger)", fontWeight:700 }}>clear filters</button>}
     </div>
-    <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, color:"var(--danger)", margin:"4px 0 6px" }}>OVERDUE · {overdue.length}</div>
+    <div style={{ display:"flex", alignItems:"baseline", gap:12, margin:"4px 0 6px" }}><span style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13 }}>TO-DO · {shown.length}</span>{overdue.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"var(--danger)" }}>{overdue.length} overdue</span>}{upcoming.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"#7a560f" }}>{upcoming.length} upcoming</span>}</div>
     {head}
-    {overdue.length?overdue.map(row):<div style={{ fontSize:11, color:"var(--muted-1)", padding:"8px 12px" }}>Nothing overdue. 👍</div>}
-    <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, color:"#7a560f", margin:"20px 0 6px" }}>UPCOMING · {upcoming.length}</div>
-    {head}
-    {upcoming.length?upcoming.map(row):<div style={{ fontSize:11, color:"var(--muted-1)", padding:"8px 12px" }}>Nothing coming up in the watch windows.</div>}
-    <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:14 }}>Filter any column above · fabric grouped by unique colour (×N = styles needing it now) · click a row to jump to it in the Tracker.</div>
+    {shown.length?shown.map(row):<div style={{ fontSize:11, color:"var(--muted-1)", padding:"8px 12px" }}>Nothing due or coming up. 👍</div>}
+    <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:14 }}>One list, most urgent first (red = overdue · amber = upcoming) · filter any column above · fabric grouped by unique colour (×N = styles needing it now) · click a row to jump to it in the Tracker.</div>
   </div>);
 }
 
