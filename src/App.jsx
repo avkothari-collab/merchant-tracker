@@ -1257,31 +1257,27 @@ function OperationalDashboardView({ computed, todoItems, applyDrill, drillTodo }
       <span style={{ flex:1, height:16, background:"#f0ece3", position:"relative" }}><span style={{ position:"absolute", left:0, top:0, bottom:0, width:`${(n/maxV)*100}%`, background:colorFn(k,v) }}/></span>
       <span style={{ width:54, textAlign:"right", fontSize:10, fontWeight:700 }}>{fmtR?fmtR(v):n}</span>
     </button>); });
-  const dashSummary=[{ "Report Type":"Live", "Slice Styles":total, "On Track":onTrack, "At Risk":atRisk, "Delivery Risk":delRisk, "Released":released, "Overdue Activities":overdueAct }];
-  const dashStyleRows=fc.map(({s,c})=>({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Sample Fit":s.sampleFit||"", "Family":s.family||"", "Colour":s.colour||"", "Brand":s.brand||"", "Junior":s.owner||"", "Qty":s.qty||0, "Delivery":s.delivery||"", "Status":c.status||"", "Tone":c.tone||"", "Released":c.released?"YES":"", "% Done":c.pct, "Chase":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Next Pending":c.nextPending?c.nextPending.label:"", "Projected Release":c.projRelease?fmt(c.projRelease):"" }));
-  const dashBreakup=fc.map(({s,c})=>{ const nx=c.nextPending||null; const nxDue=nx?(nx.rev||nx.plan):null; const frontier=(c.frontier?[...c.frontier]:[]).map(k=>{ const r=(c.stages||[]).find(x=>x.key===k); return r?r.label:k; }).join(", "); return { "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Colour":s.colour||"", "Buyer / Brand":s.buyer||s.brand||"", "Junior":s.owner||"", "Delivery":s.delivery||"", "Overall Status":c.status||"", "Overall Tone":c.tone||"", "Released":c.released?"YES":"NO", "% Done":c.pct, "Next Pending Stage":nx?nx.label:"", "Next Pending Owner":nx?nx.owner:"", "Next Pending Due":nxDue?fmt(nxDue):"", "Next Pending Overdue?":(nxDue&&TODAY>nxDue)?"YES":"NO", "Actionable Frontier":frontier, "Chase Breakdown":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Fit Branch":c.fitBranch?c.fitBranch.txt:"", "Print Branch":c.printBranch?c.printBranch.txt:"", "Fabric Branch":c.fabricBranch?c.fabricBranch.txt:"", "PP Branch":c.ppBranch?c.ppBranch.txt:"", "Prod File Branch":c.prodFileBranch?c.prodFileBranch.txt:"", "Fabric IH Countdown":c.fabricCountdown?c.fabricCountdown.txt:"", "Projected Release":c.projRelease?fmt(c.projRelease):"", "Release Gate":c.releaseGate?fmt(c.releaseGate):"", "Float Days":c.float==null?"":c.float, "Idle Days":c.idle==null?"":c.idle }; });
-  const dashOwnerRows=owners.map(([owner,count])=>({ "Owner / Chase Label":owner, "Open Items":count }));
-  const dashActivityRows=acts.map(([activity,v])=>({ "Activity":activity, "Open Count":v.n, "Overdue Count":v.over, "Stage Key":v.key }));
-  const dashPhaseRows=Object.entries(phase).map(([phaseName,count])=>({ "Phase":phaseName, "Styles":count }));
+  const dashboardSummary=[{ "Report Type":"Current Dashboard", "Slice Styles":total, "On Track":onTrack, "At Risk":atRisk, "Delivery Risk":delRisk, "Released":released, "Overdue Activities":overdueAct }];
+  const dashboardStyleRows=fc.map(({s,c})=>({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Sample Fit":s.sampleFit||"", "Family":s.family||"", "Colour":s.colour||"", "Brand":s.brand||"", "Buyer":s.buyer||"", "Junior":s.owner||"", "Qty":s.qty||0, "Delivery":s.delivery||"", "Status":c.status||"", "Tone":c.tone||"", "Released":c.released?"YES":"", "% Done":c.pct, "Chase":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Next Pending":c.nextPending?c.nextPending.label:"", "Projected Release":c.projRelease?fmt(c.projRelease):"" }));
+  const dashboardBreakup=fc.map(({s,c})=>{ const nx=c.nextPending||null; const nxDue=nx?(nx.rev||nx.plan):null; const frontier=(c.frontier?[...c.frontier]:[]).map(k=>{ const r=(c.stages||[]).find(x=>x.key===k); return r?r.label:k; }).join(", "); return { "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Colour":s.colour||"", "Buyer / Brand":s.buyer||s.brand||"", "Junior":s.owner||"", "Delivery":s.delivery||"", "Overall Status":c.status||"", "Overall Tone":c.tone||"", "Released":c.released?"YES":"NO", "% Done":c.pct, "Next Pending Stage":nx?nx.label:"", "Next Pending Owner":nx?nx.owner:"", "Next Pending Due":nxDue?fmt(nxDue):"", "Next Pending Overdue?":(nxDue&&TODAY>nxDue)?"YES":"NO", "Actionable Frontier":frontier, "Chase Breakdown":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Fit Branch":c.fitBranch?c.fitBranch.txt:"", "Print Branch":c.printBranch?c.printBranch.txt:"", "Fabric Branch":c.fabricBranch?c.fabricBranch.txt:"", "PP Branch":c.ppBranch?c.ppBranch.txt:"", "Prod File Branch":c.prodFileBranch?c.prodFileBranch.txt:"", "Fabric IH Countdown":c.fabricCountdown?c.fabricCountdown.txt:"", "Projected Release":c.projRelease?fmt(c.projRelease):"", "Release Gate":c.releaseGate?fmt(c.releaseGate):"", "Float Days":c.float==null?"":c.float, "Idle Days":c.idle==null?"":c.idle }; });
+  const stageStartFor=(s,c,r)=>{ const st=STAGES.find(x=>x.key===r.key)||{}; const byKey={}; (c.stages||[]).forEach(x=>{ byKey[x.key]=x; }); if(r.key==="fabricIH") return (s.labDipReq && byKey.labAppr && byKey.labAppr.actual) ? byKey.labAppr.actual : parse(s.ordRec); if(st.pred==="__ord") return parse(s.ordRec); return byKey[st.pred] ? byKey[st.pred].actual : null; };
+  const stageState=(r)=> r.skipped?"Waived / skipped":(r.rejected?"Rejected":(r.rework?"Rework / resend":(r.actual?"Done":(r.rev?"Revised plan":"Pending"))));
+  const dashboardStageDetail=[];
+  const dashboardRevisedVsActual=[];
+  fc.forEach(({s,c})=>{ (c.stages||[]).forEach(r=>{ const st=STAGES.find(x=>x.key===r.key)||{}; const start=stageStartFor(s,c,r); const due=r.rev||r.plan; const delayDue=(due&&r.actual)?netWorkdays(due,r.actual):null; const delayPlan=(r.plan&&r.actual)?netWorkdays(r.plan,r.actual):null; const delayRev=(r.rev&&r.actual)?netWorkdays(r.rev,r.actual):null; const duration=(start&&r.actual)?Math.max(0,netWorkdays(start,r.actual)||0):null; const frontier=(c.frontier&&c.frontier.has(r.key)); dashboardStageDetail.push({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Colour":s.colour||"", "Buyer / Brand":s.buyer||s.brand||"", "Junior":s.owner||"", "Stage":r.label, "Branch":BRANCH_OF[r.key]||"", "Owner / Chase":r.owner||"", "State":stageState(r), "Actionable Frontier?":frontier?"YES":"NO", "Auto Plan Date":r.plan?fmt(r.plan):"", "Revised Date":r.rev?fmt(r.rev):"", "Actual Date":r.actual?fmt(r.actual):"", "Due Used":due?fmt(due):"", "Rejected Date":r.reject?fmt(r.reject):"", "Skipped Date":r.skip?fmt(r.skip):"", "Start Date Used":start?fmt(start):"", "Delay vs Due Days":delayDue==null?"":r1(delayDue), "Delay vs Auto Plan Days":delayPlan==null?"":r1(delayPlan), "Actual Duration Days":duration==null?"":r1(duration), "Overall Status":c.status||"" }); if(r.rev&&r.actual){ dashboardRevisedVsActual.push({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Stage":r.label, "Branch":BRANCH_OF[r.key]||"", "Auto Plan Date":r.plan?fmt(r.plan):"", "Revised Date":fmt(r.rev), "Actual Date":fmt(r.actual), "Actual vs Revised Days":r1(delayRev||0), "Accuracy":(delayRev===0?"On revised date":(delayRev>0?"Late vs revised":"Early vs revised")), "Included?":"YES - revised exists" }); } }); });
+  const ownerRows=owners.map(([owner,count])=>({ "Owner / Chase Label":owner, "Open Items":count }));
+  const activityRows=acts.map(([activity,v])=>({ "Activity":activity, "Open Count":v.n, "Overdue Count":v.over, "Stage Key":v.key }));
+  const phaseRows=Object.entries(phase).map(([phaseName,count])=>({ "Phase":phaseName, "Styles":count }));
   const dashboardSheets=[
-      { label:"Summary", data:dashSummary, modes:["summary","detailed"] },
-      { label:"Who to Chase", data:dashOwnerRows, modes:["summary","detailed"] },
-      { label:"Open Activities", data:dashActivityRows, modes:["summary","detailed"] },
-      { label:"Stuck Phases", data:dashPhaseRows, modes:["summary","detailed"] },
-      { label:"Styles in Slice", data:dashStyleRows, modes:["detailed"] },
-      { label:"Dashboard Breakup", data:dashBreakup, modes:["detailed"] },
+      { label:"Summary", data:dashboardSummary, modes:["summary","detailed"] },
+      { label:"Who to Chase", data:ownerRows, modes:["summary","detailed"] },
+      { label:"Open Activities", data:activityRows, modes:["summary","detailed"] },
+      { label:"Stuck Phases", data:phaseRows, modes:["summary","detailed"] },
+      { label:"Styles in Slice", data:dashboardStyleRows, modes:["detailed"] },
+      { label:"Dashboard Breakup", data:dashboardBreakup, modes:["detailed"] },
+      { label:"Style Stage Detail", data:dashboardStageDetail, modes:["detailed"] },
+      { label:"Revised vs Actual", data:dashboardRevisedVsActual, modes:["detailed"] },
   ];
-  const exportDashboardReport=(mode="detailed")=>{
-    const summary=[{ "Report Type":mode==="summary"?"Summary":"Detailed", "Slice Styles":total, "On Track":onTrack, "At Risk":atRisk, "Delivery Risk":delRisk, "Released":released, "Overdue Activities":overdueAct }];
-    const styleRows=fc.map(({s,c})=>({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Sample Fit":s.sampleFit||"", "Family":s.family||"", "Colour":s.colour||"", "Brand":s.brand||"", "Junior":s.owner||"", "Qty":s.qty||0, "Delivery":s.delivery||"", "Status":c.status||"", "Tone":c.tone||"", "Released":c.released?"YES":"", "% Done":c.pct, "Chase":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Next Pending":c.nextPending?c.nextPending.label:"", "Projected Release":c.projRelease?fmt(c.projRelease):"" }));
-    const dashboardBreakup=fc.map(({s,c})=>{ const nx=c.nextPending||null; const nxDue=nx?(nx.rev||nx.plan):null; const frontier=(c.frontier?[...c.frontier]:[]).map(k=>{ const r=(c.stages||[]).find(x=>x.key===k); return r?r.label:k; }).join(", "); return { "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Colour":s.colour||"", "Buyer / Brand":s.buyer||s.brand||"", "Junior":s.owner||"", "Delivery":s.delivery||"", "Overall Status":c.status||"", "Overall Tone":c.tone||"", "Released":c.released?"YES":"NO", "% Done":c.pct, "Next Pending Stage":nx?nx.label:"", "Next Pending Owner":nx?nx.owner:"", "Next Pending Due":nxDue?fmt(nxDue):"", "Next Pending Overdue?":(nxDue&&TODAY>nxDue)?"YES":"NO", "Actionable Frontier":frontier, "Chase Breakdown":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Fit Branch":c.fitBranch?c.fitBranch.txt:"", "Print Branch":c.printBranch?c.printBranch.txt:"", "Fabric Branch":c.fabricBranch?c.fabricBranch.txt:"", "PP Branch":c.ppBranch?c.ppBranch.txt:"", "Prod File Branch":c.prodFileBranch?c.prodFileBranch.txt:"", "Fabric IH Countdown":c.fabricCountdown?c.fabricCountdown.txt:"", "Projected Release":c.projRelease?fmt(c.projRelease):"", "Release Gate":c.releaseGate?fmt(c.releaseGate):"", "Float Days":c.float==null?"":c.float, "Idle Days":c.idle==null?"":c.idle }; });
-    const ownerRows=owners.map(([owner,count])=>({ "Owner / Chase Label":owner, "Open Items":count }));
-    const activityRows=acts.map(([activity,v])=>({ "Activity":activity, "Open Count":v.n, "Overdue Count":v.over, "Stage Key":v.key }));
-    const phaseRows=Object.entries(phase).map(([phaseName,count])=>({ "Phase":phaseName, "Styles":count }));
-    const selected=dashboardSheets.filter(x=>!x.modes || x.modes.includes(mode));
-    const wb=XLSX.utils.book_new(); appendReportSheets(wb,selected);
-    XLSX.writeFile(wb,"dashboard_"+mode+"_report_"+iso(TODAY)+".xlsx");
-  };
   return (<div style={{ padding:"16px 22px", maxWidth:1140 }}>
     {/* splice filter bar */}
     <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom:14 }}>
@@ -1386,7 +1382,8 @@ function ManagementDashboardView({ computed, todoItems, applyDrill, drillTodo })
       let start=predKey==="__ord"?parse(s.ordRec):(byKey[predKey]&&byKey[predKey].actual);
       if(r.key==="fabricIH") start = (s.labDipReq && byKey.labAppr && byKey.labAppr.actual) ? byKey.labAppr.actual : parse(s.ordRec);
       const duration=start?Math.max(0,netWorkdays(start,r.actual)||0):null;
-      delayRecords.push({ style:s.styleNo, order:s.orderNo, buyer:s.buyer||s.brand||"", owner:s.owner||"", stage:r.label, stageKey:r.key, dept:r.owner, delay, duration, actual:r.actual, due });
+      const delayPlan=(r.plan&&r.actual)?netWorkdays(r.plan,r.actual):null; const delayRevised=(r.rev&&r.actual)?netWorkdays(r.rev,r.actual):null;
+      delayRecords.push({ style:s.styleNo, order:s.orderNo, buyer:s.buyer||s.brand||"", owner:s.owner||"", stage:r.label, stageKey:r.key, dept:r.owner, delay, delayPlan, delayRevised, duration, actual:r.actual, due, plan:r.plan, revised:r.rev, start });
       addPerf(stagePerf,r.key,r.label,delay,duration,{ owner:r.owner });
       addPerf(deptPerf,r.owner,r.owner,delay,duration);
       if(r.owner==="Buyer") addPerf(buyerPerf,s.buyer||s.brand||"(No buyer)",s.buyer||s.brand||"(No buyer)",delay,duration);
@@ -1415,13 +1412,14 @@ function ManagementDashboardView({ computed, todoItems, applyDrill, drillTodo })
   const goStageOpen=(key)=>applyDrill({ status:"All", activity:key, colFilters:spliceCols(), search:spliceSearch() });
   const anyDf=Object.values(df).some(Boolean);
 
-  const summary=[{ "Report Type":"Live", "Styles in Slice":total, "On Track":onTrack, "At Risk":atRisk, "Delivery Risk":delRisk, "Released":released, "Release %":completionPct, "Overdue Open Activities":overdueAct, "Completed Stage Entries":actualDone, "Late Completed Entries":lateDone, "Avg Delay Days":r1(avgDelay), "Avg Actual Time Days":r1(avgDuration) }];
+  const mgmtSummary=[{ "Report Type":"Management", "Styles in Slice":total, "On Track":onTrack, "At Risk":atRisk, "Delivery Risk":delRisk, "Released":released, "Release %":completionPct, "Overdue Open Activities":overdueAct, "Completed Stage Entries":actualDone, "Late Completed Entries":lateDone, "Avg Delay Days":r1(avgDelay), "Avg Actual Time Days":r1(avgDuration) }];
   const checks=[
-    { Check:"Status partition", Formula:"On Track + At Risk + Released should equal Styles in Slice", Value:onTrack+atRisk+released, Expected:total, Result:(onTrack+atRisk+released)===total?"OK":"CHECK" },
-    { Check:"Open activity overdue", Formula:"Sum overdue counts from Open Activities", Value:overdueAct, Expected:acts.reduce((a,[,v])=>a+v.over,0), Result:overdueAct===acts.reduce((a,[,v])=>a+v.over,0)?"OK":"CHECK" },
-    { Check:"Completed duration denominator", Formula:"Avg actual time divides only records with known start date", Value:durationDone, Expected:"duration records", Result:"OK" },
-    { Check:"Slice rows", Formula:"All management tables use filtered slice", Value:fc.length, Expected:total, Result:"OK" }
-  ];
+      { Check:"Status partition", Formula:"On Track + At Risk + Released should equal Styles in Slice", Value:onTrack+atRisk+released, Expected:total, Result:(onTrack+atRisk+released)===total?"OK":"CHECK" },
+      { Check:"Open activity overdue", Formula:"Sum overdue counts from Open Activities", Value:overdueAct, Expected:acts.reduce((a,[,v])=>a+v.over,0), Result:overdueAct===acts.reduce((a,[,v])=>a+v.over,0)?"OK":"CHECK" },
+      { Check:"Completed duration denominator", Formula:"Avg actual time divides only records with known start date", Value:durationDone, Expected:"duration records", Result:"OK" },
+      { Check:"Revised vs actual denominator", Formula:"Revised accuracy includes only rows where revised date exists and actual date exists", Value:delayRecords.filter(r=>r.revised&&r.actual).length, Expected:"revised+actual records", Result:"OK" },
+      { Check:"Slice rows", Formula:"All management tables use filtered slice", Value:fc.length, Expected:total, Result:"OK" }
+    ];
   const currentStyles=fc.map(({s,c})=>({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Fit":s.sampleFit||"", "Family":s.family||"", "Colour":s.colour||"", "Brand":s.brand||"", "Buyer":s.buyer||"", "Junior":s.owner||"", "Qty":s.qty||0, "Delivery":s.delivery||"", "Status":c.status||"", "Tone":c.tone||"", "Released":c.released?"YES":"", "% Done":c.pct, "Chase":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Next Pending":c.nextPending?c.nextPending.label:"", "Projected Release":c.projRelease?fmt(c.projRelease):"" }));
   const stageData=stageRows.map(r=>({"Stage":r.label,"Owner":r.owner||"","Completed":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Duration Days":r1(avg(r.durSum,r.durN)),"Duration Records":r.durN,"Worst Delay Days":r1(r.maxDelay)}));
   const dept=deptRows.map(r=>({"Department":r.label,"Completed":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Duration Days":r1(avg(r.durSum,r.durN)),"Duration Records":r.durN,"Worst Delay Days":r1(r.maxDelay)}));
@@ -1429,10 +1427,10 @@ function ManagementDashboardView({ computed, todoItems, applyDrill, drillTodo })
   const ownerData=ownerRows.map(r=>({"Owner":r.label,"Completed Entries":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Time Days":r1(avg(r.durSum,r.durN)),"Worst Delay Days":r1(r.maxDelay)}));
   const brandData=brandRows.map(r=>({"Buyer / Brand":r.label,"Completed Entries":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Time Days":r1(avg(r.durSum,r.durN)),"Worst Delay Days":r1(r.maxDelay)}));
   const delayData=worstDelays.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Department":r.dept,"Delay Days":r1(r.delay),"Duration Days":r.duration==null?"":r1(r.duration),"Due":fmt(r.due),"Actual":fmt(r.actual)}));
-  const calcBreakup=delayRecords.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Stage Key":r.stageKey,"Department":r.dept,"Due Date":fmt(r.due),"Actual Date":fmt(r.actual),"Delay Days":r1(r.delay),"Duration Days":r.duration==null?"":r1(r.duration),"Included in Avg Delay":"YES","Included in Avg Actual Time":r.duration==null?"NO - start date missing":"YES"}));
-
+  const calcBreakup=delayRecords.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Stage Key":r.stageKey,"Department":r.dept,"Auto Plan Date":r.plan?fmt(r.plan):"","Revised Date":r.revised?fmt(r.revised):"","Due Date Used":fmt(r.due),"Actual Date":fmt(r.actual),"Start Date Used":r.start?fmt(r.start):"","Delay vs Due Days":r1(r.delay),"Delay vs Auto Plan Days":r.delayPlan==null?"":r1(r.delayPlan),"Actual vs Revised Days":r.delayRevised==null?"":r1(r.delayRevised),"Duration Days":r.duration==null?"":r1(r.duration),"Included in Avg Delay":"YES","Included in Avg Actual Time":r.duration==null?"NO - start date missing":"YES","Included in Revised Accuracy":r.delayRevised==null?"NO - no revised+actual":"YES"}));
+  const revisedActualData=delayRecords.filter(r=>r.delayRevised!=null).map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Department":r.dept,"Auto Plan Date":r.plan?fmt(r.plan):"","Revised Date":fmt(r.revised),"Actual Date":fmt(r.actual),"Actual vs Revised Days":r1(r.delayRevised),"Accuracy":r.delayRevised===0?"On revised date":(r.delayRevised>0?"Late vs revised":"Early vs revised")}));
   const analyticsSheets=[
-      { label:"Summary", data:summary, modes:["summary","detailed"] },
+      { label:"Summary", data:mgmtSummary, modes:["summary","detailed"] },
       { label:"Calculation Checks", data:checks, modes:["summary","detailed"] },
       { label:"Stage Performance", data:stageData, modes:["summary","detailed"] },
       { label:"Department Performance", data:dept, modes:["summary","detailed"] },
@@ -1442,27 +1440,8 @@ function ManagementDashboardView({ computed, todoItems, applyDrill, drillTodo })
       { label:"Current Slice", data:currentStyles, modes:["detailed"] },
       { label:"Worst Delays", data:delayData, modes:["detailed"] },
       { label:"Calculation Breakup", data:calcBreakup, modes:["detailed"] },
+      { label:"Revised vs Actual", data:revisedActualData, modes:["detailed"] },
   ];
-  const exportAnalytics=(mode="detailed")=>{
-    const summary=[{ "Report Type":mode==="summary"?"Summary":"Detailed", "Styles in Slice":total, "On Track":onTrack, "At Risk":atRisk, "Delivery Risk":delRisk, "Released":released, "Release %":completionPct, "Overdue Open Activities":overdueAct, "Completed Stage Entries":actualDone, "Late Completed Entries":lateDone, "Avg Delay Days":r1(avgDelay), "Avg Actual Time Days":r1(avgDuration) }];
-    const checks=[
-      { Check:"Status partition", Formula:"On Track + At Risk + Released should equal Styles in Slice", Value:onTrack+atRisk+released, Expected:total, Result:(onTrack+atRisk+released)===total?"OK":"CHECK" },
-      { Check:"Open activity overdue", Formula:"Sum overdue counts from Open Activities", Value:overdueAct, Expected:acts.reduce((a,[,v])=>a+v.over,0), Result:overdueAct===acts.reduce((a,[,v])=>a+v.over,0)?"OK":"CHECK" },
-      { Check:"Completed duration denominator", Formula:"Avg actual time divides only records with known start date", Value:durationDone, Expected:"duration records", Result:"OK" },
-      { Check:"Slice rows", Formula:"All management tables use filtered slice", Value:fc.length, Expected:total, Result:"OK" }
-    ];
-    const currentStyles=fc.map(({s,c})=>({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Fit":s.sampleFit||"", "Family":s.family||"", "Colour":s.colour||"", "Brand":s.brand||"", "Buyer":s.buyer||"", "Junior":s.owner||"", "Qty":s.qty||0, "Delivery":s.delivery||"", "Status":c.status||"", "Tone":c.tone||"", "Released":c.released?"YES":"", "% Done":c.pct, "Chase":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Next Pending":c.nextPending?c.nextPending.label:"", "Projected Release":c.projRelease?fmt(c.projRelease):"" }));
-    const stageData=stageRows.map(r=>({"Stage":r.label,"Owner":r.owner||"","Completed":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Duration Days":r1(avg(r.durSum,r.durN)),"Duration Records":r.durN,"Worst Delay Days":r1(r.maxDelay)}));
-    const dept=deptRows.map(r=>({"Department":r.label,"Completed":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Duration Days":r1(avg(r.durSum,r.durN)),"Duration Records":r.durN,"Worst Delay Days":r1(r.maxDelay)}));
-    const buyerData=buyerRows.map(r=>({"Buyer / Brand":r.label,"Approvals":r.n,"Late Count":r.lateN,"Avg Approval Time Days":r1(avg(r.durSum,r.durN)),"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Worst Delay Days":r1(r.maxDelay)}));
-    const ownerData=ownerRows.map(r=>({"Owner":r.label,"Completed Entries":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Time Days":r1(avg(r.durSum,r.durN)),"Worst Delay Days":r1(r.maxDelay)}));
-    const brandData=brandRows.map(r=>({"Buyer / Brand":r.label,"Completed Entries":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Time Days":r1(avg(r.durSum,r.durN)),"Worst Delay Days":r1(r.maxDelay)}));
-    const delayData=worstDelays.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Department":r.dept,"Delay Days":r1(r.delay),"Duration Days":r.duration==null?"":r1(r.duration),"Due":fmt(r.due),"Actual":fmt(r.actual)}));
-    const calcBreakup=delayRecords.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Stage Key":r.stageKey,"Department":r.dept,"Due Date":fmt(r.due),"Actual Date":fmt(r.actual),"Delay Days":r1(r.delay),"Duration Days":r.duration==null?"":r1(r.duration),"Included in Avg Delay":"YES","Included in Avg Actual Time":r.duration==null?"NO - start date missing":"YES"}));
-    const selected=analyticsSheets.filter(x=>!x.modes || x.modes.includes(mode));
-    const wb=XLSX.utils.book_new(); appendReportSheets(wb,selected);
-    XLSX.writeFile(wb,"management_"+mode+"_analytics_"+iso(TODAY)+".xlsx");
-  };
 
   const card=(label,val,color,onClick,sub)=>(<button onClick={onClick} disabled={!onClick} style={{ flex:1, minWidth:136, textAlign:"left", background:"var(--surface)", border:"1px solid var(--line-2)", borderRadius:12, padding:"14px 16px", cursor:onClick?"pointer":"default", fontFamily:"inherit" }}><div style={{ fontSize:28, fontWeight:800, fontFamily:"'Archivo',sans-serif", color, lineHeight:1 }}>{val}</div><div style={{ fontSize:10, color:"var(--muted-2)", marginTop:5, letterSpacing:0.5, textTransform:"uppercase" }}>{label}{onClick?" ›":""}</div>{sub&&<div style={{ fontSize:9, color:"var(--muted-1)", marginTop:4 }}>{sub}</div>}</button>);
   const sel=(label,val,opts,onChange)=>(<select value={val||""} onChange={e=>onChange(e.target.value||undefined)} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 8px", border:"1px solid var(--line-2)", borderRadius:8, background:val?"var(--accent-tint)":"var(--surface)", maxWidth:150 }}><option value="">{label}: all</option>{opts.map(o=>(<option key={o} value={o}>{o}</option>))}</select>);
@@ -1543,17 +1522,11 @@ function TodoView({ items, filter, setFilter, onJump }){
     <span style={{ width:COLW.date, fontSize:9, fontWeight:700, textTransform:"uppercase", color:"#8a857a" }}>Plan Date</span>
     <span style={{ flex:1, fontSize:9, fontWeight:700, textTransform:"uppercase", color:"#8a857a" }}>Days Late / Left</span>
   </div>);
-  const todoData=shown.map(t=>({ "Priority":t.overdue?"Overdue":"Upcoming", "Order No":t.orderNo||"", "Style / Colour":t.isColour?String(t.colour||""):t.styleNo, "Grouped Fabric Count":t.isColour?(t.count||0):"", "Junior":t.junior||"", "Activity":t.activity||"", "Branch":t.branch||"", "Owner / Chase":t.owner||"", "Plan Date":t.exp?fmt(t.exp):"", "Days Late / Left":t.overdue?Math.abs(t.du):t.du, "Style ID":t.id, "Stage Key":t.key }));
-  const todoSummary=[{ "Report Type":"Live", "Shown Items":shown.length, "Total Items":items.length, "Overdue":overdue.length, "Upcoming":upcoming.length }];
-  const todoByOwner={}; const todoByActivity={};
-  shown.forEach(t=>{ todoByOwner[t.owner||"(blank)"]=(todoByOwner[t.owner||"(blank)"]||0)+1; todoByActivity[t.activity||"(blank)"]=(todoByActivity[t.activity||"(blank)"]||0)+1; });
-  const todoOwnerRows=Object.entries(todoByOwner).map(([k,v])=>({"Owner / Chase":k,"Items":v}));
-  const todoActivityRows=Object.entries(todoByActivity).map(([k,v])=>({"Activity":k,"Items":v}));
   const todoSheets=[
-      { label:"Summary", data:todoSummary, modes:["summary","detailed"] },
-      { label:"By Owner", data:todoOwnerRows, modes:["summary","detailed"] },
-      { label:"By Activity", data:todoActivityRows, modes:["summary","detailed"] },
-      { label:"To-Do Items", data:todoData, modes:["detailed"] },
+      { label:"Summary", data:summary, modes:["summary","detailed"] },
+      { label:"By Owner", data:ownerRows, modes:["summary","detailed"] },
+      { label:"By Activity", data:activityRows, modes:["summary","detailed"] },
+      { label:"To-Do Items", data:data, modes:["detailed"] },
   ];
   const exportTodoReport=(mode="detailed")=>{
     const data=shown.map(t=>({ "Priority":t.overdue?"Overdue":"Upcoming", "Order No":t.orderNo||"", "Style / Colour":t.isColour?String(t.colour||""):t.styleNo, "Grouped Fabric Count":t.isColour?(t.count||0):"", "Junior":t.junior||"", "Activity":t.activity||"", "Branch":t.branch||"", "Owner / Chase":t.owner||"", "Plan Date":t.exp?fmt(t.exp):"", "Days Late / Left":t.overdue?Math.abs(t.du):t.du, "Style ID":t.id, "Stage Key":t.key }));
