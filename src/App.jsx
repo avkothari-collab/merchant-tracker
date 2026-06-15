@@ -285,7 +285,16 @@ const safeSheetName=(name)=>String(name||"Sheet").slice(0,31).replace(/[\\/?*\[\
 const safeFilePart=(name)=>String(name||"report").toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"").slice(0,60)||"report";
 const appendOneSheet=(wb,label,data)=>{
   const rows=Array.isArray(data)?data:[];
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.length?rows:[{"No data":""}]), safeSheetName(label));
+  const sheetRows=rows.length?rows:[{"No data":""}];
+  const ws=XLSX.utils.json_to_sheet(sheetRows);
+  const headers=Object.keys(sheetRows[0]||{});
+  ws["!cols"]=headers.map(h=>{
+    let max=String(h||"").length;
+    sheetRows.slice(0,400).forEach(r=>{ const v=r&&r[h]!=null?String(r[h]):""; max=Math.max(max, Math.min(60, v.length)); });
+    return { wch: Math.max(10, Math.min(42, max+2)) };
+  });
+  if(headers.length && sheetRows.length){ ws["!autofilter"]={ ref:XLSX.utils.encode_range({ s:{r:0,c:0}, e:{r:sheetRows.length,c:headers.length-1} }) }; }
+  XLSX.utils.book_append_sheet(wb, ws, safeSheetName(label));
 };
 const appendReportSheets=(wb,selected,mode="summary")=>{
   (selected||[]).forEach((sh,idx)=>{
@@ -1442,19 +1451,42 @@ function ManagementDashboardView({ computed, todoItems, applyDrill, drillTodo })
   const brandData=brandRows.map(r=>({"Buyer / Brand":r.label,"Completed Entries":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Time Days":r1(avg(r.durSum,r.durN)),"Worst Delay Days":r1(r.maxDelay)}));
   const delayData=worstDelays.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Department":r.dept,"Delay Days":r1(r.delay),"Duration Days":r.duration==null?"":r1(r.duration),"Due":fmt(r.due),"Actual":fmt(r.actual)}));
   const calcBreakup=delayRecords.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Stage Key":r.stageKey,"Department":r.dept,"Auto Plan Date":r.plan?fmt(r.plan):"","Revised Date":r.revised?fmt(r.revised):"","Due Date Used":fmt(r.due),"Actual Date":fmt(r.actual),"Start Date Used":r.start?fmt(r.start):"","Delay vs Due Days":r1(r.delay),"Delay vs Auto Plan Days":r.delayPlan==null?"":r1(r.delayPlan),"Actual vs Revised Days":r.delayRevised==null?"":r1(r.delayRevised),"Duration Days":r.duration==null?"":r1(r.duration),"Included in Avg Delay":"YES","Included in Avg Actual Time":r.duration==null?"NO - start date missing":"YES","Included in Revised Accuracy":r.delayRevised==null?"NO - no revised+actual":"YES"}));
-  const revisedActualData=delayRecords.filter(r=>r.delayRevised!=null).map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Department":r.dept,"Auto Plan Date":r.plan?fmt(r.plan):"","Revised Date":fmt(r.revised),"Actual Date":fmt(r.actual),"Actual vs Revised Days":r1(r.delayRevised),"Accuracy":r.delayRevised===0?"On revised date":(r.delayRevised>0?"Late vs revised":"Early vs revised")}));
-  const buyerApprovalDetail=calcBreakup.filter(r=>["fitAppr","artAppr","soAppr","labAppr","ppAppr"].includes(r["Stage Key"]));
+  const explainDelay=(r)=>{ const d=r1(r.delay); const dueKind=r.revised?"revised date":"auto plan date"; if(d>0) return `Actual was ${fmtDays(d)} late versus the ${dueKind}.`; if(d<0) return `Actual was ${fmtDays(Math.abs(d))} early versus the ${dueKind}.`; return `Actual matched the ${dueKind}.`; };
+  const actionFor=(r)=>{ const d=r1(r.delay); if(d>0) return "Review this style/stage with the responsible owner; use comments/history for reason."; if(r.delayRevised!=null && r.delayRevised>0) return "Revised date was also missed; review planning accuracy."; return "No delay action needed."; };
+  const managementDetailRows=delayRecords.map(r=>({
+    "Style No":r.style||"", "Order No":r.order||"", "Buyer / Brand":r.buyer||"", "Junior / Owner":r.owner||"",
+    "Stage / Activity":r.stage||"", "Department Responsible":r.dept||"",
+    "Auto Plan":r.plan?fmt(r.plan):"", "Revised Plan":r.revised?fmt(r.revised):"", "Due Used":r.due?fmt(r.due):"", "Actual Done":r.actual?fmt(r.actual):"", "Start Used":r.start?fmt(r.start):"",
+    "Actual Time Taken":r.duration==null?"Start date missing":fmtDays(r.duration),
+    "Delay vs Due":fmtDays(r.delay), "Delay vs Original Plan":r.delayPlan==null?"":fmtDays(r.delayPlan), "Actual vs Revised":r.delayRevised==null?"No revised plan":fmtDays(r.delayRevised),
+    "Result":r.delay>0?"Late":(r.delay<0?"Early":"On time"),
+    "How this number was calculated":`${r.stage}: due used = ${r.revised?"revised plan":"auto plan"}; delay = actual done - due used, counted in working days excluding Sundays.`,
+    "Management Reading":explainDelay(r),
+    "Suggested Action":actionFor(r)
+  }));
+  const revisedActualData=delayRecords.filter(r=>r.delayRevised!=null).map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Department":r.dept,"Auto Plan Date":r.plan?fmt(r.plan):"","Revised Date":fmt(r.revised),"Actual Date":fmt(r.actual),"Actual vs Revised Days":r1(r.delayRevised),"Accuracy":r.delayRevised===0?"On revised date":(r.delayRevised>0?"Late vs revised":"Early vs revised"),"Management Reading":r.delayRevised===0?"Revised plan was accurate.":(r.delayRevised>0?`Actual was ${fmtDays(r.delayRevised)} later than revised plan.`:`Actual was ${fmtDays(Math.abs(r.delayRevised))} earlier than revised plan.`)}));
+  const buyerApprovalDetail=managementDetailRows.filter(r=>["Fit Appr","Art Appr","S/O Appr","Lab Dip Appr","PP Appr"].includes(r["Stage / Activity"]));
+  const stageDetailRows=managementDetailRows;
+  const deptDetailRows=managementDetailRows;
+  const ownerDetailRows=managementDetailRows;
+  const brandDetailRows=managementDetailRows;
+  const styleAgg={};
+  delayRecords.forEach(r=>{ const key=(r.order||"")+"|"+(r.style||""); const o=styleAgg[key]=styleAgg[key]||{ order:r.order, style:r.style, buyer:r.buyer, owner:r.owner, completed:0, late:0, delaySum:0, worstDelay:-999, worstStage:"", stages:[] }; o.completed++; if(r.delay>0) o.late++; o.delaySum+=r.delay; if(r.delay>o.worstDelay){ o.worstDelay=r.delay; o.worstStage=r.stage; } o.stages.push(r.stage+" "+fmtDays(r.delay)); });
+  const worstStyleData=Object.values(styleAgg).sort((a,b)=>b.delaySum-a.delaySum).slice(0,25).map(o=>({"Style No":o.style,"Order No":o.order,"Buyer / Brand":o.buyer,"Junior / Owner":o.owner,"Completed Stage Count":o.completed,"Late Stage Count":o.late,"Total Delay Days":fmtDays(o.delaySum),"Worst Stage":o.worstStage,"Worst Stage Delay":fmtDays(o.worstDelay),"Management Reading":`${o.style} has ${o.late} late completed stage(s), total delay ${fmtDays(o.delaySum)} across completed stages.`}));
+  const worstStyleDetail=managementDetailRows.filter(r=>{ const key=(r["Order No"]||"")+"|"+(r["Style No"]||""); return Object.values(styleAgg).sort((a,b)=>b.delaySum-a.delaySum).slice(0,25).some(o=>(o.order||"")+"|"+(o.style||"")===key); });
+  const lateDetailRows=managementDetailRows.filter(r=>String(r["Result"])==="Late");
   const analyticsSheets=[
-      { label:"Summary", data:mgmtSummary, detailData:calcBreakup, modes:["summary","detailed"] },
+      { label:"Summary", data:mgmtSummary, detailData:managementDetailRows, modes:["summary","detailed"] },
       { label:"Calculation Checks", data:checks, modes:["summary","detailed"] },
-      { label:"Stage Performance", data:stageData, detailData:calcBreakup, modes:["summary","detailed"] },
-      { label:"Department Performance", data:dept, detailData:calcBreakup, modes:["summary","detailed"] },
+      { label:"Stage Performance", data:stageData, detailData:stageDetailRows, modes:["summary","detailed"] },
+      { label:"Department Performance", data:dept, detailData:deptDetailRows, modes:["summary","detailed"] },
       { label:"Buyer Approval", data:buyerData, detailData:buyerApprovalDetail, modes:["summary","detailed"] },
-      { label:"Owner Delays", data:ownerData, detailData:calcBreakup, modes:["summary","detailed"] },
-      { label:"Buyer Brand Delays", data:brandData, detailData:calcBreakup, modes:["summary","detailed"] },
-      { label:"Current Slice", data:currentStyles, detailData:calcBreakup, modes:["detailed"] },
-      { label:"Worst Delays", data:delayData, detailData:calcBreakup.filter(r=>Number(r["Delay vs Due Days"]||0)>0), modes:["detailed"] },
-      { label:"Calculation Breakup", data:calcBreakup, modes:["detailed"] },
+      { label:"Owner Delays", data:ownerData, detailData:ownerDetailRows, modes:["summary","detailed"] },
+      { label:"Buyer Brand Delays", data:brandData, detailData:brandDetailRows, modes:["summary","detailed"] },
+      { label:"Current Slice", data:currentStyles, detailData:managementDetailRows, modes:["detailed"] },
+      { label:"Worst Delays", data:delayData, detailData:lateDetailRows, modes:["detailed"] },
+      { label:"Worst Performing Styles", data:worstStyleData, detailData:worstStyleDetail, modes:["summary","detailed"] },
+      { label:"Calculation Breakup", data:managementDetailRows, modes:["detailed"] },
       { label:"Revised vs Actual", data:revisedActualData, modes:["detailed"] },
   ];
 
