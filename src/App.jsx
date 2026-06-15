@@ -63,6 +63,11 @@ const letterToIndex=(s)=>{ s=String(s||"").toUpperCase(); if(!/^[A-Z]+$/.test(s)
 const _now=new Date(); const TODAY=new Date(_now.getFullYear(),_now.getMonth(),_now.getDate()); // live current date (local midnight)
 const perfNow=()=> (typeof performance!=="undefined"&&performance.now)?performance.now():Date.now();
 const lc=(v)=>String(v==null?"":v).toLowerCase();
+
+const styleComputeSignature=(s)=> JSON.stringify({
+  id:s.id, orderNo:s.orderNo||"", styleNo:s.styleNo||"", sampleFit:s.sampleFit||"", family:s.family||"", colour:s.colour||"", brand:s.brand||"", buyer:s.buyer||"", fabricType:s.fabricType||"", owner:s.owner||"", setId:s.setId||"", setRole:s.setRole||"", age:s.age||"", qty:Number(s.qty)||0, ordRec:s.ordRec||"", delivery:s.delivery||"", fitReq:!!s.fitReq, printReq:!!s.printReq, soReq:!!s.soReq, ppBypass:!!s.ppBypass, labDipReq:!!s.labDipReq, ppNeeded:!!s.ppNeeded, archived:!!s.archived, remarks:s.remarks||"", actuals:s.actuals||{}, revs:s.revs||{}, rejects:s.rejects||{}, skips:s.skips||{}
+});
+
 const buildSearchIndex=(s,c)=>{
   const chase=(c&&c.chaseOwners?c.chaseOwners:[]).map(o=>o.owner).join(" ");
   const byCol={ styleNo:lc(s.styleNo), orderNo:lc(s.orderNo), sampleFit:lc(s.sampleFit), family:lc(s.family), colour:lc(s.colour), color:lc(s.colour), brand:lc(s.brand), buyer:lc(s.buyer), fabricType:lc(s.fabricType), owner:lc(s.owner), remarks:lc(s.remarks), age:lc(s.age), setRole:lc(s.setRole), chase:lc(chase) };
@@ -639,7 +644,11 @@ function MerchTracker({ me, onSignOut }){
   const computeCacheRef=useRef(new Map());
   // Keep compute invalidation tight: changing To-Do watch windows or escalation rules should not recompute every style.
   const cfgComputeKey=useMemo(()=>JSON.stringify({ leads:cfg.leads, stageOwners:cfg.stageOwners, rework:cfg.rework, fabricCutoff:cfg.fabricCutoff, relGate:cfg.relGate }),[cfg.leads,cfg.stageOwners,cfg.rework,cfg.fabricCutoff,cfg.relGate]);
-  const computed=useMemo(()=>{ const t=perfNow(); const cache=computeCacheRef.current; const liveIds=new Set(); let hits=0, recomputed=0; const out=styles.map(s=>{ liveIds.add(s.id); const old=cache.get(s.id); if(old && old.sRef===s && old.cfgKey===cfgComputeKey){ hits++; return old.out; } const c=computeStyle(s,cfg); const item={s,c,idx:buildSearchIndex(s,c)}; cache.set(s.id,{ sRef:s, cfgKey:cfgComputeKey, out:item }); recomputed++; return item; }); for(const id of cache.keys()){ if(!liveIds.has(id)) cache.delete(id); } const ms=Math.round((perfNow()-t)*10)/10; const hist=pushPerfSample(perfRef.current.samples,ms); perfRef.current.computeMs=ms; perfRef.current.samples=hist.samples; perfRef.current.p95Ms=hist.p95; perfRef.current.styles=styles.length; perfRef.current.cacheHits=hits; perfRef.current.recomputed=recomputed; return out; },[styles,cfg,cfgComputeKey]);
+  // Live recompute guard: dashboards/management/export must never read stale computed TNA.
+  // The old cache only checked the style object reference; stage/date edits and realtime patches can leave nested data looking unchanged to a reference check.
+  // This signature includes actual/revised/reject/skip dates and style master fields, so Lab Dip Approval etc. refresh every live report immediately.
+  const stylesComputeKey=useMemo(()=>styles.map(styleComputeSignature).join("||"),[styles]);
+  const computed=useMemo(()=>{ const t=perfNow(); const cache=computeCacheRef.current; const liveIds=new Set(); let hits=0, recomputed=0; const out=styles.map(s=>{ liveIds.add(s.id); const sig=styleComputeSignature(s); const old=cache.get(s.id); if(old && old.sig===sig && old.cfgKey===cfgComputeKey){ hits++; return old.out; } const c=computeStyle(s,cfg); const item={s,c,idx:buildSearchIndex(s,c)}; cache.set(s.id,{ sig, cfgKey:cfgComputeKey, out:item }); recomputed++; return item; }); for(const id of cache.keys()){ if(!liveIds.has(id)) cache.delete(id); } const ms=Math.round((perfNow()-t)*10)/10; const hist=pushPerfSample(perfRef.current.samples,ms); perfRef.current.computeMs=ms; perfRef.current.samples=hist.samples; perfRef.current.p95Ms=hist.p95; perfRef.current.styles=styles.length; perfRef.current.cacheHits=hits; perfRef.current.recomputed=recomputed; return out; },[styles,stylesComputeKey,cfg,cfgComputeKey]);
   const chaseOwnerOptions=useMemo(()=>["All", ...Array.from(new Set([...STAGES.map(st=>(cfg.stageOwners&&cfg.stageOwners[st.key])||DEFAULT_STAGE_OWNERS[st.key]||st.owner), ...CHASE_LABELS])).filter(Boolean)], [cfg]);
   const todoItems=useMemo(()=>{
     const enrich=(item)=>{
