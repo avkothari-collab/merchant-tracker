@@ -785,14 +785,6 @@ function MerchTracker({ me, onSignOut }){
   const toneRank={ late:0, warn:1, ok:2, done:3, na:4 };
   const fitNum=(s)=>{ const m=String(s.sampleFit).match(/\d+/); return m?Number(m[0]):Infinity; };
   const sortVal=(col,{s,c})=>{ switch(col){ case "__style": return s.styleNo.toLowerCase(); case "orderNo": return (s.orderNo||"~").toLowerCase(); case "sampleFit": return fitNum(s); case "family": return s.family.toLowerCase(); case "colour": return s.colour.toLowerCase(); case "owner": return (s.owner||"").toLowerCase(); case "setId": return (s.setId||"~").toLowerCase(); case "setRole": return (s.setRole||"").toLowerCase(); case "qty": return s.qty; case "ordRec": return s.ordRec?new Date(s.ordRec).getTime():Infinity; case "delivery": return s.delivery?new Date(s.delivery).getTime():Infinity; case "overall": return toneRank[c.tone]; case "fit": return toneRank[c.fitBranch.tone]; case "print": return toneRank[c.printBranch.tone]; case "fabric": return toneRank[c.fabricBranch.tone]; case "pp": return toneRank[c.ppBranch.tone]; case "prod": return toneRank[c.prodFileBranch.tone]; case "fabricCD": return c.fabricCountdown.n==null?Infinity:c.fabricCountdown.n; case "proj": return c.projRelease?c.projRelease.getTime():Infinity; case "pct": return c.pct; case "chase": return (c.chaseOwners||[]).length; case "float": return c.float==null?Infinity:c.float; case "idle": return c.idle==null?-1:c.idle; case "remarks": return (s.remarks||"~").toLowerCase(); default: { const a=s.actuals[col]; return a?new Date(a).getTime():Infinity; } } };
-  const rows=useMemo(()=>{ const t=perfNow(); const out=!sort.col ? filtered : [...filtered].sort((A,B)=>{ const a=sortVal(sort.col,A), b=sortVal(sort.col,B); return a<b?-sort.dir:a>b?sort.dir:0; }); perfRef.current.rowMs=Math.round((perfNow()-t)*10)/10; perfRef.current.rows=out.length; perfRef.current.alerts=[perfRef.current.p95Ms>800?"P95 >800ms":"", perfRef.current.computeMs>300?"compute slow":"", perfRef.current.filterMs>200?"filter slow":"", perfRef.current.rowMs>200?"sort slow":"", out.length>900?"large visible rows":"", styles.length>1000?"1000+ active styles":"", perfRef.current.deferred?"search catching up":""].filter(Boolean); return out; },[filtered,sort,styles.length]);
-  const peerEditingList=peers.filter(p=>p.editing).map(p=>({ ...p, ref: (()=>{ const loc=p.editing; if(!loc) return ""; const ri=rows.findIndex(r=>r.s.id===loc.id); const ci=navCols.indexOf(loc.col); return (ci>=0&&ri>=0)?(colLetter(ci)+(ri+1)):""; })() }));
-  const [renderLimit,setRenderLimit]=useState(()=>{ try{ const v=parseInt(localStorage.getItem("mt_render_limit"),10); return (isFinite(v)&&v>=300&&v<=5000)?v:900; }catch(e){ return 900; } });
-  useEffect(()=>{ try{ localStorage.setItem("mt_render_limit",String(renderLimit)); }catch(e){} },[renderLimit]);
-  useEffect(()=>{ if(rows.length<=renderLimit && renderLimit>900) setRenderLimit(900); },[rows.length,renderLimit]);
-  const renderRows=useMemo(()=>{ const out=rows.length>renderLimit?rows.slice(0,renderLimit):rows; perfRef.current.rendered=out.length; return out; },[rows,renderLimit]);
-  const clickHeader=(col)=>{ finishEditing(); setSort(p=> p.col===col?{col,dir:-p.dir}:{col,dir:1}); };
-
   const visInfo=INFO_COLS.filter(c=>!hidden.has(c.key));
   const colLabel=(c)=>((cfg.labels&&cfg.labels[c.key])||c.label);
   const visStages=STAGES.filter(s=>!hidden.has(s.key));
@@ -800,52 +792,17 @@ function MerchTracker({ me, onSignOut }){
   const navCols=["__style", ...visInfo.map(c=>c.key), ...visStages.map(s=>s.key), ...(remarksVis?["remarks"]:[])];
   const totalCols=navCols.length;
   const maxFreeze=1+visInfo.length;
-  const ROLE_VIEW_PRESETS={
-    merchant:{ label:"Merchant view", show:null },
-    management:{ label:"Management view", show:["orderNo","family","colour","brand","owner","buyer","qty","delivery","overall","fit","print","fabric","pp","prod","fabricCD","proj","pct","chase","float","idle","remarks"] },
-    cad:{ label:"CAD view", show:["orderNo","sampleFit","family","colour","brand","owner","delivery","overall","fit","techpack","fitSend","fitAppr","proj","chase","remarks"] },
-    designer:{ label:"Designer view", show:["orderNo","family","colour","brand","fabricType","owner","delivery","overall","print","artwork","artAppr","strikeOff","soAppr","proj","chase","remarks"] },
-    store:{ label:"Store / Fabric view", show:["orderNo","family","colour","brand","fabricType","owner","delivery","overall","fabric","labDip","labAppr","fabricIH","fabricCD","chase","remarks"] },
-    buyer:{ label:"Buyer follow-up view", show:["orderNo","family","colour","brand","buyer","delivery","overall","fitAppr","artAppr","soAppr","labAppr","ppAppr","proj","chase","remarks"] }
+  const rows=useMemo(()=>{ const t=perfNow(); const out=!sort.col ? filtered : [...filtered].sort((A,B)=>{ const a=sortVal(sort.col,A), b=sortVal(sort.col,B); return a<b?-sort.dir:a>b?sort.dir:0; }); perfRef.current.rowMs=Math.round((perfNow()-t)*10)/10; perfRef.current.rows=out.length; perfRef.current.alerts=[perfRef.current.p95Ms>800?"P95 >800ms":"", perfRef.current.computeMs>300?"compute slow":"", perfRef.current.filterMs>200?"filter slow":"", perfRef.current.rowMs>200?"sort slow":"", out.length>900?"large visible rows":"", styles.length>1000?"1000+ active styles":"", perfRef.current.deferred?"search catching up":""].filter(Boolean); return out; },[filtered,sort,styles.length]);
+  const colIndex=(col)=>navCols.indexOf(col);
+  const rowIndex=(id)=>rows.findIndex(r=>String(r.s.id)===String(id));
+  const getVal=(s,col)=>{
+    if(!s) return "";
+    if(col==="__style") return s.styleNo||"";
+    if(STAGE_KEYS.includes(col)) return (s.actuals&&s.actuals[col])||"";
+    if(col==="remarks") return s.remarks||"";
+    if(col==="overall"||col==="fit"||col==="print"||col==="fabric"||col==="pp"||col==="prod"||col==="fabricCD"||col==="proj"||col==="pct"||col==="chase"||col==="float"||col==="idle") return "";
+    return s[col]??"";
   };
-  const applyColumnView=(view)=>{ setColumnView(view); setColsOpen(false); if(view==="custom") return; const all=[...INFO_COLS.map(c=>c.key),...STAGE_KEYS,"remarks"]; const spec=ROLE_VIEW_PRESETS[view]; if(!spec||!spec.show){ setHidden(new Set(["extra1","extra2"])); return; } const keep=new Set(spec.show); setHidden(new Set(all.filter(k=>!keep.has(k)))); setFreezeN(1); };
-
-  const currentViewState=()=>({
-    search, searchCol, statusFilter, ownerFilter, archiveView, activityFilter, colFilters, savedView, columnView,
-    hidden:[...hidden], sort, freezeN
-  });
-  const applyTrackerViewState=(state, name="")=>{
-    const st=state||{};
-    setSearch(st.search||""); setSearchCol(st.searchCol||"auto"); setStatusFilter(st.statusFilter||"All"); setOwnerFilter(st.ownerFilter||"All");
-    setArchiveView(st.archiveView||"active"); setActivityFilter(st.activityFilter||null); setColFilters(st.colFilters||{}); setSavedView(st.savedView||"");
-    if(st.columnView){ setColumnView(st.columnView); }
-    if(Array.isArray(st.hidden)) setHidden(new Set(st.hidden)); else if(st.columnView && st.columnView!=="custom") applyColumnView(st.columnView);
-    setSort(st.sort&&st.sort.col?st.sort:{ col:null, dir:1 }); setFreezeN(Number(st.freezeN)||1); setActiveNamedView(name||""); setViewSnap(null);
-  };
-  const saveSharedTrackerView=async()=>{
-    if(!canAdmin(role)){ alert("Only Management / Sr Merchant can save or overwrite shared default views. Your current filters are still temporary for you only."); return; }
-    const name=(window.prompt("Save current filters/columns as default shared view:", activeNamedView||"Management View")||"").trim();
-    if(!name) return;
-    const next=normalizeTrackerViews(sharedViews.filter(v=>v.name!==name).concat([{ name, shared:true, updatedAt:new Date().toISOString(), updatedBy:me?.name||me?.email||"", state:currentViewState() }]));
-    setSharedViews(next); setActiveNamedView(name);
-    try{ const { error }=await supabase.from("app_settings").upsert({ id:TRACKER_VIEW_SETTING_ID, data:{ views:next } }); if(error) throw error; flash(); }
-    catch(e){ logAppError("save shared view failed",e); alert("View saved locally in this browser, but shared save failed: "+(e.message||e)); }
-  };
-  const resetTemporaryView=()=>{ clearAllFilters(); setSort({ col:null, dir:1 }); setActiveNamedView(""); };
-
-  // ---- freeze: cumulative left offsets for frozen leading columns ----
-  // IMPORTANT: every frozen cell must use the same explicit width and left offset.
-  // Without width/minWidth/maxWidth, Chrome can visually stack sticky table-cells when multiple columns are frozen.
-  const frozenCount=Math.min(Number(freezeN)||1, maxFreeze);
-  const frozenCols=navCols.slice(0, frozenCount);
-  const widthOf=(col)=> colW[col] ?? (col==="__style"?STYLE_W : col==="remarks"?REMARK_COL.w : (INFO_W[col]!==undefined?INFO_W[col]:84));
-  const onResize=(col,w)=> setColW(p=>({ ...p, [col]:Math.max(40, Math.round(w)) }));
-  const frozenLefts={}; let __freezeX=0; frozenCols.forEach(c=>{ frozenLefts[c]=__freezeX; __freezeX+=widthOf(c); });
-  const leftOf=(col)=> frozenLefts[col] ?? 0;
-  const isFrozen=(col)=> frozenCols.includes(col);
-  const lastFrozen=frozenCols[frozenCols.length-1];
-  const freezeStyle=(col,bg)=>{ if(!isFrozen(col)) return {}; const w=widthOf(col); return { position:"sticky", left:leftOf(col), zIndex: col==="__style"?12:11, background:bg, backgroundClip:"padding-box", width:w, minWidth:w, maxWidth:w, boxSizing:"border-box", transform:"translateZ(0)", ...(col===lastFrozen?{ borderRight:"2px solid var(--muted-4)", boxShadow:"2px 0 0 var(--muted-4)" }:{ boxShadow:"1px 0 0 var(--line-2)" }) }; };
-
   const ownerOfCol=(col)=>{ const st=STAGES.find(s=>s.key===col); if(st) return st.owner; const ic=INFO_COLS.find(c=>c.key===col); if(ic&&ic.owner) return ic.owner; return "Merchant"; };
   const isStageCol=(col)=>STAGE_KEYS.includes(col);
   const fmtTyped=(isoStr)=>{ const d=parse(isoStr); return d?`${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${d.getFullYear()}`:""; };
@@ -911,6 +868,59 @@ function MerchTracker({ me, onSignOut }){
   const finishEditing=()=>{ if(!editing) return; if(editing.mode==="actual"||editing.mode==="rev"||editing.mode==="reject") commitDate(); else commitText(); };
 
   // ---- selection range ----
+  const peerEditingList=peers.filter(p=>p.editing).map(p=>({ ...p, ref: (()=>{ const loc=p.editing; if(!loc) return ""; const ri=rows.findIndex(r=>r.s.id===loc.id); const ci=navCols.indexOf(loc.col); return (ci>=0&&ri>=0)?(colLetter(ci)+(ri+1)):""; })() }));
+  const [renderLimit,setRenderLimit]=useState(()=>{ try{ const v=parseInt(localStorage.getItem("mt_render_limit"),10); return (isFinite(v)&&v>=300&&v<=5000)?v:900; }catch(e){ return 900; } });
+  useEffect(()=>{ try{ localStorage.setItem("mt_render_limit",String(renderLimit)); }catch(e){} },[renderLimit]);
+  useEffect(()=>{ if(rows.length<=renderLimit && renderLimit>900) setRenderLimit(900); },[rows.length,renderLimit]);
+  const renderRows=useMemo(()=>{ const out=rows.length>renderLimit?rows.slice(0,renderLimit):rows; perfRef.current.rendered=out.length; return out; },[rows,renderLimit]);
+  const clickHeader=(col)=>{ finishEditing(); setSort(p=> p.col===col?{col,dir:-p.dir}:{col,dir:1}); };
+
+  const ROLE_VIEW_PRESETS={
+    merchant:{ label:"Merchant view", show:null },
+    management:{ label:"Management view", show:["orderNo","family","colour","brand","owner","buyer","qty","delivery","overall","fit","print","fabric","pp","prod","fabricCD","proj","pct","chase","float","idle","remarks"] },
+    cad:{ label:"CAD view", show:["orderNo","sampleFit","family","colour","brand","owner","delivery","overall","fit","techpack","fitSend","fitAppr","proj","chase","remarks"] },
+    designer:{ label:"Designer view", show:["orderNo","family","colour","brand","fabricType","owner","delivery","overall","print","artwork","artAppr","strikeOff","soAppr","proj","chase","remarks"] },
+    store:{ label:"Store / Fabric view", show:["orderNo","family","colour","brand","fabricType","owner","delivery","overall","fabric","labDip","labAppr","fabricIH","fabricCD","chase","remarks"] },
+    buyer:{ label:"Buyer follow-up view", show:["orderNo","family","colour","brand","buyer","delivery","overall","fitAppr","artAppr","soAppr","labAppr","ppAppr","proj","chase","remarks"] }
+  };
+  const applyColumnView=(view)=>{ setColumnView(view); setColsOpen(false); if(view==="custom") return; const all=[...INFO_COLS.map(c=>c.key),...STAGE_KEYS,"remarks"]; const spec=ROLE_VIEW_PRESETS[view]; if(!spec||!spec.show){ setHidden(new Set(["extra1","extra2"])); return; } const keep=new Set(spec.show); setHidden(new Set(all.filter(k=>!keep.has(k)))); setFreezeN(1); };
+
+  const currentViewState=()=>({
+    search, searchCol, statusFilter, ownerFilter, archiveView, activityFilter, colFilters, savedView, columnView,
+    hidden:[...hidden], sort, freezeN
+  });
+  const applyTrackerViewState=(state, name="")=>{
+    const st=state||{};
+    setSearch(st.search||""); setSearchCol(st.searchCol||"auto"); setStatusFilter(st.statusFilter||"All"); setOwnerFilter(st.ownerFilter||"All");
+    setArchiveView(st.archiveView||"active"); setActivityFilter(st.activityFilter||null); setColFilters(st.colFilters||{}); setSavedView(st.savedView||"");
+    if(st.columnView){ setColumnView(st.columnView); }
+    if(Array.isArray(st.hidden)) setHidden(new Set(st.hidden)); else if(st.columnView && st.columnView!=="custom") applyColumnView(st.columnView);
+    setSort(st.sort&&st.sort.col?st.sort:{ col:null, dir:1 }); setFreezeN(Number(st.freezeN)||1); setActiveNamedView(name||""); setViewSnap(null);
+  };
+  const saveSharedTrackerView=async()=>{
+    if(!canAdmin(role)){ alert("Only Management / Sr Merchant can save or overwrite shared default views. Your current filters are still temporary for you only."); return; }
+    const name=(window.prompt("Save current filters/columns as default shared view:", activeNamedView||"Management View")||"").trim();
+    if(!name) return;
+    const next=normalizeTrackerViews(sharedViews.filter(v=>v.name!==name).concat([{ name, shared:true, updatedAt:new Date().toISOString(), updatedBy:me?.name||me?.email||"", state:currentViewState() }]));
+    setSharedViews(next); setActiveNamedView(name);
+    try{ const { error }=await supabase.from("app_settings").upsert({ id:TRACKER_VIEW_SETTING_ID, data:{ views:next } }); if(error) throw error; flash(); }
+    catch(e){ logAppError("save shared view failed",e); alert("View saved locally in this browser, but shared save failed: "+(e.message||e)); }
+  };
+  const resetTemporaryView=()=>{ clearAllFilters(); setSort({ col:null, dir:1 }); setActiveNamedView(""); };
+
+  // ---- freeze: cumulative left offsets for frozen leading columns ----
+  // IMPORTANT: every frozen cell must use the same explicit width and left offset.
+  // Without width/minWidth/maxWidth, Chrome can visually stack sticky table-cells when multiple columns are frozen.
+  const frozenCount=Math.min(Number(freezeN)||1, maxFreeze);
+  const frozenCols=navCols.slice(0, frozenCount);
+  const widthOf=(col)=> colW[col] ?? (col==="__style"?STYLE_W : col==="remarks"?REMARK_COL.w : (INFO_W[col]!==undefined?INFO_W[col]:84));
+  const onResize=(col,w)=> setColW(p=>({ ...p, [col]:Math.max(40, Math.round(w)) }));
+  const frozenLefts={}; let __freezeX=0; frozenCols.forEach(c=>{ frozenLefts[c]=__freezeX; __freezeX+=widthOf(c); });
+  const leftOf=(col)=> frozenLefts[col] ?? 0;
+  const isFrozen=(col)=> frozenCols.includes(col);
+  const lastFrozen=frozenCols[frozenCols.length-1];
+  const freezeStyle=(col,bg)=>{ if(!isFrozen(col)) return {}; const w=widthOf(col); return { position:"sticky", left:leftOf(col), zIndex: col==="__style"?12:11, background:bg, backgroundClip:"padding-box", width:w, minWidth:w, maxWidth:w, boxSizing:"border-box", transform:"translateZ(0)", ...(col===lastFrozen?{ borderRight:"2px solid var(--muted-4)", boxShadow:"2px 0 0 var(--muted-4)" }:{ boxShadow:"1px 0 0 var(--line-2)" }) }; };
+
   const cellRef=(x)=> x? (colLetter(colIndex(x.col))+(rowIndex(x.id)+1)) : "";
   const [nameBox,setNameBox]=useState("");
   useEffect(()=>{ setNameBox(cellRef(sel)); },[sel]);
@@ -1631,6 +1641,10 @@ function ReviewTabView({ computed, todoItems, auditRows, auditBusy, loadAuditRow
     return textMatch([c.category,c.styleNo,c.orderNo,c.buyer,c.brand,c.body,c.author]);
   };
   const notificationPassExcept=(n,except)=> (except==="category"||category==="All"||n.category===category) && (except==="notifStatus"||notifStatus==="All"||n.status===notifStatus) && textMatch([n.category,n.status,n.styleNo,n.orderNo,n.body,n.source,n.actor]);
+  const activityRows=useMemo(()=>{ const rows=[]; (auditRows||[]).forEach(a=>{ const f=String(a.field||"").toLowerCase(); const nv=String(a.new_val||""); const ov=String(a.old_val||""); let type=""; if(f.includes("format")) type="Format Changes"; else if(f==="deleted"||nv==="DELETED") type="Delete Row"; else if(String(a.col||"").toLowerCase()==="upload"||f.includes("upload")) type="Upload History"; else if(f.includes("bulk")) type=f.includes("actual")||f.includes("revised")?"Bulk Fill Date":"Bulk Action"; else if(["actual","revised","rejected","waived"].includes(f)) type="Bulk Fill / Date Changes"; if(!type) return; rows.push({ id:a.id||("act-"+rows.length), type, category:reviewCategoryForCol(a.col||a.field), time:a.created_at, user:a.actor_name||"", styleNo:a.style_no||a.style_id||"", col:a.col||"", field:a.field||"", oldVal:ov, newVal:nv, raw:a }); }); return rows.sort((a,b)=>String(b.time||"").localeCompare(String(a.time||""))); },[auditRows]);
+  const activityPassExcept=(r,except)=> (except==="category"||category==="All"||r.category===category) && (except==="activityType"||activityType==="All"||r.type===activityType) && (except==="activityUser"||activityUser==="All"||r.user===activityUser) && textMatch([r.type,r.category,r.user,r.styleNo,r.col,r.field,r.oldVal,r.newVal]);
+  const [activityType,setActivityType]=useState("All");
+  const [activityUser,setActivityUser]=useState("All");
   const categories=useMemo(()=>{
     const src=mode==="comments"?allComments.filter(c=>commentPassExcept(c,"category")):mode==="notifications"?allNotifications.filter(n=>notificationPassExcept(n,"category")):mode==="activity"?activityRows.filter(r=>activityPassExcept(r,"category")):items.filter(x=>itemPassExcept(x,"category"));
     return ["All",...Array.from(new Set(src.map(x=>x.category))).sort((a,b)=>a.localeCompare(b))];
@@ -1641,10 +1655,6 @@ function ReviewTabView({ computed, todoItems, auditRows, auditBusy, loadAuditRow
   const filtered=useMemo(()=> items.filter(x=>itemPassExcept(x,null)),[items,category,severity,q]);
   const filteredComments=useMemo(()=> allComments.filter(c=>commentPassExcept(c,null)),[allComments,category,commentUser,commentScope,q,myId,myName]);
   const filteredNotifications=useMemo(()=> allNotifications.filter(n=>notificationPassExcept(n,null)),[allNotifications,category,notifStatus,q]);
-  const activityRows=useMemo(()=>{ const rows=[]; (auditRows||[]).forEach(a=>{ const f=String(a.field||"").toLowerCase(); const nv=String(a.new_val||""); const ov=String(a.old_val||""); let type=""; if(f.includes("format")) type="Format Changes"; else if(f==="deleted"||nv==="DELETED") type="Delete Row"; else if(String(a.col||"").toLowerCase()==="upload"||f.includes("upload")) type="Upload History"; else if(f.includes("bulk")) type=f.includes("actual")||f.includes("revised")?"Bulk Fill Date":"Bulk Action"; else if(["actual","revised","rejected","waived"].includes(f)) type="Bulk Fill / Date Changes"; if(!type) return; rows.push({ id:a.id||("act-"+rows.length), type, category:reviewCategoryForCol(a.col||a.field), time:a.created_at, user:a.actor_name||"", styleNo:a.style_no||a.style_id||"", col:a.col||"", field:a.field||"", oldVal:ov, newVal:nv, raw:a }); }); return rows.sort((a,b)=>String(b.time||"").localeCompare(String(a.time||""))); },[auditRows]);
-  const activityPassExcept=(r,except)=> (except==="category"||category==="All"||r.category===category) && (except==="activityType"||activityType==="All"||r.type===activityType) && (except==="activityUser"||activityUser==="All"||r.user===activityUser) && textMatch([r.type,r.category,r.user,r.styleNo,r.col,r.field,r.oldVal,r.newVal]);
-  const [activityType,setActivityType]=useState("All");
-  const [activityUser,setActivityUser]=useState("All");
   const activityTypes=useMemo(()=>["All",...Array.from(new Set(activityRows.filter(r=>activityPassExcept(r,"activityType")).map(r=>r.type))).sort((a,b)=>a.localeCompare(b))],[activityRows,category,q,activityUser,activityType]);
   const activityUsers=useMemo(()=>["All",...Array.from(new Set(activityRows.filter(r=>activityPassExcept(r,"activityUser")).map(r=>r.user).filter(Boolean))).sort((a,b)=>a.localeCompare(b))],[activityRows,category,q,activityType,activityUser]);
   const filteredActivity=useMemo(()=> activityRows.filter(r=>activityPassExcept(r,null)),[activityRows,category,q,activityType,activityUser]);
