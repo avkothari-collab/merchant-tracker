@@ -663,13 +663,8 @@ function MerchTracker({ me, onSignOut }){
     });
     try{ supabase.from("audit_log").insert({ style_id:s.id, style_no:s.styleNo||"", col:field, field:"resend actual", old_val:old||"", new_val:val||"", actor_id:me.id, actor_name:me.name||me.email }).then(()=>{}).catch(()=>{}); }catch(e){}
   };
-  const recordRevisionHistory=(s,field,val,source)=>{ if(!s||!STAGE_KEYS.includes(field)) return; const old=(s.revs&&s.revs[field])||""; const next=val||""; if(old===next) return; const key=s.id+":"+field; const item={ at:new Date().toISOString(), userId:me&&me.id, userName:(me&&(me.name||me.email))||"", source:source||"single", oldVal:old, newVal:next }; setRevHistory(prev=>{ const arr=Array.isArray(prev[key])?prev[key].slice():[]; const last=arr[arr.length-1]; if(last && last.oldVal===item.oldVal && last.newVal===item.newVal && last.userId===item.userId) return prev; return {...prev,[key]:arr.concat(item).slice(-50)}; }); try{ supabase.from("audit_log").insert({ style_id:s.id, style_no:s.styleNo||"", col:field, field:"revised version", old_val:old||"", new_val:next||"CLEARED", actor_id:me.id, actor_name:me.name||me.email }).then(()=>{}).catch(()=>{}); }catch(e){} };
-  const setField=(id,field,val)=>{ const curStyle=styles.find(x=>x.id===id); if(STAGE_KEYS.includes(field)&&shouldTrackResend(curStyle,field,val)){ const old=curStyle.actuals[field]; const stLbl=(STAGES.find(x=>x.key===field)||{}).label||field; const ok=window.confirm(`${stLbl} already has actual date ${fmt(parse(old))}.
-
-Approval is rejected / rework is open. Save ${val?fmt(parse(val)):"blank"} as a RE-SEND actual and keep the old send in resend history?
-
-OK = Save as resend
-Cancel = cancel edit`); if(!ok) return; recordResendActual(curStyle,field,val,"single"); } pushHistory(); if(STAGE_KEYS.includes(field)){ const ck=id+":"+field+":actual"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); } setStyles(prev=>prev.map(s=>{ if(s.id!==id) return s; if(STAGE_KEYS.includes(field)) return { ...s, actuals:{ ...s.actuals, [field]: val||undefined } }; if(field==="qty") return { ...s, qty:Number(val)||0 }; return { ...s, [field]:val }; })); flash(); };
+  const recordRevisionHistory=(s,field,val,source)=>{ /* intentionally no structured revised-version history: revised date remains a normal editable active commitment; audit_log still records old -> new via stage save diff */ };
+  const setField=(id,field,val)=>{ const curStyle=styles.find(x=>x.id===id); if(STAGE_KEYS.includes(field)&&shouldTrackResend(curStyle,field,val)) recordResendActual(curStyle,field,val,"single"); pushHistory(); if(STAGE_KEYS.includes(field)){ const ck=id+":"+field+":actual"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); } setStyles(prev=>prev.map(s=>{ if(s.id!==id) return s; if(STAGE_KEYS.includes(field)) return { ...s, actuals:{ ...s.actuals, [field]: val||undefined } }; if(field==="qty") return { ...s, qty:Number(val)||0 }; return { ...s, [field]:val }; })); flash(); };
   const setRev=(id,key,val)=>{ const curStyle=styles.find(x=>x.id===id); recordRevisionHistory(curStyle,key,val,"single"); pushHistory(); const ck=id+":"+key+":revised"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); setStyles(prev=>prev.map(s=> s.id===id?{...s,revs:{...(s.revs||{}),[key]:val||undefined}}:s)); flash(); };
   const setReject=(id,key,val)=>{ pushHistory(); const ck=id+":"+key+":reject"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); setStyles(prev=>prev.map(s=> s.id===id?{...s,rejects:{...(s.rejects||{}),[key]:val||undefined}}:s)); flash(); };
   const setSkip=(id,key,val)=>{ pushHistory(); const ap=APPR_OF_SEND[key]; [key,...(ap?[ap]:[])].forEach(kk=>{ const ck=id+":"+kk+":skip"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); }); setStyles(prev=>prev.map(s=>{ if(s.id!==id) return s; const skips={...(s.skips||{})}; if(val){ skips[key]=val; if(ap) skips[ap]=val; } else { skips[key]=undefined; if(ap) skips[ap]=undefined; } return {...s,skips}; })); flash(); };
@@ -1462,7 +1457,7 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
                   const k=cellKey(s.id,st.key);
                   if(!applies){ const bg=bgFor(s.id,st.key,"#f3f1ec"); return <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} style={{ border:"1px solid var(--line-1)", background:bg, color:"var(--line-2)", textAlign:"center", padding:"6px 9px", boxShadow:ringFor(s.id,st.key), position:"relative", overflow:"hidden" }}>—<NoteTri k={k}/></td>; }
                   const hasRev=cs&&cs.rev&&!cs.done;
-                  const rvh=revHistory&&revHistory[s.id+":"+st.key];
+                  const rvh=[];
                   const revCnt=Array.isArray(rvh)?rvh.length:0;
                   const bg=bgFor(s.id,st.key,(cs&&cs.skipped)?"var(--tint-waive)":(cs&&cs.rejected)?"var(--tint-reject)":(cs&&cs.rework)?"var(--tint-rework)":(cs&&cs.actual&&cs.histReject?"var(--tint-histrej)":(isNext?"var(--tint-next)":"var(--surface)")));
                   return (
@@ -1491,7 +1486,7 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
                           </span>
                         ) : (
                           <span style={{ display:"flex", flexDirection:"column", lineHeight:1.2 }}>
-                            <span style={{ fontSize:10.5, color:hasRev?"var(--revised)":isNext?"var(--accent)":"#c4c0b8" }}>{hasRev?"rev":st.cutoff?"cutoff":"plan"} {fmt(hasRev?cs.rev:cs.plan)}</span>{revCnt>0 && <span title={(rvh||[]).map(x=>`${x.oldVal?fmt(parse(x.oldVal)):"blank"} → ${x.newVal?fmt(parse(x.newVal)):"blank"}`).join(" | ")} style={{ fontSize:8, color:"var(--revised)", fontWeight:800 }}>rev v{revCnt}</span>}
+                            <span style={{ fontSize:10.5, color:hasRev?"var(--revised)":isNext?"var(--accent)":"#c4c0b8" }}>{hasRev?"rev":st.cutoff?"cutoff":"plan"} {fmt(hasRev?cs.rev:cs.plan)}</span>
                             {editable?<span style={{ fontSize:10.5, color:isNext?"var(--accent)":"#c4c0b8", fontWeight:isNext?700:400 }}>{isNext?"▸ enter":st.cutoff?"log arrival":"—"}</span>:<span style={{ fontSize:10, color:"var(--line-2)", display:"flex", alignItems:"center", gap:3 }}><Lock size={9}/>locked</span>}
                           </span>
                         )}
