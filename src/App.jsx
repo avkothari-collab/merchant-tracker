@@ -2318,8 +2318,10 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const [mgmtOpen,setMgmtOpen]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("mt_mgmt_open")||"{}"); }catch(e){ return {}; } });
   useEffect(()=>{ try{ localStorage.setItem("mt_mgmt_open", JSON.stringify(mgmtOpen)); }catch(e){} },[mgmtOpen]);
   const [perfView,setPerfView]=useState(()=>{ try{ return localStorage.getItem("mt_mgmt_perf_view")||"chase"; }catch(e){ return "chase"; } }); // chase | stage
-  const [perfMode,setPerfMode]=useState(()=>{ try{ return localStorage.getItem("mt_mgmt_perf_mode")||"all"; }catch(e){ return "all"; } }); // all | delay
-  useEffect(()=>{ try{ localStorage.setItem("mt_mgmt_perf_view",perfView); localStorage.setItem("mt_mgmt_perf_mode",perfMode); }catch(e){} },[perfView,perfMode]);
+  const [perfMode,setPerfMode]=useState(()=>{ try{ return localStorage.getItem("mt_mgmt_perf_mode")||"summary"; }catch(e){ return "summary"; } }); // summary | revised | noRevised
+  const validPerfMode=["summary","revised","noRevised"].includes(perfMode)?perfMode:"summary";
+  useEffect(()=>{ if(validPerfMode!==perfMode) setPerfMode(validPerfMode); },[validPerfMode,perfMode]);
+  useEffect(()=>{ try{ localStorage.setItem("mt_mgmt_perf_view",perfView); localStorage.setItem("mt_mgmt_perf_mode",validPerfMode); }catch(e){} },[perfView,validPerfMode]);
   const isMgmtOpen=(key)=> mgmtOpen[key]!==false;
   const toggleMgmt=(key)=>setMgmtOpen(o=>({ ...o, [key]: !isMgmtOpen(key) }));
 
@@ -2539,14 +2541,54 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const exportBrandDelayData=compactAgg(lateRecords,r=>r.buyer||"(No buyer)","Buyer / Brand");
 
   const stageDelayData=compactAgg(lateRecords,r=>r.stage,"Stage").map(o=>{ const def=STAGES.find(s=>s.label===o.Stage)||{}; return { "TNA Order":stageOrderOf(def.key||o.Stage), "Section":stageSectionOf(def.key||o.Stage), ...o, "Chase Label":def.owner||"" }; }).sort((a,b)=>(Number(a["TNA Order"])||999)-(Number(b["TNA Order"])||999));
-  const performanceAnalysisData = perfMode==="delay"
-    ? (perfView==="stage" ? stageDelayData : exportChaseDelayData)
-    : (perfView==="stage" ? stageData : dept.map(r=>({ "Chase Label":r.Department, "Completed":r.Completed, "Late Count":r["Late Count"], "Late %":r["Late %"], "Avg Actual Time Days":r["Avg Actual Time Days"], "Avg Actual vs Original Plan Days":r["Avg Actual vs Original Plan Days"], "Avg Delay vs Due Days":r["Avg Delay vs Due Days"], "Avg Actual vs Revised Plan Days":r["Avg Actual vs Revised Plan Days"], "Worst Delay vs Due Days":r["Worst Delay vs Due Days"], "Duration Records":r["Duration Records"], "Original Plan Records":r["Original Plan Records"], "Revised Records":r["Revised Records"] })));
-  const performanceAnalysisDetail = detailRowsFor("Performance Analysis", perfMode==="delay" ? lateRecords : delayRecords, { problemOnly: perfMode==="delay" }).filter(r=>{
+  const problemStylesFor=(records,metric="delay")=>records.filter(r=>Number(r[metric]||0)>0).sort((a,b)=>Number(b[metric]||0)-Number(a[metric]||0)).slice(0,3).map(r=>`${r.style||r.order||"Style"} +${fmtNum(r[metric])}d`).join(", ");
+  const makePerfAggFromRecords=(records,keyFn,labelFn,ownerFn,mode)=>{ const m={}; records.forEach(r=>{ const k=keyFn(r)||"(blank)"; const label=labelFn?labelFn(r,k):k; const o=m[k]=m[k]||{ key:k, label, records:[], n:0, lateN:0, delaySum:0, durSum:0, durN:0, planN:0, planSum:0, revN:0, revSum:0, maxDelay:0, owner:ownerFn?ownerFn(r,k):"" }; o.records.push(r); o.n++; const activeDelay=Number(r.delay||0); const planDelay=Number(r.delayPlan||0); const revisedDelay=Number(r.delayRevised||0); const lateMetric=mode==="revised"?revisedDelay:mode==="noRevised"?planDelay:activeDelay; if(lateMetric>0) o.lateN++; if(mode==="revised") o.delaySum+=revisedDelay; else if(mode==="noRevised") o.delaySum+=planDelay; else o.delaySum+=activeDelay; o.maxDelay=Math.max(o.maxDelay,lateMetric); if(r.duration!=null){ o.durSum+=r.duration; o.durN++; } if(r.delayPlan!=null){ o.planN++; o.planSum+=r.delayPlan; } if(r.delayRevised!=null){ o.revN++; o.revSum+=r.delayRevised; } }); return Object.values(m); };
+  const buildPerformanceRows=(mode,view)=>{ const source=recordsForPerformanceMode(mode); const rows=view==="stage"?makePerfAggFromRecords(source,r=>r.stageKey||r.stage,r=>r.stage,r=>r.dept,mode):makePerfAggFromRecords(source,r=>r.dept||"(No chase label)",r=>r.dept||"(No chase label)",()=>"",mode); return rows.map(r=>{ const metric=mode==="revised"?"delayRevised":mode==="noRevised"?"delayPlan":"delay"; const def=view==="stage"?(STAGES.find(s=>s.key===r.key)||STAGES.find(s=>s.label===r.label)||{}):{}; const avgDelay=avg(r.delaySum,r.n); return { ...r, displayLabel:r.label, stageOrder:view==="stage"?stageOrderOf(def.key||r.key||r.label):null, stageSection:view==="stage"?stageSectionOf(def.key||r.key||r.label):null, count:r.n, late:r.lateN, avgDuration:mode==="summary"?avg(r.durSum,r.durN):null, avgDelay, planNet:avg(r.planSum,r.planN), revNet:avg(r.revSum,r.revN), worst:r.maxDelay, problemStyles:problemStylesFor(r.records,metric), owner:r.owner||def.owner||"" }; }).sort((a,b)=>view==="stage"?(a.stageOrder-b.stageOrder):((b.late-a.late)||(b.avgDelay-a.avgDelay)||String(a.displayLabel).localeCompare(String(b.displayLabel)))); };
+  const recordsForPerformanceMode=(mode)=> mode==="revised" ? delayRecords.filter(r=>r.delayRevised!=null) : mode==="noRevised" ? delayRecords.filter(r=>r.delayRevised==null) : delayRecords;
+  const performanceModeLabel=validPerfMode==="revised"?"Revised Commitments":validPerfMode==="noRevised"?"No Revised Plan":"Summary";
+  const buildPerformanceExport=(mode,view)=>{
+    const rows=buildPerformanceRows(mode,view);
+    if(mode==="revised") return rows.map(r=>({
+      [view==="stage"?"Stage":"Chase Label"]:r.displayLabel,
+      ...(view==="stage"?{"TNA Order":r.stageOrder,"Section":r.stageSection,"Owner":r.owner||""}:{}),
+      "Revised Items":r.count||0,
+      "Missed Revised":r.late||0,
+      "Revised Miss %":(r.count||0)?Math.round(((r.late||0)/(r.count||1))*100):0,
+      "Avg Missed Revised Days":r1(r.revNet||0),
+      "Still Off Original TNA Days":r1(r.planNet||0),
+      "Worst Revised Miss Days":r1(Math.max(0,r.worst||0)),
+      "Problem Styles":r.problemStyles||""
+    }));
+    if(mode==="noRevised") return rows.map(r=>({
+      [view==="stage"?"Stage":"Chase Label"]:r.displayLabel,
+      ...(view==="stage"?{"TNA Order":r.stageOrder,"Section":r.stageSection,"Owner":r.owner||""}:{}),
+      "No-Revision Items":r.count||0,
+      "Missed Original":r.late||0,
+      "Original Miss %":(r.count||0)?Math.round(((r.late||0)/(r.count||1))*100):0,
+      "Avg Off Original TNA Days":r1(r.planNet||0),
+      "Worst Original Miss Days":r1(Math.max(0,r.worst||0)),
+      "Problem Styles":r.problemStyles||""
+    }));
+    return rows.map(r=>({
+      [view==="stage"?"Stage":"Chase Label"]:r.displayLabel,
+      ...(view==="stage"?{"TNA Order":r.stageOrder,"Section":r.stageSection,"Owner":r.owner||""}:{}),
+      "Work Done":r.count||0,
+      "Missed Due":r.late||0,
+      "Miss Rate %":(r.count||0)?Math.round(((r.late||0)/(r.count||1))*100):0,
+      "Real Time Taken Days":r.avgDuration==null?"":r1(r.avgDuration),
+      "Off Original TNA Days":r1(r.planNet||0),
+      "Missed Active Due Days":r1(r.avgDelay||0),
+      "Worst Delay Days":r1(Math.max(0,r.worst||0)),
+      "Data Confidence":`O:${r.planN||0} R:${r.revN||0} D:${r.durN||0}`,
+      "Problem Styles":r.problemStyles||""
+    }));
+  };
+  const performanceAnalysisData = buildPerformanceExport(validPerfMode,perfView);
+  const performanceAnalysisDetail = detailRowsFor(`Performance Analysis - ${performanceModeLabel}`, recordsForPerformanceMode(validPerfMode), { problemOnly: validPerfMode!=="summary" }).filter(r=>{
     if(perfView!=="stage") return true;
     return !!r["Stage / Activity"];
   });
-  const performanceAnalysisMeta=[{ "View By":perfView==="stage"?"Stage":"Chase Label", "Data Type":perfMode==="delay"?"Delay Only":"All Completed Performance", "Rows":performanceAnalysisData.length, "Detail Rows":performanceAnalysisDetail.length, "Rule":perfMode==="delay"?"Only positive delay/problem rows":"All completed actual date rows; net delay may be early/on-time/late" }];
+  const performanceAnalysisMeta=[{ "View By":perfView==="stage"?"Stage":"Chase Label", "Data View":performanceModeLabel, "Rows":performanceAnalysisData.length, "Detail Rows":performanceAnalysisDetail.length, "Rule":validPerfMode==="revised"?"Only completed records with revised plan dates":"noRevised"===validPerfMode?"Only completed records with no revised plan date":"All completed actual date rows; active due = revised if present else original" }];
   const analyticsSheets=[
       { label:"Summary", data:mgmtSummary, detailData:managementDetailRows, modes:["summary","detailed"] },
       { label:"Calculation Checks", data:checks, modes:["summary","detailed"] },
@@ -2571,6 +2613,12 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const rowBtn=(key,label,right,color,onClick,sub)=>(<button key={key} onClick={onClick} disabled={!onClick} style={{ width:"100%", display:"grid", gridTemplateColumns:"minmax(120px,1fr) 96px", alignItems:"center", gap:10, border:"none", borderBottom:"1px solid var(--line-3)", background:"transparent", cursor:onClick?"pointer":"default", fontFamily:"inherit", padding:"8px 0", textAlign:"left" }}><span style={{ minWidth:0 }}><span style={{ display:"block", fontSize:11, fontWeight:800, color:color||"var(--ink)", overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{label}</span>{sub&&<span style={{ display:"block", fontSize:9, color:"var(--muted-2)", marginTop:2, overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{sub}</span>}</span><span style={{ fontSize:11, fontWeight:800, color:color||"var(--ink)", whiteSpace:"nowrap", textAlign:"right" }}>{right}</span></button>);
   const barLine=(key,label,n,max,color,onClick,right)=>(<button key={key} onClick={onClick} disabled={!onClick} style={{ display:"flex", alignItems:"center", gap:8, width:"100%", border:"none", background:"transparent", cursor:onClick?"pointer":"default", fontFamily:"inherit", padding:"5px 0" }}><span style={{ width:90, fontSize:10, fontWeight:800, color:"var(--muted-4)", textAlign:"left", overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{label}</span><span style={{ flex:1, height:14, background:"#f0ece3", borderRadius:999, overflow:"hidden" }}><span style={{ display:"block", height:"100%", width:`${(n/Math.max(1,max))*100}%`, background:color, borderRadius:999 }}/></span><span style={{ width:58, textAlign:"right", fontSize:10, fontWeight:800 }}>{right||n}</span></button>);
   const toggleBtn=(active,label,onClick)=><button onClick={onClick} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"5px 9px", cursor:"pointer", border:"1px solid var(--line-2)", borderRadius:8, background:active?"var(--ink)":"var(--surface)", color:active?"var(--bg)":"var(--ink)" }}>{label}</button>;
+  const performanceRows = buildPerformanceRows(validPerfMode,perfView);
+  const performanceHeaders = validPerfMode==="revised"
+    ? [perfView==="stage"?"Stage":"Chase Label","Revised Items","Missed Revised","Revised Miss %","Avg Missed Revised","Still Off Original TNA","Worst Revised Miss","Problem Styles"]
+    : validPerfMode==="noRevised"
+      ? [perfView==="stage"?"Stage":"Chase Label","No-Revision Items","Missed Original","Original Miss %","Avg Off Original TNA","Worst Original Miss","Problem Styles"]
+      : [perfView==="stage"?"Stage":"Chase Label","Work Done","Missed Due","Miss Rate %","Real Time Taken","Off Original TNA","Missed Active Due","Worst Delay","Data Confidence","Problem Styles"];
   const perfCell=(v)=>fmtDays(Number.isFinite(Number(v))?Number(v):0);
   const avgActualBreakup = [...deptRows]
     .filter(r=>r && r.durN)
@@ -2595,36 +2643,31 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
       </div>
     </div>
   );
-  const perfPlanCols=(r)=>({
-    planNet:avg(r.planSum||0,r.planN||0),
-    revNet:avg(r.revSum||0,r.revN||0),
-    planN:r.planN||0,
-    revN:r.revN||0,
-    durN:r.durN||0,
-  });
-  const performanceRows = perfMode==="delay"
-    ? (perfView==="stage" ? makeDelayAgg(lateRecords,r=>r.stage).map(r=>{ const def=STAGES.find(s=>s.label===r.label)||{}; return { ...r, key:def.key||r.key||r.label, stageOrder:stageOrderOf(def.key||r.label), stageSection:stageSectionOf(def.key||r.label), displayLabel:r.label, count:r.delayed, late:r.delayed, avgDuration:null, avgDelay:avg(r.delaySum,r.delayed), worst:r.maxDelay, ...perfPlanCols(r), owner:def.owner||"" }; }).sort((a,b)=>a.stageOrder-b.stageOrder) : chaseDelayRows.map(r=>({ ...r, displayLabel:r.label, count:r.delayed, late:r.delayed, avgDuration:null, avgDelay:avg(r.delaySum,r.delayed), worst:r.maxDelay, ...perfPlanCols(r) })))
-    : (perfView==="stage" ? stageRows.map(r=>({ ...r, stageOrder:stageOrderOf(r.key), stageSection:stageSectionOf(r.key), displayLabel:r.label, count:r.n, late:r.lateN, avgDuration:avg(r.durSum,r.durN), avgDelay:avg(r.delaySum,r.n), worst:r.maxDelay, ...perfPlanCols(r), owner:r.owner||"" })) : deptRows.map(r=>({ ...r, displayLabel:r.label, count:r.n, late:r.lateN, avgDuration:avg(r.durSum,r.durN), avgDelay:avg(r.delaySum,r.n), worst:r.maxDelay, ...perfPlanCols(r) })));
+  const performanceCellValue=(r,h)=>{
+    const pct=(r.count||0)?Math.round(((r.late||0)/(r.count||1))*100):0;
+    if(h==="Revised Items"||h==="No-Revision Items"||h==="Work Done") return r.count||0;
+    if(h==="Missed Revised"||h==="Missed Original"||h==="Missed Due") return r.late||0;
+    if(h==="Revised Miss %"||h==="Original Miss %"||h==="Miss Rate %") return `${pct}%`;
+    if(h==="Real Time Taken") return r.avgDuration==null?"—":perfCell(r.avgDuration);
+    if(h==="Off Original TNA"||h==="Still Off Original TNA"||h==="Avg Off Original TNA") return perfCell(r.planNet);
+    if(h==="Missed Active Due"||h==="Avg Missed Revised") return perfCell(r.avgDelay);
+    if(h==="Worst Delay"||h==="Worst Revised Miss"||h==="Worst Original Miss") return perfCell(Math.max(0,r.worst||0));
+    if(h==="Data Confidence") return `O:${r.planN||0} · R:${r.revN||0} · D:${r.durN||0}`;
+    if(h==="Problem Styles") return r.problemStyles||"—";
+    return "";
+  };
   const performanceTable=(rows)=> rows.length?(
     <div style={{ overflowX:"auto" }}>
       <table style={{ width:"100%", borderCollapse:"collapse", fontSize:10 }}>
-        <thead><tr>{[perfView==="stage"?"Stage":"Chase Label","Completed / delayed","Late","Late %","Avg actual time","Avg actual vs original","Avg delay vs due","Avg actual vs revised","Worst","Data records"].map((h,i)=><th key={h} style={{ textAlign:i===0?"left":"right", padding:"7px 8px", borderBottom:"1px solid var(--line-2)", color:"var(--muted-2)", textTransform:"uppercase", letterSpacing:0.4, whiteSpace:"nowrap" }}>{h}</th>)}</tr></thead>
-        <tbody>{rows.map((r,idx)=>{ const showSection=perfView==="stage" && r.stageSection && (!idx || rows[idx-1].stageSection!==r.stageSection); const latePct=(r.count||0)?Math.round(((r.late||0)/(r.count||1))*100):0; return <React.Fragment key={r.key||r.label}>{showSection && <tr><td colSpan={10} style={{ padding:"8px 8px 5px", background:"var(--toolbar-subtle)", color:"var(--accent)", fontWeight:900, textTransform:"uppercase", letterSpacing:0.6, fontSize:9, borderTop:"1px solid var(--line-2)", borderBottom:"1px solid var(--line-3)" }}>{r.stageSection}</td></tr>}<tr>
+        <thead><tr>{performanceHeaders.map((h,i)=><th key={h} title={h==="Data Confidence"?"O = original plan records, R = revised records, D = duration records. Confidence counts, not performance scores.":""} style={{ textAlign:i===0?"left":"right", padding:"7px 8px", borderBottom:"1px solid var(--line-2)", color:"var(--muted-2)", textTransform:"uppercase", letterSpacing:0.4, whiteSpace:"nowrap" }}>{h}</th>)}</tr></thead>
+        <tbody>{rows.map((r,idx)=>{ const showSection=perfView==="stage" && r.stageSection && (!idx || rows[idx-1].stageSection!==r.stageSection); return <React.Fragment key={r.key||r.label}>{showSection && <tr><td colSpan={performanceHeaders.length} style={{ padding:"8px 8px 5px", background:"var(--toolbar-subtle)", color:"var(--accent)", fontWeight:900, textTransform:"uppercase", letterSpacing:0.6, fontSize:9, borderTop:"1px solid var(--line-2)", borderBottom:"1px solid var(--line-3)" }}>{r.stageSection}</td></tr>}<tr>
           <td style={{ padding:"7px 8px", fontWeight:800, whiteSpace:"nowrap" }}>{perfView==="stage"&&r.stageOrder?<span style={{ color:"var(--muted-2)", fontWeight:900, marginRight:6 }}>{r.stageOrder}.</span>:null}{r.displayLabel}{r.owner?<span style={{ color:"var(--muted-2)", fontWeight:700 }}> · {r.owner}</span>:null}</td>
-          <td style={{ padding:"7px 8px", textAlign:"right" }}>{r.count||0}</td>
-          <td style={{ padding:"7px 8px", textAlign:"right", color:(r.late||0)>0?"var(--danger)":"var(--success)", fontWeight:800 }}>{r.late||0}</td>
-          <td style={{ padding:"7px 8px", textAlign:"right", fontWeight:800 }}>{latePct}%</td>
-          <td style={{ padding:"7px 8px", textAlign:"right" }}>{r.avgDuration==null?"—":perfCell(r.avgDuration)}</td>
-          <td style={{ padding:"7px 8px", textAlign:"right", color:r.planNet>0?"var(--danger)":"var(--success)", fontWeight:800 }}>{perfCell(r.planNet)}</td>
-          <td style={{ padding:"7px 8px", textAlign:"right", color:r.avgDelay>0?"var(--danger)":"var(--success)", fontWeight:800 }}>{perfCell(r.avgDelay)}</td>
-          <td style={{ padding:"7px 8px", textAlign:"right", color:r.revNet>0?"var(--danger)":"var(--success)", fontWeight:800 }}>{r.revN?perfCell(r.revNet):"—"}</td>
-          <td style={{ padding:"7px 8px", textAlign:"right", color:(r.worst||0)>0?"var(--danger)":"var(--ink)", fontWeight:800 }}>{perfCell(Math.max(0,r.worst||0))}</td>
-          <td title="O = original plan records, R = revised records, D = duration records. These are data confidence counts, not performance scores." style={{ padding:"7px 8px", textAlign:"right", color:"var(--muted-2)", whiteSpace:"nowrap" }}>O:{r.planN||0} · R:{r.revN||0} · D:{r.durN||0}</td>
+          {performanceHeaders.slice(1).map(h=>{ const val=performanceCellValue(r,h); const danger=(String(val).startsWith("+")||(["Missed Revised","Missed Original","Missed Due","Revised Miss %","Original Miss %","Miss Rate %"].includes(h)&&parseFloat(val)>0)); return <td key={h} title={h==="Data Confidence"?"O = original target data, R = revised commitment data, D = real-time duration data.":(h==="Problem Styles"?String(val):"")} style={{ padding:"7px 8px", textAlign:"right", color:danger?"var(--danger)":(h==="Data Confidence"?"var(--muted-2)":"var(--ink)"), fontWeight:danger?800:700, whiteSpace:"nowrap", maxWidth:h==="Problem Styles"?220:undefined, overflow:h==="Problem Styles"?"hidden":undefined, textOverflow:h==="Problem Styles"?"ellipsis":undefined }}>{val}</td>; })}
         </tr></React.Fragment>; })}</tbody>
       </table>
-      <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8, lineHeight:1.45 }}>Avg actual vs original = actual date minus original auto/system target, showing TNA drift. Avg delay vs due = actual date minus active due date, where revised plan wins over auto plan. Avg actual vs revised = whether meeting/revised commitments were still missed. Data records: O original-plan records, R revised records, D duration records.{perfView==="stage"?" Stage view follows fixed TNA flow order, not alphabetical or delay ranking.":""}</div>
+      <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8, lineHeight:1.45 }}>{validPerfMode==="revised"?"Revised Commitments shows only completed records with revised plan dates. Use it to check whether meeting/revised commitments were still missed.":validPerfMode==="noRevised"?"No Revised Plan shows completed records without revised dates. Use it to catch original TNA misses where no new commitment was captured.":"Summary uses active due: revised date if entered, otherwise original auto/system plan. Off Original TNA shows drift from the original target."}{perfView==="stage"?" Stage view follows fixed TNA flow order, not alphabetical or delay ranking.":""}</div>
     </div>
-  ):<div style={{ fontSize:11, color:"var(--muted-1)" }}>{perfMode==="delay"?"No positive delays in this slice.":"No completed stage dates yet."}</div>;
+  ):<div style={{ fontSize:11, color:"var(--muted-1)" }}>{validPerfMode==="revised"?"No completed revised-plan records in this slice.":validPerfMode==="noRevised"?"No completed no-revised records in this slice.":"No completed stage dates yet."}</div>;
 
   return (<div style={{ padding:"16px 22px", maxWidth:1280 }}>
     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:16, marginBottom:14, flexWrap:"wrap" }}>
@@ -2671,12 +2714,13 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
           {toggleBtn(perfView==="chase","Chase Label",()=>setPerfView("chase"))}
           {toggleBtn(perfView==="stage","Stage",()=>setPerfView("stage"))}
           <span style={{ width:10 }}/>
-          <span style={{ fontSize:10, fontWeight:800, color:"var(--muted-2)", textTransform:"uppercase" }}>Data:</span>
-          {toggleBtn(perfMode==="all","All completed",()=>setPerfMode("all"))}
-          {toggleBtn(perfMode==="delay","Delay only",()=>setPerfMode("delay"))}
+          <span style={{ fontSize:10, fontWeight:800, color:"var(--muted-2)", textTransform:"uppercase" }}>Data view:</span>
+          {toggleBtn(validPerfMode==="summary","Summary",()=>setPerfMode("summary"))}
+          {toggleBtn(validPerfMode==="revised","Revised Commitments",()=>setPerfMode("revised"))}
+          {toggleBtn(validPerfMode==="noRevised","No Revised Plan",()=>setPerfMode("noRevised"))}
         </div>
         {performanceTable(performanceRows)}
-      </>, perfView==="stage" ? (perfMode==="delay"?"Stage-wise delay summary only; no early/on-time rows":"Stage-wise completed performance; net delay may be early/on-time/late") : (perfMode==="delay"?"Chase-label delay summary only; no early/on-time rows":"Chase-label completed performance; net delay may be early/on-time/late"))}
+      </>, perfView==="stage" ? `${performanceModeLabel} by TNA stage order` : `${performanceModeLabel} by chase label`)}
       {/* Missed-only plan accuracy section kept out of visible dashboard because it is technical for daily management reading.
           Original/revised performance remains in simplified Performance Analysis columns and export sheets. */}
       {section("Worst completed delays", worstDelays.length?worstDelays.map(r=>rowBtn(r.style+":"+r.stageKey,r.style||r.order,`+${fmtNum(r.delay)}d`,"var(--danger)",()=>goSearch(r.style),`${r.stage} · ${r.buyer||""} · actual ${fmt(r.actual)} · click opens style`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No positive completed delays in this slice.</div>, "Separate exception list: exact styles/stages with completed delay greater than 0")}
