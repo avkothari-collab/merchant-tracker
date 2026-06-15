@@ -1667,6 +1667,9 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   useEffect(()=>{ try{ localStorage.setItem("mt_dashfilter", JSON.stringify(df)); }catch(e){} },[df]);
   const [mgmtOpen,setMgmtOpen]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("mt_mgmt_open")||"{}"); }catch(e){ return {}; } });
   useEffect(()=>{ try{ localStorage.setItem("mt_mgmt_open", JSON.stringify(mgmtOpen)); }catch(e){} },[mgmtOpen]);
+  const [perfView,setPerfView]=useState(()=>{ try{ return localStorage.getItem("mt_mgmt_perf_view")||"chase"; }catch(e){ return "chase"; } }); // chase | stage
+  const [perfMode,setPerfMode]=useState(()=>{ try{ return localStorage.getItem("mt_mgmt_perf_mode")||"all"; }catch(e){ return "all"; } }); // all | delay
+  useEffect(()=>{ try{ localStorage.setItem("mt_mgmt_perf_view",perfView); localStorage.setItem("mt_mgmt_perf_mode",perfMode); }catch(e){} },[perfView,perfMode]);
   const isMgmtOpen=(key)=> mgmtOpen[key]!==false;
   const toggleMgmt=(key)=>setMgmtOpen(o=>({ ...o, [key]: !isMgmtOpen(key) }));
 
