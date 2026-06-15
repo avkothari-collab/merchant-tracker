@@ -1487,6 +1487,7 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
   const spliceSearch=()=> df.colour||"";
   const goOwner=(o)=>{ if(target==="todo") drillTodo({ owner:o }); else applyDrill({ owner:o, colFilters:spliceCols(), search:spliceSearch() }); };
   const goAct=(label,key)=>{ if(target==="todo") drillTodo({ activity:label }); else applyDrill({ activity:key, colFilters:spliceCols(), search:spliceSearch() }); };
+  const goPhase=(phaseName)=>{ drillTodo&&drillTodo({ phase:phaseName }); };
   const goStatus=(st,extra)=>applyDrill({ status:st, colFilters:{...spliceCols(),...(extra||{})}, search:spliceSearch() });
   const card=(label,val,color,onClick)=>(<button onClick={onClick} disabled={!onClick} style={{ flex:1, minWidth:130, textAlign:"left", background:"var(--surface)", border:"1px solid var(--ink)", padding:"14px 16px", cursor:onClick?"pointer":"default", fontFamily:"inherit" }}><div style={{ fontSize:28, fontWeight:800, fontFamily:"'Archivo',sans-serif", color, lineHeight:1 }}>{val}</div><div style={{ fontSize:10, color:"var(--muted-2)", marginTop:5, letterSpacing:0.5, textTransform:"uppercase" }}>{label}{onClick?" ›":""}</div></button>);
   const sel=(label,val,opts,onChange)=>(<select value={val||""} onChange={e=>onChange(e.target.value||undefined)} style={{ fontFamily:"inherit", fontSize:11, padding:"5px 7px", border:"1px solid var(--ink)", background:val?"var(--accent-tint)":"var(--surface)", maxWidth:150 }}><option value="">{label}: all</option>{opts.map(o=>(<option key={o} value={o}>{o}</option>))}</select>);
@@ -1551,7 +1552,7 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
       {card("Delivery risk",delRisk,"var(--danger)",()=>goStatus("All",{ overall:["Delivery risk"] }))}
       {card("Released",released,"var(--success)",()=>goStatus("Released"))}
       {card("Overdue activities",overdueAct,"var(--danger)")}
-      {card("Escalation items",escalationTodo.length,escalationTodo.length?"var(--danger)":"var(--success)",()=>{ drillTodo&&drillTodo({ priority:"Overdue" }); })}
+      {card("Escalation items",escalationTodo.length,escalationTodo.length?"var(--danger)":"var(--success)",()=>{ drillTodo&&drillTodo({ todoType:"Escalation", priority:"Overdue" }); })}
     </div>
 
     <div style={{ display:"flex", gap:18, flexWrap:"wrap", marginTop:22 }}>
@@ -1562,8 +1563,8 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
       </div>
       <div style={{ flex:1, minWidth:320, background:"var(--surface)", border:"1px solid var(--ink)", padding:16 }}>
         <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>ESCALATION OWNER LOAD</div>
-        {bar(escRows, maxEsc, ()=>"var(--danger)", 92, (o)=>drillTodo&&drillTodo({ escalationOwner:o }))}
-        <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8 }}>Who must chase now based on Settings escalation slabs.</div>
+        {bar(escRows, maxEsc, ()=>"var(--danger)", 92, (o)=>drillTodo&&drillTodo({ todoType:"Escalation", priority:"Overdue", escalationOwner:o }))}
+        <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8 }}>Click opens To-Do escalation rows for that owner.</div>
       </div>
       <div style={{ flex:1, minWidth:320, background:"var(--surface)", border:"1px solid var(--ink)", padding:16 }}>
         <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>OPEN ACTIVITIES</div>
@@ -1578,11 +1579,11 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
       <div style={{ flex:1, minWidth:320, background:"var(--surface)", border:"1px solid var(--ink)", padding:16 }}>
         <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>WHERE STYLES ARE STUCK</div>
         {Object.entries(phase).map(([p,n])=>(
-          <div key={p} style={{ display:"flex", alignItems:"center", gap:8, padding:"4px 0" }}>
-            <span style={{ width:80, fontSize:10, fontWeight:700, color:"var(--muted-4)" }}>{p}</span>
+          <button key={p} onClick={()=>goPhase(p)} title="Open matching phase in To-Do" style={{ display:"flex", alignItems:"center", gap:8, padding:"4px 0", width:"100%", border:"none", background:"transparent", cursor:"pointer", fontFamily:"inherit" }}>
+            <span style={{ width:80, fontSize:10, fontWeight:700, color:"var(--muted-4)", textAlign:"left" }}>{p}</span>
             <span style={{ flex:1, height:16, background:"#f0ece3", position:"relative" }}><span style={{ position:"absolute", left:0, top:0, bottom:0, width:`${(n/maxPhase)*100}%`, background:p==="Fabric IH"?"var(--danger)":"var(--accent)" }}/></span>
             <span style={{ width:28, textAlign:"right", fontSize:11, fontWeight:700 }}>{n}</span>
-          </div>))}
+          </button>))}
       </div>
     </div>
   </div>);
@@ -1673,6 +1674,7 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const spliceSearch=()=> df.colour||"";
   const goOwner=(o)=>{ if(target==="todo") drillTodo({ owner:o }); else applyDrill({ owner:o, colFilters:spliceCols(), search:spliceSearch() }); };
   const goAct=(label,key)=>{ if(target==="todo") drillTodo({ activity:label }); else applyDrill({ activity:key, colFilters:spliceCols(), search:spliceSearch() }); };
+  const goPhase=(phaseName)=>{ drillTodo&&drillTodo({ phase:phaseName }); };
   const goStatus=(st,extra)=>applyDrill({ status:st, colFilters:{...spliceCols(),...(extra||{})}, search:spliceSearch() });
   const goSearch=(q)=>applyDrill({ status:"All", colFilters:spliceCols(), search:q||spliceSearch() });
   const goStageOpen=(key)=>applyDrill({ status:"All", activity:key, colFilters:spliceCols(), search:spliceSearch() });
@@ -1818,16 +1820,16 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
       {card("Delivery risk",delRisk,"var(--danger)",()=>goStatus("All",{ overall:["Delivery risk"] }))}
       {card("Released",released,"var(--success)",()=>goStatus("Released"))}
       {card("Overdue open activities",overdueAct,"var(--danger)",null,"frontier overdue")}
-      {card("Escalation items",escalationTodo.length,escalationTodo.length?"var(--danger)":"var(--success)",()=>drillTodo&&drillTodo({ priority:"Overdue" }),"who must chase now")}
+      {card("Escalation items",escalationTodo.length,escalationTodo.length?"var(--danger)":"var(--success)",()=>drillTodo&&drillTodo({ todoType:"Escalation", priority:"Overdue" }),"who must chase now")}
       {card("Avg late delay",fmtDays(avgDelay),avgDelay>0?"var(--danger)":"var(--success)",null,"delayed stages only")}
       {card("Avg actual time",fmtDays(avgDuration),"var(--info)",null,"stage cycle time")}
     </div>
 
     <div style={{ display:"flex", flexDirection:"column", gap:12, marginTop:22 }}>
       {section("Who to chase — current", owners.length?owners.map(([o,n])=>barLine(o,o,n,maxOwner,OWNER_COLOR[o]||"var(--accent)",()=>goOwner(o))):<div style={{ fontSize:11, color:"var(--muted-1)" }}>Nothing pending.</div>, "Open actionable items by chase label")}
-      {section("Escalation owner load", escRows.length?escRows.map(([o,n])=>barLine(o,o,n,maxEsc,"var(--danger)",()=>drillTodo&&drillTodo({ escalationOwner:o }),n)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No overdue escalation items.</div>, "Who must chase now based on editable Settings duration slabs")}
+      {section("Escalation owner load", escRows.length?escRows.map(([o,n])=>barLine(o,o,n,maxEsc,"var(--danger)",()=>drillTodo&&drillTodo({ todoType:"Escalation", priority:"Overdue", escalationOwner:o }),n)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No overdue escalation items.</div>, "Who must chase now based on editable Settings duration slabs")}
       {section("Open activities", acts.length?acts.map(([label,v])=>barLine(label,label,v.n,maxAct,v.over?"var(--danger)":"var(--accent)",()=>goAct(label,v.key),v.over?`${v.n} (${v.over})`:v.n)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>Nothing due.</div>, "Red count in bracket = overdue")}
-      {section("Where styles are stuck", Object.entries(phase).map(([p,n])=>barLine(p,p,n,maxPhase,p==="Fabric IH"?"var(--danger)":"var(--accent)",null)), "Current next-pending phase")}
+      {section("Where styles are stuck", Object.entries(phase).map(([p,n])=>barLine(p,p,n,maxPhase,p==="Fabric IH"?"var(--danger)":"var(--accent)",()=>goPhase(p))), "Current next-pending phase · click opens matching To-Do phase")}
     </div>
 
     <div style={{ display:"flex", flexDirection:"column", gap:12, marginTop:12 }}>
@@ -1843,13 +1845,13 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
         </div>
         {performanceRows.length?performanceRows.map(r=>rowBtn(r.key||r.label,r.displayLabel,r.right,r.color,r.jump,r.sub)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>{perfMode==="delay"?"No positive delays in this slice.":"No completed stage dates yet."}</div>}
       </>, perfView==="stage" ? (perfMode==="delay"?"Stage-wise delay summary only; no early/on-time rows":"Stage-wise completed performance; net delay may be early/on-time/late") : (perfMode==="delay"?"Chase-label delay summary only; no early/on-time rows":"Chase-label completed performance; net delay may be early/on-time/late"))}
-      {section("Worst completed delays", worstDelays.length?worstDelays.map(r=>rowBtn(r.style+":"+r.stageKey,r.style||r.order,`+${fmtNum(r.delay)}d`,"var(--danger)",()=>goSearch(r.style),`${r.stage} · ${r.buyer||""} · actual ${fmt(r.actual)}`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No positive completed delays in this slice.</div>, "Separate exception list: exact styles/stages with completed delay greater than 0")}
+      {section("Worst completed delays", worstDelays.length?worstDelays.map(r=>rowBtn(r.style+":"+r.stageKey,r.style||r.order,`+${fmtNum(r.delay)}d`,"var(--danger)",()=>goSearch(r.style),`${r.stage} · ${r.buyer||""} · actual ${fmt(r.actual)} · click opens style`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No positive completed delays in this slice.</div>, "Separate exception list: exact styles/stages with completed delay greater than 0")}
     </div>
 
     <div style={{ display:"flex", flexDirection:"column", gap:12, marginTop:12 }}>
-      {section("Buyer approval turnaround", buyerRows.length?buyerRows.map(r=>rowBtn(r.key,r.label,`${fmtDays(avg(r.durSum,r.durN))} avg`,r.lateN?"var(--danger)":"var(--success)",()=>goSearch(r.label),`${r.n} approvals · ${r.lateN} late · avg net ${fmtDays(avg(r.delaySum,r.n))}`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No buyer approval actuals yet.</div>, "Fit / Art / S-O / Lab / PP approval actuals")}
-      {section("Chase delay ranking", chaseDelayRows.length?chaseDelayRows.map(r=>rowBtn(r.key,r.label,`${r1(r.delaySum)}d total`,"var(--danger)",()=>goSearch(r.label),`${r.delayed} delayed entries · avg ${fmtDays(avg(r.delaySum,r.delayed))} · worst ${fmtDays(r.maxDelay)}`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No positive chase delays in this slice.</div>, "Problem rows only: delayed completed stages; no early/on-time rows")}
-      {section("Buyer / brand delay ranking", brandDelayRows.length?brandDelayRows.map(r=>rowBtn(r.key,r.label,`${r1(r.delaySum)}d total`,"var(--danger)",()=>goSearch(r.label),`${r.delayed} delayed entries · avg ${fmtDays(avg(r.delaySum,r.delayed))} · worst ${fmtDays(r.maxDelay)}`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No positive buyer/brand delays in this slice.</div>, "Problem rows only: delayed completed stages; no early/on-time rows")}
+      {section("Buyer approval turnaround", buyerRows.length?buyerRows.map(r=>rowBtn(r.key,r.label,`${fmtDays(avg(r.durSum,r.durN))} avg`,r.lateN?"var(--danger)":"var(--success)",null,`${r.n} approvals · ${r.lateN} late · avg net ${fmtDays(avg(r.delaySum,r.n))} · use export for detail`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No buyer approval actuals yet.</div>, "Historical approval performance · use detailed export for row-level breakup")}
+      {section("Chase delay ranking", chaseDelayRows.length?chaseDelayRows.map(r=>rowBtn(r.key,r.label,`${r1(r.delaySum)}d total`,"var(--danger)",null,`${r.delayed} delayed entries · avg ${fmtDays(avg(r.delaySum,r.delayed))} · worst ${fmtDays(r.maxDelay)} · use export for detail`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No positive chase delays in this slice.</div>, "Historical aggregate · problem rows only · use detailed export for row-level breakup")}
+      {section("Buyer / brand delay ranking", brandDelayRows.length?brandDelayRows.map(r=>rowBtn(r.key,r.label,`${r1(r.delaySum)}d total`,"var(--danger)",null,`${r.delayed} delayed entries · avg ${fmtDays(avg(r.delaySum,r.delayed))} · worst ${fmtDays(r.maxDelay)} · use export for detail`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No positive buyer/brand delays in this slice.</div>, "Historical aggregate · problem rows only · use detailed export for row-level breakup")}
     </div>
   </div>);
 }
@@ -1865,7 +1867,8 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   const displayItems=[...baseItems.map(t=>({ ...t, todoType:"Activity" })), ...escalationRows];
   const distinct=(field)=>{ const s=new Set(); displayItems.forEach(t=>{ const v=t[field]; if(v) s.add(v); }); return [...s].sort(); };
   const orders=distinct("orderNo"), juniors=distinct("junior"), activities=distinct("activity"), branches=distinct("branch"), owners=distinct("owner"), escOwners=distinct("escalationOwner"), types=distinct("todoType");
-  const pass=(t)=> (!tf.priority||(tf.priority==="Overdue"?t.overdue:!t.overdue)) && (!tf.todoType||t.todoType===tf.todoType) && (!tf.orderNo||t.orderNo===tf.orderNo) && (!tf.junior||t.junior===tf.junior) && (!tf.activity||t.activity===tf.activity) && (!tf.branch||t.branch===tf.branch) && (!tf.owner||t.owner===tf.owner) && (!tf.escalationOwner||t.escalationOwner===tf.escalationOwner);
+  const phaseMatch=(t,phase)=>{ if(!phase) return true; const k=t.key||""; if(phase==="Pre-Fit") return k==="techpack"; if(phase==="Fit / Print") return ["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"].includes(k); if(phase==="Lab Dip") return ["labDip","labAppr"].includes(k); if(phase==="Fabric IH") return k==="fabricIH"; if(phase==="PP / Prod") return ["ppSample","ppAppr","prodFile"].includes(k); return true; };
+  const pass=(t)=> phaseMatch(t,tf.phase) && (!tf.priority||(tf.priority==="Overdue"?t.overdue:!t.overdue)) && (!tf.todoType||t.todoType===tf.todoType) && (!tf.orderNo||t.orderNo===tf.orderNo) && (!tf.junior||t.junior===tf.junior) && (!tf.activity||t.activity===tf.activity) && (!tf.branch||t.branch===tf.branch) && (!tf.owner||t.owner===tf.owner) && (!tf.escalationOwner||t.escalationOwner===tf.escalationOwner);
   const shown=displayItems.filter(pass);
   const overdue=shown.filter(t=>t.overdue), upcoming=shown.filter(t=>!t.overdue);
   const anyF=Object.values(tf).some(Boolean);
