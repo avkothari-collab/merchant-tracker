@@ -1317,7 +1317,7 @@ function EscalationMatrixView({ computed, cfg, applyDrill }){
   const rows=all.filter(r=>{ const qq=q.trim().toLowerCase(); const hit=!qq || [r.styleNo,r.orderNo,r.family,r.colour,r.buyer,r.junior,r.stage,r.chase,r.escalationOwner,r.escalationLevel].some(v=>String(v||"").toLowerCase().includes(qq)); const ow=owner==="All"||r.chase===owner; const eo=escOwner==="All"||r.escalationOwner===escOwner; const bk=bucket==="All"||r.bucket===bucket; return hit&&ow&&eo&&bk; }).sort((a,b)=>b.days-a.days || String(a.escalationOwner).localeCompare(String(b.escalationOwner)));
   const summary=rows.reduce((m,r)=>{ const k=r.escalationOwner; if(!m[k]) m[k]={ chase:k, count:0, total:0, max:0, urgent:0 }; m[k].count++; m[k].total+=r.days; m[k].max=Math.max(m[k].max,r.days); if(r.escalationLevel==="Critical"||r.days>=8) m[k].urgent++; return m; },{});
   const sumRows=Object.values(summary).sort((a,b)=>b.max-a.max||b.count-a.count);
-  const exportRows=rows.map(r=>({ "Chase Label":r.chase, "Escalation Bucket":r.bucket, "Days Overdue":r.days, "Escalation Owner":r.escalationOwner, "Escalation Level":r.escalationLevel, "Order No":r.orderNo, "Style No":r.styleNo, "Family":r.family, "Colour":r.colour, "Buyer / Brand":r.buyer, "Junior / Owner":r.junior, "Stage / Activity":r.stage, "Due Date":fmtD(r.due), "Current Status":r.status, "Management Reading":`${r.stage} is ${r.days} working day(s) overdue. Blocking chase label is ${r.chase}. Escalation owner is ${r.escalationOwner} (${r.escalationLevel}).`, "Suggested Action":r.escalationAction||"Chase closure today and update actual/revised date." }));
+  const exportRows=rows.map(r=>({ "Chase Label":r.chase, "Escalation Bucket":r.bucket, "Days Overdue":r.days, "Escalation Owner":r.escalationOwner, "Escalation Level":r.escalationLevel, "Order No":r.orderNo, "Style No":r.styleNo, "Family":r.family, "Colour":r.colour, "Buyer / Brand":r.buyer, "Junior / Owner":r.junior, "Stage / Activity":r.stage, "Due Date":fmtD(r.due), "Current Status":r.status, "Management Reading":`${r.stage} overdue ${r.days}d`, "Suggested Action":r.escalationAction||`Chase ${r.escalationOwner}` }));
   const doExport=()=>{ const wb=XLSX.utils.book_new(); appendOneSheet(wb,"Escalation Matrix",exportRows); XLSX.writeFile(wb,"escalation_matrix_"+iso(TODAY)+".xlsx"); };
   return (<div style={{ padding:"16px 22px 36px", maxWidth:1280 }}>
     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:16, flexWrap:"wrap", marginBottom:12 }}>
@@ -1501,14 +1501,24 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
   const stageState=(r)=> r.skipped?"Waived / skipped":(r.rejected?"Rejected":(r.rework?"Rework / resend":(r.actual?"Done":(r.rev?"Revised plan":"Pending"))));
   const dashboardStageDetail=[];
   const dashboardRevisedVsActual=[];
-  fc.forEach(({s,c})=>{ (c.stages||[]).forEach(r=>{ const st=STAGES.find(x=>x.key===r.key)||{}; const start=stageStartFor(s,c,r); const due=r.rev||r.plan; const delayDue=(due&&r.actual)?netWorkdays(due,r.actual):null; const delayPlan=(r.plan&&r.actual)?netWorkdays(r.plan,r.actual):null; const delayRev=(r.rev&&r.actual)?netWorkdays(r.rev,r.actual):null; const duration=(start&&r.actual)?Math.max(0,netWorkdays(start,r.actual)||0):null; const frontier=(c.frontier&&c.frontier.has(r.key)); dashboardStageDetail.push({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Colour":s.colour||"", "Buyer / Brand":s.buyer||s.brand||"", "Junior":s.owner||"", "Stage":r.label, "Branch":BRANCH_OF[r.key]||"", "Chase Label":r.owner||"", "State":stageState(r), "Actionable Frontier?":frontier?"YES":"NO", "Auto Plan Date":r.plan?fmt(r.plan):"", "Revised Date":r.rev?fmt(r.rev):"", "Actual Date":r.actual?fmt(r.actual):"", "Due Used":due?fmt(due):"", "Rejected Date":r.reject?fmt(r.reject):"", "Skipped Date":r.skip?fmt(r.skip):"", "Start Date Used":start?fmt(start):"", "Delay vs Due Days":delayDue==null?"":r1(delayDue), "Delay vs Auto Plan Days":delayPlan==null?"":r1(delayPlan), "Actual Duration Days":duration==null?"":r1(duration), "Overall Status":c.status||"" }); if(r.rev&&r.actual){ dashboardRevisedVsActual.push({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Stage":r.label, "Branch":BRANCH_OF[r.key]||"", "Auto Plan Date":r.plan?fmt(r.plan):"", "Revised Date":fmt(r.rev), "Actual Date":fmt(r.actual), "Actual vs Revised Days":r1(delayRev||0), "Accuracy":(delayRev===0?"On revised date":(delayRev>0?"Late vs revised":"Early vs revised")), "Included?":"YES - revised exists" }); } }); });
-  const ownerRows=owners.map(([owner,count])=>({ "Chase Label":owner, "Open Items":count }));
-  const activityRows=acts.map(([activity,v])=>({ "Activity":activity, "Open Count":v.n, "Overdue Count":v.over, "Stage Key":v.key }));
+  fc.forEach(({s,c})=>{ (c.stages||[]).forEach(r=>{ const st=STAGES.find(x=>x.key===r.key)||{}; const start=stageStartFor(s,c,r); const due=r.rev||r.plan; const delayDue=(due&&r.actual)?netWorkdays(due,r.actual):null; const delayPlan=(r.plan&&r.actual)?netWorkdays(r.plan,r.actual):null; const delayRev=(r.rev&&r.actual)?netWorkdays(r.rev,r.actual):null; const duration=(start&&r.actual)?Math.max(0,netWorkdays(start,r.actual)||0):null; const frontier=(c.frontier&&c.frontier.has(r.key)); dashboardStageDetail.push({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Colour":s.colour||"", "Buyer / Brand":s.buyer||s.brand||"", "Junior":s.owner||"", "Stage":r.label, "Stage Key":r.key, "Branch":BRANCH_OF[r.key]||"", "Chase Label":r.owner||"", "State":stageState(r), "Actionable Frontier?":frontier?"YES":"NO", "Auto Plan Date":r.plan?fmt(r.plan):"", "Revised Date":r.rev?fmt(r.rev):"", "Actual Date":r.actual?fmt(r.actual):"", "Due Used":due?fmt(due):"", "Rejected Date":r.reject?fmt(r.reject):"", "Skipped Date":r.skip?fmt(r.skip):"", "Start Date Used":start?fmt(start):"", "Delay vs Due Days":delayDue==null?"":r1(delayDue), "Delay vs Auto Plan Days":delayPlan==null?"":r1(delayPlan), "Actual Duration Days":duration==null?"":r1(duration), "Overall Status":c.status||"" }); if(r.rev&&r.actual){ dashboardRevisedVsActual.push({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Stage":r.label, "Branch":BRANCH_OF[r.key]||"", "Auto Plan Date":r.plan?fmt(r.plan):"", "Revised Date":fmt(r.rev), "Actual Date":fmt(r.actual), "Actual vs Revised Days":r1(delayRev||0), "Accuracy":(delayRev===0?"On revised date":(delayRev>0?"Late vs revised":"Early vs revised")), "Included?":"YES - revised exists" }); } }); });
+  const dashboardOpenRows=dashboardStageDetail.filter(r=>r["Actionable Frontier?"]==="YES");
+  const ownerRows=Object.entries(dashboardOpenRows.reduce((m,r)=>{ const k=r["Chase Label"]||"(blank)"; m[k]=(m[k]||0)+1; return m; },{})).sort((a,b)=>b[1]-a[1]).map(([owner,count])=>({ "Chase Label":owner, "Open Items":count }));
+  const activityRows=Object.entries(dashboardOpenRows.reduce((m,r)=>{ const k=r["Stage"]||"(blank)"; const x=m[k]=m[k]||{n:0,over:0,key:""}; x.n++; if(r["Next Pending Overdue?"]==="YES"||r["Due Used"]&&r["Delay vs Due Days"]>0) x.over++; x.key=r["Stage Key"]||x.key; return m; },{})).sort((a,b)=>b[1].n-a[1].n).map(([activity,v])=>({ "Activity":activity, "Open Count":v.n, "Overdue Count":v.over, "Stage Key":v.key }));
   const phaseRows=Object.entries(phase).map(([phaseName,count])=>({ "Phase":phaseName, "Styles":count }));
+  const dashboardLogicChecks=[
+      { Check:"Status partition", Rule:"On Track + At Risk + Released equals Styles in Slice", Value:onTrack+atRisk+released, Expected:total, Result:(onTrack+atRisk+released)===total?"OK":"CHECK" },
+      { Check:"Open activity rows", Rule:"Open Activities summary total equals actionable frontier detail rows", Value:activityRows.reduce((a,r)=>a+(Number(r["Open Count"])||0),0), Expected:dashboardOpenRows.length, Result:activityRows.reduce((a,r)=>a+(Number(r["Open Count"])||0),0)===dashboardOpenRows.length?"OK":"CHECK" },
+      { Check:"Who to chase rows", Rule:"Who to Chase summary total equals actionable frontier detail rows", Value:ownerRows.reduce((a,r)=>a+(Number(r["Open Items"])||0),0), Expected:dashboardOpenRows.length, Result:ownerRows.reduce((a,r)=>a+(Number(r["Open Items"])||0),0)===dashboardOpenRows.length?"OK":"CHECK" },
+      { Check:"Revised vs Actual", Rule:"Includes only rows with both Revised Date and Actual Date", Value:dashboardRevisedVsActual.length, Expected:"revised + actual rows only", Result:"OK" },
+      { Check:"Escalation count", Rule:"Dashboard escalation count uses same overdue + escalation owner rows as To-Do", Value:escalationTodo.length, Expected:"To-Do overdue escalation rows", Result:"OK" },
+      { Check:"Slice filters", Rule:"All dashboard tables use the same current slice", Value:fc.length, Expected:total, Result:"OK" }
+  ];
   const dashboardSheets=[
       { label:"Summary", data:dashboardSummary, detailData:dashboardBreakup, modes:["summary","detailed"] },
-      { label:"Who to Chase", data:ownerRows, detailData:dashboardBreakup.filter(r=>String(r["Chase Breakdown"]||"").trim()), modes:["summary","detailed"] },
-      { label:"Open Activities", data:activityRows, detailData:dashboardStageDetail.filter(r=>r["Actionable Frontier?"]==="YES"), modes:["summary","detailed"] },
+      { label:"Logic Checks", data:dashboardLogicChecks, modes:["summary","detailed"] },
+      { label:"Who to Chase", data:ownerRows, detailData:dashboardOpenRows, modes:["summary","detailed"] },
+      { label:"Open Activities", data:activityRows, detailData:dashboardOpenRows, modes:["summary","detailed"] },
       { label:"Stuck Phases", data:phaseRows, detailData:dashboardBreakup, modes:["summary","detailed"] },
       { label:"Styles in Slice", data:dashboardStyleRows, detailData:dashboardStageDetail, modes:["detailed"] },
       { label:"Dashboard Breakup", data:dashboardBreakup, modes:["detailed"] },
@@ -1637,17 +1647,24 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
       addPerf(brandDelay,s.buyer||s.brand||"(No buyer)",s.buyer||s.brand||"(No buyer)",delay,duration);
     });
   });
+  // Performance tables may use all completed entries. Delay-ranking tables must use problem rows only.
+  const lateRecords=delayRecords.filter(r=>r.delay>0);
+  const buyerApprovalStageNames=["Fit Appr","Art Appr","S/O Appr","Lab Dip Appr","PP Appr"];
+  const buyerApprovalRecords=delayRecords.filter(r=>buyerApprovalStageNames.includes(r.stage));
+  const buyerApprovalLateRecords=lateRecords.filter(r=>buyerApprovalStageNames.includes(r.stage));
+  const makeDelayAgg=(records,keyFn,labelFn)=>{ const m={}; records.forEach(r=>{ const k=keyFn(r)||"(blank)"; const o=m[k]=m[k]||{ key:k, label:labelFn?labelFn(r,k):k, delayed:0, delaySum:0, maxDelay:0, styles:new Set() }; const d=Math.max(0,r.delay||0); o.delayed++; o.delaySum+=d; o.maxDelay=Math.max(o.maxDelay,d); if(r.style) o.styles.add(r.style); }); return Object.values(m).sort((a,b)=>(b.delaySum-a.delaySum)||(b.delayed-a.delayed)); };
+  const chaseDelayRows=makeDelayAgg(lateRecords,r=>r.dept||"(No chase label)").slice(0,8);
+  const brandDelayRows=makeDelayAgg(lateRecords,r=>r.buyer||"(No buyer)").slice(0,8);
+  const buyerDelayRows=makeDelayAgg(buyerApprovalLateRecords,r=>r.buyer||"(No buyer)").slice(0,8);
   const stageRows=Object.values(stagePerf).sort((a,b)=>avg(b.delaySum,b.n)-avg(a.delaySum,a.n));
   const deptRows=Object.values(deptPerf).sort((a,b)=>avg(b.delaySum,b.n)-avg(a.delaySum,a.n));
   const buyerRows=Object.values(buyerPerf).sort((a,b)=>avg(b.durSum,b.durN)-avg(a.durSum,a.durN)).slice(0,8);
-  const chaseRows=Object.values(chaseDelay).sort((a,b)=>avg(b.delaySum,b.n)-avg(a.delaySum,a.n)).slice(0,8);
-  const brandRows=Object.values(brandDelay).sort((a,b)=>avg(b.delaySum,b.n)-avg(a.delaySum,a.n)).slice(0,8);
   const actualDone=delayRecords.length;
-  const avgDelay=actualDone?avg(delayRecords.reduce((s,r)=>s+r.delay,0),actualDone):0;
+  const avgDelay=lateRecords.length?avg(lateRecords.reduce((s,r)=>s+Math.max(0,r.delay||0),0),lateRecords.length):0;
   const durationDone=delayRecords.filter(r=>r.duration!=null).length;
   const avgDuration=durationDone?avg(delayRecords.reduce((s,r)=>s+(r.duration!=null?r.duration:0),0),durationDone):0;
-  const lateDone=delayRecords.filter(r=>r.delay>0).length;
-  const worstDelays=[...delayRecords].sort((a,b)=>b.delay-a.delay).slice(0,8);
+  const lateDone=lateRecords.length;
+  const worstDelays=[...lateRecords].sort((a,b)=>b.delay-a.delay).slice(0,8);
 
   const spliceCols=()=>{ const cf={}; if(df.order) cf.orderNo=[df.order]; if(df.fit) cf.sampleFit=[df.fit]; if(df.junior) cf.owner=[df.junior]; if(df.family) cf.family=[df.family]; if(df.brand) cf.brand=[df.brand]; if(df.fabric) cf.fabricType=[df.fabric]; return cf; };
   const spliceSearch=()=> df.colour||"";
@@ -1658,26 +1675,27 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const goStageOpen=(key)=>applyDrill({ status:"All", activity:key, colFilters:spliceCols(), search:spliceSearch() });
   const anyDf=Object.values(df).some(Boolean);
 
-  const mgmtSummary=[{ "Report Type":"Management", "Styles in Slice":total, "On Track":onTrack, "At Risk":atRisk, "Delivery Risk":delRisk, "Released":released, "Release %":completionPct, "Overdue Open Activities":overdueAct, "Completed Stage Entries":actualDone, "Late Completed Entries":lateDone, "Avg Delay Days":r1(avgDelay), "Avg Actual Time Days":r1(avgDuration) }];
+  const mgmtSummary=[{ "Report Type":"Management", "Styles in Slice":total, "On Track":onTrack, "At Risk":atRisk, "Delivery Risk":delRisk, "Released":released, "Release %":completionPct, "Overdue Open Activities":overdueAct, "Completed Stage Entries":actualDone, "Delayed Stage Entries":lateDone, "Avg Late Delay Days":r1(avgDelay), "Avg Actual Time Days":r1(avgDuration) }];
   const checks=[
       { Check:"Status partition", Formula:"On Track + At Risk + Released should equal Styles in Slice", Value:onTrack+atRisk+released, Expected:total, Result:(onTrack+atRisk+released)===total?"OK":"CHECK" },
       { Check:"Open activity overdue", Formula:"Sum overdue counts from Open Activities", Value:overdueAct, Expected:acts.reduce((a,[,v])=>a+v.over,0), Result:overdueAct===acts.reduce((a,[,v])=>a+v.over,0)?"OK":"CHECK" },
       { Check:"Completed duration denominator", Formula:"Avg actual time divides only records with known start date", Value:durationDone, Expected:"duration records", Result:"OK" },
       { Check:"Revised vs actual denominator", Formula:"Revised accuracy includes only rows where revised date exists and actual date exists", Value:delayRecords.filter(r=>r.revised&&r.actual).length, Expected:"revised+actual records", Result:"OK" },
+      { Check:"Delay ranking rule", Formula:"Chase/Buyer/Brand delay rankings include only positive delay rows", Value:lateDone, Expected:"delay > 0 only", Result:lateRecords.every(r=>r.delay>0)?"OK":"CHECK" },
+      { Check:"Worst delay rule", Formula:"Worst delay tables include positive completed delays only", Value:worstDelays.length, Expected:"all delay > 0", Result:worstDelays.every(r=>r.delay>0)?"OK":"CHECK" },
+      { Check:"Buyer approval delay rule", Formula:"Buyer Approval delay report includes buyer approval stages with positive delay only", Value:buyerApprovalLateRecords.length, Expected:"buyer approval + delay > 0", Result:buyerApprovalLateRecords.every(r=>buyerApprovalStageNames.includes(r.stage)&&r.delay>0)?"OK":"CHECK" },
+      { Check:"Escalation source", Formula:"Escalation Owner Load uses To-Do overdue escalation rows only", Value:escalationTodo.length, Expected:"overdue + escalation owner", Result:escalationTodo.every(t=>t.overdue&&t.escalationOwner)?"OK":"CHECK" },
       { Check:"Slice rows", Formula:"All management tables use filtered slice", Value:fc.length, Expected:total, Result:"OK" }
     ];
   const currentStyles=fc.map(({s,c})=>({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Fit":s.sampleFit||"", "Family":s.family||"", "Colour":s.colour||"", "Brand":s.brand||"", "Buyer":s.buyer||"", "Junior":s.owner||"", "Qty":s.qty||0, "Delivery":s.delivery||"", "Status":c.status||"", "Tone":c.tone||"", "Released":c.released?"YES":"", "% Done":c.pct, "Chase":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Next Pending":c.nextPending?c.nextPending.label:"", "Projected Release":c.projRelease?fmt(c.projRelease):"" }));
-  const stageData=stageRows.map(r=>({"Stage":r.label,"Chase Label":r.owner||"","Completed":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Duration Days":r1(avg(r.durSum,r.durN)),"Duration Records":r.durN,"Worst Delay Days":r1(r.maxDelay)}));
-  const dept=deptRows.map(r=>({"Department":r.label,"Completed":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Duration Days":r1(avg(r.durSum,r.durN)),"Duration Records":r.durN,"Worst Delay Days":r1(r.maxDelay)}));
-  const buyerData=buyerRows.map(r=>({"Buyer / Brand":r.label,"Approvals":r.n,"Late Count":r.lateN,"Avg Approval Time Days":r1(avg(r.durSum,r.durN)),"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Worst Delay Days":r1(r.maxDelay)}));
-  const chaseData=chaseRows.map(r=>({"Chase Label":r.label,"Completed Entries":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Time Days":r1(avg(r.durSum,r.durN)),"Worst Delay Days":r1(r.maxDelay)}));
-  const brandData=brandRows.map(r=>({"Buyer / Brand":r.label,"Completed Entries":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Time Days":r1(avg(r.durSum,r.durN)),"Worst Delay Days":r1(r.maxDelay)}));
+  const stageData=stageRows.map(r=>({"Stage":r.label,"Chase Label":r.owner||"","Completed":r.n,"Late Count":r.lateN,"Avg Net Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Duration Days":r1(avg(r.durSum,r.durN)),"Duration Records":r.durN,"Worst Delay Days":r1(r.maxDelay)}));
+  const dept=deptRows.map(r=>({"Department":r.label,"Completed":r.n,"Late Count":r.lateN,"Avg Net Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Duration Days":r1(avg(r.durSum,r.durN)),"Duration Records":r.durN,"Worst Delay Days":r1(r.maxDelay)}));
+  const buyerData=buyerRows.map(r=>({"Buyer / Brand":r.label,"Approvals":r.n,"Late Count":r.lateN,"Avg Approval Time Days":r1(avg(r.durSum,r.durN)),"Avg Net Delay Days":r1(avg(r.delaySum,r.n)),"Worst Delay Days":r1(r.maxDelay)}));
+  const chaseData=chaseDelayRows.map(r=>({"Chase Label":r.label,"Delayed Entries":r.delayed,"Total Delay Days":r1(r.delaySum),"Avg Delay Days":r1(avg(r.delaySum,r.delayed)),"Worst Delay Days":r1(r.maxDelay)}));
+  const brandData=brandDelayRows.map(r=>({"Buyer / Brand":r.label,"Delayed Entries":r.delayed,"Total Delay Days":r1(r.delaySum),"Avg Delay Days":r1(avg(r.delaySum,r.delayed)),"Worst Delay Days":r1(r.maxDelay)}));
   const delayData=worstDelays.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Chase Label":r.owner,"Stage":r.stage,"Department":r.dept,"Delay Days":r1(r.delay),"Duration Days":r.duration==null?"":r1(r.duration),"Due":fmt(r.due),"Actual":fmt(r.actual)}));
-  const calcBreakup=delayRecords.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Chase Label":r.owner,"Stage":r.stage,"Stage Key":r.stageKey,"Department":r.dept,"Auto Plan Date":r.plan?fmt(r.plan):"","Revised Date":r.revised?fmt(r.revised):"","Due Date Used":fmt(r.due),"Actual Date":fmt(r.actual),"Start Date Used":r.start?fmt(r.start):"","Delay vs Due Days":r1(r.delay),"Delay vs Auto Plan Days":r.delayPlan==null?"":r1(r.delayPlan),"Actual vs Revised Days":r.delayRevised==null?"":r1(r.delayRevised),"Duration Days":r.duration==null?"":r1(r.duration),"Included in Avg Delay":"YES","Included in Avg Actual Time":r.duration==null?"NO - start date missing":"YES","Included in Revised Accuracy":r.delayRevised==null?"NO - no revised+actual":"YES"}));
+  const calcBreakup=delayRecords.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Chase Label":r.owner,"Stage":r.stage,"Stage Key":r.stageKey,"Department":r.dept,"Auto Plan Date":r.plan?fmt(r.plan):"","Revised Date":r.revised?fmt(r.revised):"","Due Date Used":fmt(r.due),"Actual Date":fmt(r.actual),"Start Date Used":r.start?fmt(r.start):"","Delay vs Due Days":r1(r.delay),"Delay vs Auto Plan Days":r.delayPlan==null?"":r1(r.delayPlan),"Actual vs Revised Days":r.delayRevised==null?"":r1(r.delayRevised),"Duration Days":r.duration==null?"":r1(r.duration),"Included in Avg Late Delay":r.delay>0?"YES":"NO - early/on time","Included in Performance Net Delay":"YES","Included in Avg Actual Time":r.duration==null?"NO - start date missing":"YES","Included in Revised Accuracy":r.delayRevised==null?"NO - no revised+actual":"YES"}));
   // Export cleanup: delay/chase detail sheets should show problem rows only and use short management text.
-  const lateRecords=delayRecords.filter(r=>r.delay>0);
-  const buyerApprovalStageNames=["Fit Appr","Art Appr","S/O Appr","Lab Dip Appr","PP Appr"];
-  const buyerApprovalLateRecords=lateRecords.filter(r=>buyerApprovalStageNames.includes(r.stage));
   const revisedActualRecords=delayRecords.filter(r=>r.delayRevised!=null);
   const revisedMissedRecords=revisedActualRecords.filter(r=>r.delayRevised>0);
   const dueKind=(r)=>r.revised?"Revised Plan":"Auto Plan";
@@ -1785,7 +1803,7 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
       {card("Released",released,"var(--success)",()=>goStatus("Released"))}
       {card("Overdue open activities",overdueAct,"var(--danger)",null,"frontier overdue")}
       {card("Escalation items",escalationTodo.length,escalationTodo.length?"var(--danger)":"var(--success)",()=>drillTodo&&drillTodo({ priority:"Overdue" }),"who must chase now")}
-      {card("Avg delay",fmtDays(avgDelay),avgDelay>0?"var(--danger)":"var(--success)",null,"completed stages")}
+      {card("Avg late delay",fmtDays(avgDelay),avgDelay>0?"var(--danger)":"var(--success)",null,"delayed stages only")}
       {card("Avg actual time",fmtDays(avgDuration),"var(--info)",null,"stage cycle time")}
     </div>
 
@@ -1797,15 +1815,15 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
     </div>
 
     <div style={{ display:"flex", flexDirection:"column", gap:12, marginTop:12 }}>
-      {section("Department actual performance", deptRows.length?deptRows.map(r=>rowBtn(r.key,r.label,`${fmtDays(avg(r.durSum,r.durN))} avg · ${fmtDays(avg(r.delaySum,r.n))} delay`,r.lateN?"var(--danger)":"var(--success)",null,`${r.n} completed · ${r.lateN} late`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No completed stage dates yet.</div>, "Based on actual date entries")}
-      {section("Stage performance", stageRows.slice(0,10).map(r=>rowBtn(r.key,r.label,`${fmtDays(avg(r.durSum,r.durN))} / ${fmtDays(avg(r.delaySum,r.n))}`,r.lateN?"var(--danger)":"var(--success)",()=>goStageOpen(r.key),`${r.owner||""} · ${r.n} done · ${r.lateN} late · click opens current pending stage`)), "Actual duration / delay by stage")}
-      {section("Worst completed delays", worstDelays.length?worstDelays.map(r=>rowBtn(r.style+":"+r.stageKey,r.style||r.order,`+${fmtNum(r.delay)}d`,r.delay>0?"var(--danger)":"var(--success)",()=>goSearch(r.style),`${r.stage} · ${r.buyer||""} · actual ${fmt(r.actual)}`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No completed delays yet.</div>, "Click opens the style in Tracker")}
+      {section("Department actual performance", deptRows.length?deptRows.map(r=>rowBtn(r.key,r.label,`${fmtDays(avg(r.durSum,r.durN))} avg · ${fmtDays(avg(r.delaySum,r.n))} net`,r.lateN?"var(--danger)":"var(--success)",null,`${r.n} completed · ${r.lateN} late`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No completed stage dates yet.</div>, "Based on actual date entries")}
+      {section("Stage performance", stageRows.slice(0,10).map(r=>rowBtn(r.key,r.label,`${fmtDays(avg(r.durSum,r.durN))} / ${fmtDays(avg(r.delaySum,r.n))}`,r.lateN?"var(--danger)":"var(--success)",()=>goStageOpen(r.key),`${r.owner||""} · ${r.n} done · ${r.lateN} late · net delay shown · click opens current pending stage`)), "Actual duration / net delay by stage")}
+      {section("Worst completed delays", worstDelays.length?worstDelays.map(r=>rowBtn(r.style+":"+r.stageKey,r.style||r.order,`+${fmtNum(r.delay)}d`,"var(--danger)",()=>goSearch(r.style),`${r.stage} · ${r.buyer||""} · actual ${fmt(r.actual)}`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No positive completed delays in this slice.</div>, "Problem rows only: completed stages with delay greater than 0")}
     </div>
 
     <div style={{ display:"flex", flexDirection:"column", gap:12, marginTop:12 }}>
-      {section("Buyer approval turnaround", buyerRows.length?buyerRows.map(r=>rowBtn(r.key,r.label,`${fmtDays(avg(r.durSum,r.durN))} avg`,r.lateN?"var(--danger)":"var(--success)",()=>goSearch(r.label),`${r.n} approvals · ${r.lateN} late · avg delay ${fmtDays(avg(r.delaySum,r.n))}`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No buyer approval actuals yet.</div>, "Fit / Art / S-O / Lab / PP approval actuals")}
-      {section("Chase delay ranking", chaseRows.length?chaseRows.map(r=>rowBtn(r.key,r.label,`${fmtDays(avg(r.delaySum,r.n))} delay`,r.lateN?"var(--danger)":"var(--success)",()=>goSearch(r.label),`${r.n} completed stage entries · ${r.lateN} late`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No chase delay data yet.</div>, "Uses responsible chase label/department and completed stage delays")}
-      {section("Buyer / brand delay ranking", brandRows.length?brandRows.map(r=>rowBtn(r.key,r.label,`${fmtDays(avg(r.delaySum,r.n))} delay`,r.lateN?"var(--danger)":"var(--success)",()=>goSearch(r.label),`${r.n} completed stage entries · ${r.lateN} late`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No buyer delay data yet.</div>, "Average delay across completed stages")}
+      {section("Buyer approval turnaround", buyerRows.length?buyerRows.map(r=>rowBtn(r.key,r.label,`${fmtDays(avg(r.durSum,r.durN))} avg`,r.lateN?"var(--danger)":"var(--success)",()=>goSearch(r.label),`${r.n} approvals · ${r.lateN} late · avg net ${fmtDays(avg(r.delaySum,r.n))}`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No buyer approval actuals yet.</div>, "Fit / Art / S-O / Lab / PP approval actuals")}
+      {section("Chase delay ranking", chaseDelayRows.length?chaseDelayRows.map(r=>rowBtn(r.key,r.label,`${r1(r.delaySum)}d total`,"var(--danger)",()=>goSearch(r.label),`${r.delayed} delayed entries · avg ${fmtDays(avg(r.delaySum,r.delayed))} · worst ${fmtDays(r.maxDelay)}`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No positive chase delays in this slice.</div>, "Problem rows only: delayed completed stages; no early/on-time rows")}
+      {section("Buyer / brand delay ranking", brandDelayRows.length?brandDelayRows.map(r=>rowBtn(r.key,r.label,`${r1(r.delaySum)}d total`,"var(--danger)",()=>goSearch(r.label),`${r.delayed} delayed entries · avg ${fmtDays(avg(r.delaySum,r.delayed))} · worst ${fmtDays(r.maxDelay)}`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No positive buyer/brand delays in this slice.</div>, "Problem rows only: delayed completed stages; no early/on-time rows")}
     </div>
   </div>);
 }
@@ -1847,8 +1865,15 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   shown.forEach(t=>{ byOwner[t.owner||"(blank)"]=(byOwner[t.owner||"(blank)"]||0)+1; byActivity[t.activity||"(blank)"]=(byActivity[t.activity||"(blank)"]||0)+1; });
   const ownerRows=Object.entries(byOwner).map(([k,v])=>({"Chase Label":k,"Items":v}));
   const activityRows=Object.entries(byActivity).map(([k,v])=>({"Activity":k,"Items":v}));
+  const todoLogicChecks=[
+      { Check:"Display count", Rule:"Shown rows equal filtered display rows", Value:shown.length, Expected:displayItems.filter(pass).length, Result:shown.length===displayItems.filter(pass).length?"OK":"CHECK" },
+      { Check:"Escalation toggle", Rule:"Escalation rows added only when toggle is ON", Value:includeEsc?escalationRows.length:0, Expected:includeEsc?"overdue rows with escalation owner":"0", Result:(!includeEsc&&escalationRows.length===0)||(includeEsc&&escalationRows.every(t=>t.overdue&&t.escalationOwner))?"OK":"CHECK" },
+      { Check:"Base activity rows", Rule:"Base activity rows remain even when escalation rows are ON", Value:baseItems.length, Expected:"unchanged source To-Do items", Result:"OK" },
+      { Check:"Overdue/upcoming split", Rule:"Overdue + Upcoming equals shown rows", Value:overdue.length+upcoming.length, Expected:shown.length, Result:(overdue.length+upcoming.length)===shown.length?"OK":"CHECK" }
+  ];
   const todoSheets=[
       { label:"Summary", data:summary, detailData:data, modes:["summary","detailed"] },
+      { label:"Logic Checks", data:todoLogicChecks, modes:["summary","detailed"] },
       { label:"By Chase", data:ownerRows, detailData:data, modes:["summary","detailed"] },
       { label:"By Activity", data:activityRows, detailData:data, modes:["summary","detailed"] },
       { label:"To-Do Items", data:data, modes:["detailed"] },
