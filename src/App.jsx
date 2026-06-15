@@ -536,6 +536,10 @@ function MerchTracker({ me, onSignOut }){
   const [frOpen,setFrOpen]=useState(false); const [frFind,setFrFind]=useState(""); const [frRepl,setFrRepl]=useState(""); const [frScope,setFrScope]=useState(()=>{ try{ const v=localStorage.getItem("mt_fr_scope"); return (v==="selected"||v==="filtered")?v:"filtered"; }catch(e){ return "filtered"; } }); const [frCase,setFrCase]=useState(()=>{ try{ return localStorage.getItem("mt_fr_case")==="1"; }catch(e){ return false; } });
   useEffect(()=>{ try{ localStorage.setItem("mt_exp_mode",expMode); localStorage.setItem("mt_exp_buf",String(expBuf)); localStorage.setItem("mt_exp_incbuf",expIncBuf?"1":"0"); localStorage.setItem("mt_exp_relmode",expRelMode); localStorage.setItem("mt_fr_scope",frScope); localStorage.setItem("mt_fr_case",frCase?"1":"0"); }catch(e){} },[expMode,expBuf,expIncBuf,expRelMode,frScope,frCase]);
   const [freezeN,setFreezeN]=useState(1);  // # leading columns frozen (incl style)
+  const [hiddenRows,setHiddenRows]=useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem("mt_hidden_rows")||"[]")); }catch(e){ return new Set(); } });
+  useEffect(()=>{ try{ localStorage.setItem("mt_hidden_rows", JSON.stringify([...hiddenRows])); }catch(e){} },[hiddenRows]);
+  const [rowH,setRowH]=useState(()=>{ try{ return Number(localStorage.getItem("mt_row_h")||38)||38; }catch(e){ return 38; } });
+  useEffect(()=>{ try{ localStorage.setItem("mt_row_h", String(rowH)); }catch(e){} },[rowH]);
   const [findIdx,setFindIdx]=useState(-1);
   const [frMatches,setFrMatches]=useState([]); // computed Find matches: [{id,col,style,colLabel,text}]
   const [colW,setColW]=useState({});  // per-column width overrides (drag to resize)
@@ -845,13 +849,14 @@ function MerchTracker({ me, onSignOut }){
   // Live/report source: archived styles stay available in Tracker Archive view, but are excluded from all live reports by default.
   const activeComputed=useMemo(()=>computed.filter(({s})=>!s.archived),[computed]);
   const chaseOwnerOptions=useMemo(()=>["All", ...Array.from(new Set([...STAGES.map(st=>(cfg.stageOwners&&cfg.stageOwners[st.key])||DEFAULT_STAGE_OWNERS[st.key]||st.owner), ...CHASE_LABELS])).filter(Boolean)], [cfg]);
+  const splitColoursForTodo=(txt)=>{ const raw=String(txt||"").trim(); if(!raw) return ["(no colour)"]; const parts=raw.split(/[,;|/+]+/).map(x=>x.replace(/\s+/g," ").trim()).filter(Boolean); return parts.length?parts:[raw.replace(/\s+/g," ").trim()]; };
   const todoItems=useMemo(()=>{
     const enrich=(item)=>{
       const daysLate=item.overdue?Math.max(1,Math.abs(Number(item.du)||0)):0;
       const esc=item.overdue?escalationFor(cfg,daysLate):null;
       return { ...item, daysLate, escalationOwner:esc?esc.owner:"", escalationLevel:esc?esc.level:"", escalationAction:esc?esc.action:"", escalationRange:esc?esc.rangeLabel:"" };
     };
-    const out=[]; const fabByCol={};
+    const out=[]; const colourGroups={};
     activeComputed.forEach(({s,c})=>{
       if(c.released) return;
       const front=c.frontier?[...c.frontier]:[];
@@ -865,20 +870,20 @@ function MerchTracker({ me, onSignOut }){
         const include = overdue || (win!=null && du<=win);
         if(!include) return;
         const branch=BRANCH_OF[key]||"";
-        if(key==="fabricIH"){
-          const cols=String(s.colour||"").split(/[,/]/).map(x=>x.trim()).filter(Boolean);
-          (cols.length?cols:["(no colour)"]).forEach(col=>{
-            let cur=fabByCol[col];
-            if(!cur){ cur=fabByCol[col]={ colour:col, key, label:stageReviewLabel(s,r), owner:r.owner, branch, exp, du, overdue, anyStyle:s.id, anyOrder:s.orderNo, anyJunior:s.owner, count:0 }; }
-            cur.count++;
-            if(exp<cur.exp){ cur.exp=exp; cur.du=du; cur.overdue=overdue; cur.anyStyle=s.id; cur.anyOrder=s.orderNo; cur.anyJunior=s.owner; }
+        if(["fabricIH","labDip","labAppr"].includes(key)){
+          splitColoursForTodo(s.colour).forEach(col=>{
+            const gkey=key+"::"+col.toLowerCase();
+            let cur=colourGroups[gkey];
+            if(!cur){ cur=colourGroups[gkey]={ colour:col, key, label:stageReviewLabel(s,r), owner:r.owner, branch, exp, du, overdue, anyStyle:s.id, orders:new Set(), juniors:new Set(), styles:new Set(), count:0 }; }
+            cur.count++; cur.orders.add(s.orderNo||""); cur.juniors.add(s.owner||""); cur.styles.add(s.styleNo||"");
+            if(exp<cur.exp){ cur.exp=exp; cur.du=du; cur.overdue=overdue; cur.anyStyle=s.id; }
           });
         } else {
-          out.push(enrich({ id:s.id, orderNo:s.orderNo, styleNo:s.styleNo, junior:s.owner, colour:s.colour, key, activity:stageReviewLabel(s,r), branch, owner:r.owner, exp, du, overdue }));
+          out.push(enrich({ id:s.id, orderNo:s.orderNo, orderNos:[s.orderNo].filter(Boolean), styleNo:s.styleNo, junior:s.owner, juniors:[s.owner].filter(Boolean), colour:s.colour, key, activity:stageReviewLabel(s,r), branch, owner:r.owner, exp, du, overdue }));
         }
       });
     });
-    Object.values(fabByCol).forEach(f=> out.push(enrich({ id:f.anyStyle, orderNo:f.anyOrder, styleNo:f.colour, junior:f.anyJunior, colour:f.colour, key:f.key, activity:f.label, branch:f.branch, owner:f.owner, exp:f.exp, du:f.du, overdue:f.overdue, isColour:true, count:f.count })));
+    Object.values(colourGroups).forEach(f=>{ const orders=[...f.orders].filter(Boolean); const juniors=[...f.juniors].filter(Boolean); const styles=[...f.styles].filter(Boolean); out.push(enrich({ id:f.anyStyle, orderNo:orders.length===1?orders[0]:(orders.length?"Multiple":""), orderNos:orders, styleNo:f.colour, junior:juniors.length===1?juniors[0]:(juniors.length?"Multiple":""), juniors, colour:f.colour, key:f.key, activity:f.label, branch:f.branch, owner:f.owner, exp:f.exp, du:f.du, overdue:f.overdue, isColour:true, count:f.count, styleCount:styles.length, styleNos:styles })); });
     out.sort((a,b)=> (a.overdue!==b.overdue)?(a.overdue?-1:1):((a.exp&&b.exp)?(a.exp-b.exp):0));
     return out;
   },[activeComputed,cfg]);
@@ -1012,7 +1017,7 @@ function MerchTracker({ me, onSignOut }){
   const [renderLimit,setRenderLimit]=useState(()=>{ try{ const v=parseInt(localStorage.getItem("mt_render_limit"),10); return (isFinite(v)&&v>=300&&v<=5000)?v:900; }catch(e){ return 900; } });
   useEffect(()=>{ try{ localStorage.setItem("mt_render_limit",String(renderLimit)); }catch(e){} },[renderLimit]);
   useEffect(()=>{ if(rows.length<=renderLimit && renderLimit>900) setRenderLimit(900); },[rows.length,renderLimit]);
-  const renderRows=useMemo(()=>{ const out=rows.length>renderLimit?rows.slice(0,renderLimit):rows; perfRef.current.rendered=out.length; return out; },[rows,renderLimit]);
+  const renderRows=useMemo(()=>{ const visible=hiddenRows&&hiddenRows.size?rows.filter(r=>!hiddenRows.has(String(r.s.id))):rows; const out=visible.length>renderLimit?visible.slice(0,renderLimit):visible; perfRef.current.rendered=out.length; return out; },[rows,renderLimit,hiddenRows]);
   const clickHeader=(col)=>{ finishEditing(); setSort(p=> p.col===col?{col,dir:-p.dir}:{col,dir:1}); };
 
   const ROLE_VIEW_PRESETS={
@@ -1252,6 +1257,12 @@ function MerchTracker({ me, onSignOut }){
   const inRange=(id,col)=> selKeys.has(`${id}:${col}`);
   const inFill=(id,col)=>{ if(!filling||!fillFrom||!fillTo) return false; const aR=rowIndex(fillFrom.id),aC=colIndex(fillFrom.col),tR=rowIndex(fillTo.id),tC=colIndex(fillTo.col); const r=rowIndex(id),cc=colIndex(col); return r>=Math.min(aR,tR)&&r<=Math.max(aR,tR)&&cc>=Math.min(aC,tC)&&cc<=Math.max(aC,tC); };
   const bgFor=(id,col,base)=>{ const f=fills[cellKey(id,col)]; if(f) return f; if(inFill(id,col)) return "#def0e0"; if(inRange(id,col)&&!isAnchor(id,col)) return hasMultiSelect?"#eaf3ff":"#e3edfb"; return base; };
+  const selectedColumnKeys=()=>{ const out=[]; const seen=new Set(); selectedCells().forEach(x=>{ if(!seen.has(x.col)){ seen.add(x.col); out.push(x.col); } }); return out; };
+  const selectedRowIds=()=>{ const out=[]; const seen=new Set(); selectedCells().forEach(x=>{ const k=String(x.id); if(!seen.has(k)){ seen.add(k); out.push(k); } }); return out; };
+  const hideSelectedColumns=()=>{ const cols=selectedColumnKeys().filter(c=>c!=="__style" && navCols.includes(c)); if(!cols.length) return; setHidden(prev=>{ const n=new Set(prev); cols.forEach(c=>n.add(c)); return n; }); };
+  const hideSelectedRows=()=>{ const ids=selectedRowIds(); if(!ids.length) return; setHiddenRows(prev=>{ const n=new Set(prev); ids.forEach(id=>n.add(String(id))); return n; }); clearSelection(); };
+  const freezeThroughColumn=(col)=>{ const idx=colIndex(col); if(idx<0) return; if(idx>=maxFreeze){ alert("Only leading tracker columns can be frozen. To freeze this column, first move it into a leading column view."); return; } setFreezeN(Math.max(1, idx+1)); };
+  const rowHeightPreset=(h)=>setRowH(Math.max(28, Math.min(110, Number(h)||38)));
   const FillHandle=({id,col})=> isAnchor(id,col)&&!editing&&canPasteCell(styles.find(x=>x.id===id),col)? <span onMouseDown={(e)=>{ e.stopPropagation(); e.preventDefault(); setFilling(true); setFillFrom({id,col}); setFillTo({id,col}); }} title="drag to fill" style={{ position:"absolute", right:-2, bottom:-2, width:7, height:7, background:"var(--info)", cursor:"crosshair", zIndex:6 }}/> : null;
   const ringFor=(id,col)=> isAnchor(id,col)?"inset 0 0 0 3px var(--info), inset 0 0 0 9999px rgba(37,99,166,0.08)":(inRange(id,col)?"inset 0 0 0 2px rgba(37,99,166,0.55)":null);
   const activeCellStyle=(id,col)=> isAnchor(id,col) ? { outline:"3px solid var(--info)", outlineOffset:"-3px", boxShadow:"inset 0 0 0 3px var(--info), inset 0 0 0 9999px rgba(37,99,166,0.10)", zIndex:isFrozen(col)?60:4, position:isFrozen(col)?"sticky":"relative", backgroundClip:"padding-box" } : {};
@@ -1265,7 +1276,7 @@ function MerchTracker({ me, onSignOut }){
     const bg=bgFor(s.id,col.key,"var(--surface)");
     return (
       <td key={col.key} id={`cell-${s.id}-${col.key}`} onClick={(e)=>onCellClick(e,s.id,col.key)} onDoubleClick={(e)=>{ e.stopPropagation(); startEdit(s.id,col.key); }}
-        style={{ border:"1px solid var(--line-1)", padding:"6px 9px", whiteSpace: col.key==="remarks"?"normal":"nowrap", boxShadow:ringFor(s.id,col.key), cursor:"cell", maxWidth:col.w, overflow:"hidden", textOverflow:"ellipsis", fontSize: col.key==="remarks"?10:11, color: col.key==="remarks"?"#a15":"var(--ink)", position:"relative", background:bg, ...freezeStyle(col.key,bg), ...activeCellStyle(s.id,col.key) }}>
+        style={{ border:"1px solid var(--line-1)", padding:"6px 9px", height:rowH, whiteSpace: col.key==="remarks"?"normal":"nowrap", boxShadow:ringFor(s.id,col.key), cursor:"cell", maxWidth:col.w, overflow:"hidden", textOverflow:"ellipsis", fontSize: col.key==="remarks"?10:11, color: col.key==="remarks"?"#a15":"var(--ink)", position:"relative", background:bg, ...freezeStyle(col.key,bg), ...activeCellStyle(s.id,col.key) }}>
         {editingThis ? (<span style={{ position:"relative", display:"inline-block" }}><input autoFocus onFocus={e=>{ if((e.target.value||"").length>1) e.target.select(); }} value={editVal} onClick={e=>e.stopPropagation()} onChange={e=>setEditVal(col.key==="qty"?e.target.value.replace(/[^0-9]/g,""):e.target.value)} onKeyDown={e=>{ e.stopPropagation(); if(e.key==="Tab"){ e.preventDefault(); const v=editSuggestion||editVal; commitText(v); moveAnchor(0,e.shiftKey?-1:1); } else if(e.key==="Enter"){ e.preventDefault(); commitText(editSuggestion||editVal); moveAnchor(1,0); } else if(e.key==="Escape"){ e.preventDefault(); setEditing(null); } }} onBlur={()=>commitText()} style={{ width:Math.max(40,col.w-16), fontFamily:"inherit", fontSize:11, border:"1px solid var(--info)", outline:"none", padding:"1px 3px" }}/>{editSuggestion && <button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); setEditVal(editSuggestion); }} title="Click or press Tab to accept" style={{ position:"absolute", left:0, top:"100%", marginTop:3, zIndex:390, maxWidth:220, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"3px 7px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--accent-tint)", boxShadow:"3px 3px 0 var(--ink)" }}>Tab ↹ {editSuggestion}</button>}</span>) : (val===""||val==null ? <span style={{color:"var(--line-2)"}}>—</span> : String(val))}
         <PeerTag who={peerOn(s.id,col.key)}/><NoteTri k={k}/><FillHandle id={s.id} col={col.key}/>
       </td>
@@ -1277,7 +1288,7 @@ function MerchTracker({ me, onSignOut }){
       style={{ minHeight:"100vh", background:"var(--bg)", fontFamily:"'JetBrains Mono', monospace", color:"var(--ink)", paddingBottom:80, outline:"none" }}>
       <style>{FONT}</style>
       <style>{THEME_CSS}</style>
-      {ctxMenu && (()=>{ const cellCount=selKeys.size||1; const stageCount=selectedCells().filter(x=>isStageCol(x.col)).length; const item=(label,onClick,disabled=false,sub="")=><button disabled={disabled} onClick={(e)=>{ e.stopPropagation(); if(disabled) return; setCtxMenu(null); onClick&&onClick(); }} style={{ width:"100%", textAlign:"left", padding:"7px 10px", border:"none", borderBottom:"1px solid var(--line-3)", background:disabled?"#f3f1ec":"var(--surface)", color:disabled?"var(--muted-1)":"var(--ink)", cursor:disabled?"not-allowed":"pointer", fontFamily:"inherit", fontSize:11 }}><b>{label}</b>{sub&&<span style={{ display:"block", fontSize:9, color:"var(--muted-2)", marginTop:2 }}>{sub}</span>}</button>; return <div onClick={e=>e.stopPropagation()} style={{ position:"fixed", left:Math.min(ctxMenu.x, window.innerWidth-230), top:Math.min(ctxMenu.y, window.innerHeight-330), zIndex:520, width:225, background:"var(--surface)", border:"1px solid var(--ink)", boxShadow:"5px 5px 0 var(--ink)", overflow:"hidden" }}>
+      {ctxMenu && (()=>{ const cellCount=selKeys.size||1; const stageCount=selectedCells().filter(x=>isStageCol(x.col)).length; const item=(label,onClick,disabled=false,sub="")=><button disabled={disabled} onClick={(e)=>{ e.stopPropagation(); if(disabled) return; setCtxMenu(null); onClick&&onClick(); }} style={{ width:"100%", textAlign:"left", padding:"7px 10px", border:"none", borderBottom:"1px solid var(--line-3)", background:disabled?"#f3f1ec":"var(--surface)", color:disabled?"var(--muted-1)":"var(--ink)", cursor:disabled?"not-allowed":"pointer", fontFamily:"inherit", fontSize:11 }}><b>{label}</b>{sub&&<span style={{ display:"block", fontSize:9, color:"var(--muted-2)", marginTop:2 }}>{sub}</span>}</button>; return <div onClick={e=>e.stopPropagation()} style={{ position:"fixed", left:Math.min(ctxMenu.x, window.innerWidth-230), top:Math.min(ctxMenu.y, window.innerHeight-520), zIndex:520, width:225, background:"var(--surface)", border:"1px solid var(--ink)", boxShadow:"5px 5px 0 var(--ink)", overflow:"hidden" }}>
         <div style={{ padding:"7px 10px", fontSize:10, fontWeight:900, background:"var(--accent-tint)", borderBottom:"1px solid var(--line-3)" }}>{cellCount} cell{cellCount===1?"":"s"} selected</div>
         {item("Copy", copySelection, false, hasMultiSelect?"Non-adjacent copies line-by-line":"Excel-style TSV copy")}
         {item("Paste", doPaste, !clip, "Paste normal values into selected cells")}
@@ -1289,6 +1300,13 @@ function MerchTracker({ me, onSignOut }){
         {item("Cell history", ()=>openHistory(ctxMenu.id,ctxMenu.col), !sel)}
         {item("Select row", ()=>selectRow(ctxMenu.id), !ctxMenu.id)}
         {item("Auto-fit column", ()=>autoFit(ctxMenu.col), !ctxMenu.col)}
+        {item("Freeze up to this column", ()=>freezeThroughColumn(ctxMenu.col), !ctxMenu.col || colIndex(ctxMenu.col)>=maxFreeze, "Frozen columns stay visible while scrolling")}
+        {item("Hide selected column(s)", hideSelectedColumns, selectedColumnKeys().filter(c=>c!=="__style").length===0, "Style No cannot be hidden")}
+        {item("Hide selected row(s)", hideSelectedRows, selectedRowIds().length===0, "Local view only; data is not archived/deleted")}
+        {item("Show hidden rows", ()=>setHiddenRows(new Set()), !hiddenRows.size, hiddenRows.size?`${hiddenRows.size} hidden row(s)`:"")}
+        {item("Row height: compact", ()=>rowHeightPreset(30), false)}
+        {item("Row height: normal", ()=>rowHeightPreset(38), false)}
+        {item("Row height: tall", ()=>rowHeightPreset(56), false)}
         {item("Clear selection", clearSelection, !sel)}
       </div>; })()}
 
@@ -1581,6 +1599,7 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
 
       {showJump && <button onClick={jumpToTop} title="Back to controls / top" style={{ position:"fixed", bottom:24, right:24, zIndex:370, width:42, height:42, borderRadius:21, border:"1px solid var(--ink)", background:"var(--accent)", color:"var(--ink)", boxShadow:"2px 2px 0 var(--ink)", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}><ChevronUp size={20}/></button>}
 
+      {hiddenRows.size>0 && <div style={{ margin:"0 22px 8px", border:"1px solid var(--line-2)", background:"var(--surface)", borderRadius:10, padding:"7px 10px", fontSize:10.5, color:"var(--muted-4)", display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}><b>{hiddenRows.size}</b> row(s) hidden in this view <button onClick={()=>setHiddenRows(new Set())} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"3px 8px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--accent-tint)" }}>show hidden rows</button></div>}
       {rows.length>renderRows.length && <div style={{ margin:"0 22px 8px", border:"1px solid var(--line-2)", background:"var(--accent-tint)", borderRadius:10, padding:"8px 10px", fontSize:10.5, color:"var(--muted-4)", display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}><b>Performance mode:</b> showing first {renderRows.length} of {rows.length} filtered styles to protect P95 speed. Narrow filters for fastest work, or <button onClick={()=>setRenderLimit(Math.min(5000, renderLimit+900))} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"3px 8px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)" }}>show 900 more</button><button onClick={()=>setRenderLimit(5000)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"3px 8px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)" }}>show all up to 5,000</button></div>}
       <div ref={scrollWrapRef} style={{ overflow:"auto", padding:"0 22px", maxHeight:"calc(100vh - 210px)" }}>
         <table role="grid" aria-label="Pre-production tracker grid. Arrow keys move, Shift+arrows select range, Tab moves right, Shift+Tab moves left." style={{ borderCollapse:"separate", borderSpacing:0, zoom:textScale, fontSize:11, fontWeight:tableWeight, tableLayout:"fixed", userSelect:dragSel?"none":"auto" }}>
@@ -1598,8 +1617,8 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
           </tr></thead>
           <tbody>
             {renderRows.map(({s,c},rowIdx)=>{ const t=TONE_STYLE[c.tone]; const sk=cellKey(s.id,"__style"); const styBg=bgFor(s.id,"__style","var(--surface)"); return (
-              <tr key={s.id} role="row" style={activeRowStyle(s.id)}>
-                <td id={`cell-${s.id}-__style`} onClick={(e)=>onCellClick(e,s.id,"__style")} onDoubleClick={(e)=>{ e.stopPropagation(); startEdit(s.id,"__style"); }} style={{ border:"1px solid var(--line-1)", padding:"6px 9px", overflow:"hidden", cursor:"cell", ...freezeStyle("__style",styBg), boxShadow:ringFor(s.id,"__style")||freezeStyle("__style",styBg).boxShadow, ...activeCellStyle(s.id,"__style") }}>
+              <tr key={s.id} role="row" style={{ ...activeRowStyle(s.id), height:rowH }}>
+                <td id={`cell-${s.id}-__style`} onClick={(e)=>onCellClick(e,s.id,"__style")} onDoubleClick={(e)=>{ e.stopPropagation(); startEdit(s.id,"__style"); }} style={{ border:"1px solid var(--line-1)", padding:"6px 9px", height:rowH, overflow:"hidden", cursor:"cell", ...freezeStyle("__style",styBg), boxShadow:ringFor(s.id,"__style")||freezeStyle("__style",styBg).boxShadow, ...activeCellStyle(s.id,"__style") }}>
                   {editing&&editing.id===s.id&&editing.col==="__style" ? (<span style={{ position:"relative", display:"inline-block" }}><input autoFocus onFocus={e=>{ if((e.target.value||"").length>1) e.target.select(); }} value={editVal} onClick={e=>e.stopPropagation()} onChange={e=>setEditVal(e.target.value)} onKeyDown={e=>{ e.stopPropagation(); if(e.key==="Tab"){ e.preventDefault(); const v=editSuggestion||editVal; commitText(v); moveAnchor(0,e.shiftKey?-1:1); } else if(e.key==="Enter"){ e.preventDefault(); commitText(editSuggestion||editVal); moveAnchor(1,0); } else if(e.key==="Escape"){ e.preventDefault(); setEditing(null); } }} onBlur={()=>commitText()} style={{ width:150, fontFamily:"inherit", fontSize:11, fontWeight:700, border:"1px solid var(--info)", outline:"none", padding:"1px 3px" }}/>{editSuggestion && <button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); setEditVal(editSuggestion); }} title="Click or press Tab to accept" style={{ position:"absolute", left:0, top:"100%", marginTop:3, zIndex:390, maxWidth:220, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"3px 7px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--accent-tint)", boxShadow:"3px 3px 0 var(--ink)" }}>Tab ↹ {editSuggestion}</button>}</span>) : <div style={{ fontWeight:700, display:"flex", alignItems:"center", gap:6 }}><span onClick={(e)=>{ e.stopPropagation(); selectRow(s.id); }} title="select row" style={{ fontSize:8, color:"var(--muted-6)", cursor:"pointer", minWidth:14 }}>{rowIdx+1}</span><Star size={11} onClick={(e)=>{ e.stopPropagation(); toggleFollow(s.id); }} title={follows.has(s.id)?"following — click to unfollow":"follow this style"} fill={follows.has(s.id)?"var(--accent)":"none"} color={follows.has(s.id)?"var(--accent)":"#c9c1b3"} style={{ cursor:"pointer", flex:"0 0 auto", opacity:follows.has(s.id)?1:0.5 }}/><span style={{ color:follows.has(s.id)?"#b45309":"inherit" }}>{s.styleNo}</span></div>}
                   <div style={{ fontSize:11, fontWeight:600, color:"var(--muted-4)", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", maxWidth:188, marginTop:2 }}>{s.colour}</div>
                   <div style={{ display:"flex", gap:3, marginTop:4, flexWrap:"wrap" }}>{FLAG_DEFS.map(f=>{ const on=!!s[f.key]; return (<button key={f.key} title={f.title} onClick={(e)=>{ e.stopPropagation(); if(canMaster(role)) toggleFlag(s.id,f.key); }} style={{ fontFamily:"inherit", fontSize:8.5, fontWeight:700, letterSpacing:0.3, padding:"2px 5px", cursor:!canMaster(role)?"not-allowed":"pointer", lineHeight:1.3, border:`1px solid ${on?"var(--ink)":"#cfcabf"}`, background:on?"var(--ink)":"transparent", color:on?"var(--bg)":"var(--muted-6)", opacity:!canMaster(role)?0.5:1 }}>{f.short}</button>); })}</div>
@@ -1610,7 +1629,7 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
                 {visInfo.map(col=>{
                   if(col.kind==="text"||col.kind==="num") return renderEditable(s,col);
                   const k=cellKey(s.id,col.key);
-                  if(col.kind==="date"){ const bg=bgFor(s.id,col.key,"var(--surface)"); return (<td key={col.key} id={`cell-${s.id}-${col.key}`} onClick={(e)=>onCellClick(e,s.id,col.key)} onDoubleClick={(e)=>{ e.stopPropagation(); if(canEdit(role,col.key,"actual")) beginDate(s.id,col.key,"actual"); }} style={{ border:"1px solid var(--line-1)", padding:"6px 9px", whiteSpace:"nowrap", boxShadow:ringFor(s.id,col.key), cursor:"cell", position:"relative", overflow:(editing&&editing.id===s.id&&editing.col===col.key)?"visible":"hidden", background:bg, ...freezeStyle(col.key,bg), ...activeCellStyle(s.id,col.key) }}>{fmt(parse(s[col.key]))||<span style={{color:"var(--line-2)"}}>—</span>}{editing&&editing.id===s.id&&editing.col===col.key && dateEditor(s.id,col.key,editing.mode)}<PeerTag who={peerOn(s.id,col.key)}/><NoteTri k={k}/><FillHandle id={s.id} col={col.key}/></td>); }
+                  if(col.kind==="date"){ const bg=bgFor(s.id,col.key,"var(--surface)"); return (<td key={col.key} id={`cell-${s.id}-${col.key}`} onClick={(e)=>onCellClick(e,s.id,col.key)} onDoubleClick={(e)=>{ e.stopPropagation(); if(canEdit(role,col.key,"actual")) beginDate(s.id,col.key,"actual"); }} style={{ border:"1px solid var(--line-1)", padding:"6px 9px", height:rowH, whiteSpace:"nowrap", boxShadow:ringFor(s.id,col.key), cursor:"cell", position:"relative", overflow:(editing&&editing.id===s.id&&editing.col===col.key)?"visible":"hidden", background:bg, ...freezeStyle(col.key,bg), ...activeCellStyle(s.id,col.key) }}>{fmt(parse(s[col.key]))||<span style={{color:"var(--line-2)"}}>—</span>}{editing&&editing.id===s.id&&editing.col===col.key && dateEditor(s.id,col.key,editing.mode)}<PeerTag who={peerOn(s.id,col.key)}/><NoteTri k={k}/><FillHandle id={s.id} col={col.key}/></td>); }
                   let content=null;
                   if(col.kind==="branch"){ const b=col.branch==="fit"?c.fitBranch:col.branch==="print"?c.printBranch:col.branch==="fabric"?c.fabricBranch:col.branch==="pp"?c.ppBranch:c.prodFileBranch; const canJump=b.tone!=="na"&&!c.released&&!b.autoClosed; content=<BranchPill b={b} onJump={canJump?()=>jumpToEnter(s.id,branchTarget(s,c,col.branch)):null}/>; }
                   else if(col.key==="overall") content=(<span style={{ display:"inline-flex", flexDirection:"column", gap:2, alignItems:"flex-start" }}><span style={{ display:"inline-flex", alignItems:"center", gap:5, background:t.bg, color:t.fg, border:"1px solid rgba(31,31,29,0.08)", borderRadius:999, boxShadow:"var(--pill-shadow)", padding:"3px 9px", fontSize:10, lineHeight:1.15, fontWeight:800 }}><span style={{ width:6,height:6,borderRadius:"50%", background:t.dot, flex:"0 0 auto" }}/>{c.status}</span>{c.lastActual && <span style={{ fontSize:8.5, color:"var(--on-dark-2)", whiteSpace:"nowrap" }}>last: {fmt(c.lastActual)}{c.lastActualKey?` · ${(STAGES.find(x=>x.key===c.lastActualKey)||{}).label||""}`:""}</span>}</span>);
@@ -1621,7 +1640,7 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
                   else if(col.key==="float") content=<span style={{ fontWeight:700, color:c.float<0?"var(--danger)":"var(--success)" }}>{c.float==null?"—":`${c.float>0?"+":""}${c.float}d`}</span>;
                   else if(col.key==="idle") content=<span style={{ color:c.idle>=7?"var(--danger)":"var(--muted-2)" }}>{c.idle==null?"—":`${c.idle}d`}</span>;
                   const bg=bgFor(s.id,col.key,"var(--surface)");
-                  return <td key={col.key} id={`cell-${s.id}-${col.key}`} onClick={(e)=>onCellClick(e,s.id,col.key)} style={{ border:"1px solid var(--line-1)", padding:"6px 9px", whiteSpace:"nowrap", boxShadow:ringFor(s.id,col.key), cursor:"default", background:bg, position:"relative", overflow:"hidden", ...freezeStyle(col.key,bg), ...activeCellStyle(s.id,col.key) }}>{content}<PeerTag who={peerOn(s.id,col.key)}/><NoteTri k={k}/><FillHandle id={s.id} col={col.key}/></td>;
+                  return <td key={col.key} id={`cell-${s.id}-${col.key}`} onClick={(e)=>onCellClick(e,s.id,col.key)} style={{ border:"1px solid var(--line-1)", padding:"6px 9px", height:rowH, whiteSpace:"nowrap", boxShadow:ringFor(s.id,col.key), cursor:"default", background:bg, position:"relative", overflow:"hidden", ...freezeStyle(col.key,bg), ...activeCellStyle(s.id,col.key) }}>{content}<PeerTag who={peerOn(s.id,col.key)}/><NoteTri k={k}/><FillHandle id={s.id} col={col.key}/></td>;
                 })}
 
                 {visStages.map(st=>{
@@ -1630,7 +1649,7 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
                   const isNext=applies && c.frontier && c.frontier.has(st.key);
                   const editable=applies&&canEdit(role,st.key,"actual"); const canRev=applies&&canEditRev(role); const canRej=applies&&canEditReject(role,st.key); const canSkp=applies&&MERCH_ROLES.includes(role);
                   const k=cellKey(s.id,st.key);
-                  if(!applies){ const bg=bgFor(s.id,st.key,"#f3f1ec"); return <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} style={{ border:"1px solid var(--line-1)", background:bg, color:"var(--line-2)", textAlign:"center", padding:"6px 9px", boxShadow:ringFor(s.id,st.key), position:"relative", overflow:"hidden", ...activeCellStyle(s.id,st.key) }}>—<NoteTri k={k}/></td>; }
+                  if(!applies){ const bg=bgFor(s.id,st.key,"#f3f1ec"); return <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} style={{ border:"1px solid var(--line-1)", background:bg, color:"var(--line-2)", textAlign:"center", padding:"6px 9px", height:rowH, boxShadow:ringFor(s.id,st.key), position:"relative", overflow:"hidden", ...activeCellStyle(s.id,st.key) }}>—<NoteTri k={k}/></td>; }
                   const hasRev=cs&&cs.rev&&!cs.done;
                   const rvh=[];
                   const revCnt=Array.isArray(rvh)?rvh.length:0;
@@ -1638,7 +1657,7 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
                   return (
                     <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} onDoubleClick={(e)=>{ e.stopPropagation(); if(editable) beginDate(s.id,st.key,"actual"); }}
                       style={{ border:"1px solid var(--line-1)", padding:0, position:"relative", overflow:(editing&&editing.id===s.id&&editing.col===st.key)?"visible":"hidden", background:bg, boxShadow:ringFor(s.id,st.key)||(isNext?"inset 0 0 0 2px var(--accent)":null), cursor:editable?"cell":"default", ...activeCellStyle(s.id,st.key) }}>
-                      <div style={{ minHeight:38, padding:"5px 8px", fontSize:12.5, color:cs.actual?"var(--ink)":"var(--muted-6)" }}>
+                      <div style={{ minHeight:Math.max(30,rowH-8), padding:"5px 8px", fontSize:12.5, color:cs.actual?"var(--ink)":"var(--muted-6)" }}>
                         {showAux && cs.plan && <span style={{ display:"block", fontSize:8, color:"#bcb6a8", lineHeight:1.3 }}>auto {fmt(cs.plan)}{cs.rev?` · rev ${fmt(cs.rev)}`:""}</span>}
                         {cs.autoClosed ? (
                           <span style={{ color:"var(--line-2)", fontSize:11 }}>—</span>
@@ -2614,17 +2633,21 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   const escalationRows=includeEsc?baseItems.filter(t=>t.overdue&&t.escalationOwner).map(t=>({ ...t, todoType:"Escalation", activity:`Escalate: ${t.activity}`, owner:t.owner, originalActivity:t.activity })):[];
   const displayItems=[...baseItems.map(t=>({ ...t, todoType:"Activity" })), ...escalationRows];
   const phaseMatch=(t,phase)=>{ if(!phase) return true; const k=t.key||""; if(phase==="Pre-Fit") return k==="techpack"; if(phase==="Fit / Print") return ["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"].includes(k); if(phase==="Lab Dip") return ["labDip","labAppr"].includes(k); if(phase==="Fabric IH") return k==="fabricIH"; if(phase==="PP / Prod") return ["ppSample","ppAppr","prodFile"].includes(k); return true; };
-  const passExcept=(t,except)=> (except==="phase"||phaseMatch(t,tf.phase)) && (except==="priority"||!tf.priority||(tf.priority==="Overdue"?t.overdue:!t.overdue)) && (except==="todoType"||!tf.todoType||t.todoType===tf.todoType) && (except==="orderNo"||!tf.orderNo||t.orderNo===tf.orderNo) && (except==="junior"||!tf.junior||t.junior===tf.junior) && (except==="activity"||!tf.activity||t.activity===tf.activity) && (except==="branch"||!tf.branch||t.branch===tf.branch) && (except==="owner"||!tf.owner||t.owner===tf.owner) && (except==="escalationOwner"||!tf.escalationOwner||t.escalationOwner===tf.escalationOwner);
+  const arrVal=(v)=>Array.isArray(v)?v:(v?[v]:[]);
+  const phaseOf=(t)=>{ const k=t.key||""; if(k==="techpack") return "Pre-Fit"; if(["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"].includes(k)) return "Fit / Print"; if(["labDip","labAppr"].includes(k)) return "Lab Dip"; if(k==="fabricIH") return "Fabric IH"; return "PP / Prod"; };
+  const hasAny=(field,val)=>{ const vals=arrVal(tf[field]); if(!vals.length) return true; const pool=Array.isArray(val)?val:[val]; return pool.filter(Boolean).some(x=>vals.includes(x)); };
+  const passExcept=(t,except)=> (except==="phase"||hasAny("phase",phaseOf(t))) && (except==="priority"||hasAny("priority", t.overdue?"Overdue":"Upcoming")) && (except==="todoType"||hasAny("todoType",t.todoType)) && (except==="orderNo"||hasAny("orderNo",t.orderNos&&t.orderNos.length?t.orderNos:t.orderNo)) && (except==="junior"||hasAny("junior",t.juniors&&t.juniors.length?t.juniors:t.junior)) && (except==="activity"||hasAny("activity",t.activity)) && (except==="branch"||hasAny("branch",t.branch)) && (except==="owner"||hasAny("owner",t.owner)) && (except==="escalationOwner"||hasAny("escalationOwner",t.escalationOwner));
   const pass=(t)=>passExcept(t,null);
-  const distinct=(field)=>{ const vals=new Set(); displayItems.forEach(t=>{ if(!passExcept(t,field)) return; if(field==="priority") vals.add(t.overdue?"Overdue":"Upcoming"); else { const v=t[field]; if(v) vals.add(v); } }); return [...vals].sort(); };
-  const orders=distinct("orderNo"), juniors=distinct("junior"), activities=distinct("activity"), branches=distinct("branch"), owners=distinct("owner"), escOwners=distinct("escalationOwner"), types=distinct("todoType"), priorities=distinct("priority");
+  const distinct=(field)=>{ const vals=new Set(); displayItems.forEach(t=>{ if(!passExcept(t,field)) return; if(field==="priority") vals.add(t.overdue?"Overdue":"Upcoming"); else if(field==="phase") vals.add(phaseOf(t)); else if(field==="orderNo" && Array.isArray(t.orderNos)&&t.orderNos.length) t.orderNos.forEach(v=>v&&vals.add(v)); else if(field==="junior" && Array.isArray(t.juniors)&&t.juniors.length) t.juniors.forEach(v=>v&&vals.add(v)); else { const v=t[field]; if(v) vals.add(v); } }); return [...vals].sort(); };
+  const orders=distinct("orderNo"), juniors=distinct("junior"), activities=distinct("activity"), branches=distinct("branch"), owners=distinct("owner"), escOwners=distinct("escalationOwner"), types=distinct("todoType"), priorities=distinct("priority"), phases=["Pre-Fit","Fit / Print","Lab Dip","Fabric IH","PP / Prod"];
   const shown=displayItems.filter(pass);
-  const overdue=shown.filter(t=>t.overdue), upcoming=shown.filter(t=>!t.overdue);
-  const anyF=Object.values(tf).some(Boolean);
-  const COLW={ pri:96, type:80, ord:60, sty:170, jr:64, act:110, br:84, own:78, esc:100, date:84 };
-  const set=(k,v)=>{ const upd=f=>({ ...(f||{}), [k]:v||undefined }); setTf(upd); setFilter&&setFilter(upd); };
-  const hsel=(w,k,opts,first)=>(<select value={tf[k]||""} onChange={e=>set(k,e.target.value)} onClick={e=>e.stopPropagation()} style={{ width:w, fontFamily:"inherit", fontSize:9, padding:"2px 1px", border:"1px solid "+(tf[k]?"var(--accent)":"var(--line-2)"), background:tf[k]?"var(--accent-tint)":"var(--surface)" }}><option value="">{first}</option>{opts.map(o=>(<option key={o} value={o}>{o}</option>))}</select>);
+  const overdue=shown.filter(t=>t.overdue), upcoming=shown.filter(t=>!t.overdue), critical=shown.filter(t=>t.overdue && (Number(t.daysLate)||0)>5);
+  const anyF=Object.values(tf).some(v=>Array.isArray(v)?v.length:!!v);
+  const COLW={ pri:96, type:80, ord:82, sty:190, jr:78, act:125, br:90, own:86, esc:110, date:84 };
+  const set=(k,v)=>{ const clean=Array.isArray(v)?v.filter(Boolean):(v?[v]:[]); const upd=f=>({ ...(f||{}), [k]:clean.length?clean:undefined }); setTf(upd); setFilter&&setFilter(upd); };
+  const hsel=(w,k,opts,first)=>(<span style={{ width:w, display:"inline-block" }}><MultiSelectDropdown label={first} value={arrVal(tf[k])} options={opts} onChange={v=>set(k,v)} /></span>);
   const head=(<div style={{ display:"flex", alignItems:"flex-end", gap:10, padding:"6px 12px 4px", borderBottom:"2px solid var(--ink)" }}>
+    {hsel(96,"phase",phases,"Phase")}
     {hsel(COLW.pri,"priority",priorities,"Priority")}
     {hsel(COLW.type,"todoType",types,"Type")}
     {hsel(COLW.ord,"orderNo",orders,"Order")}
@@ -2637,7 +2660,7 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
     <span style={{ width:COLW.date, fontSize:9, fontWeight:700, textTransform:"uppercase", color:"#8a857a" }}>Plan Date</span>
     <span style={{ flex:1, fontSize:9, fontWeight:700, textTransform:"uppercase", color:"#8a857a" }}>Days Late / Left</span>
   </div>);
-  const data=shown.map(t=>({ "Priority":t.overdue?"Overdue":"Upcoming", "Type":t.todoType||"Activity", "Order No":t.orderNo||"", "Style / Colour":t.isColour?String(t.colour||""):t.styleNo, "Grouped Fabric Count":t.isColour?(t.count||0):"", "Junior":t.junior||"", "Activity":t.activity||"", "Branch":t.branch||"", "Chase Label":t.owner||"", "Escalation Owner":t.escalationOwner||"", "Escalation Level":t.escalationLevel||"", "Escalation Action":t.escalationAction||"", "Plan Date":t.exp?fmt(t.exp):"", "Days Late / Left":t.overdue?Math.abs(t.du):t.du, "Style ID":t.id, "Stage Key":t.key }));
+  const data=shown.map(t=>({ "Priority":t.overdue?"Overdue":"Upcoming", "Type":t.todoType||"Activity", "Order No":t.orderNo||"", "Style / Colour":t.isColour?String(t.colour||""):t.styleNo, "Grouped Colour Count":t.isColour?(t.count||0):"", "Junior":t.junior||"", "Activity":t.activity||"", "Branch":t.branch||"", "Chase Label":t.owner||"", "Escalation Owner":t.escalationOwner||"", "Escalation Level":t.escalationLevel||"", "Escalation Action":t.escalationAction||"", "Plan Date":t.exp?fmt(t.exp):"", "Days Late / Left":t.overdue?Math.abs(t.du):t.du, "Style ID":t.id, "Stage Key":t.key }));
   const summary=[{ "Report Type":"To-Do", "Shown Items":shown.length, "Base Activity Items":baseItems.length, "Escalation Rows Included":includeEsc?escalationRows.length:0, "Total Display Items":displayItems.length, "Overdue":overdue.length, "Upcoming":upcoming.length }];
   const byOwner={}; const byActivity={};
   shown.forEach(t=>{ byOwner[t.owner||"(blank)"]=(byOwner[t.owner||"(blank)"]||0)+1; byActivity[t.activity||"(blank)"]=(byActivity[t.activity||"(blank)"]||0)+1; });
@@ -2662,7 +2685,7 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
     <span style={{ width:COLW.pri, fontSize:10, fontWeight:700, display:"flex", alignItems:"center", gap:6, color:t.overdue?"var(--danger)":"#7a560f" }}><span style={{ width:8, height:8, borderRadius:"50%", background:t.overdue?"var(--danger)":"var(--accent)" }}/>{t.overdue?"Overdue":"Upcoming"}</span>
     <span style={{ width:COLW.type, fontSize:9, fontWeight:800, color:t.todoType==="Escalation"?"var(--danger)":"var(--muted-3)" }}>{t.todoType||"Activity"}</span>
     <span style={{ width:COLW.ord, fontSize:10, color:"var(--muted-4)" }}>{t.orderNo||"—"}</span>
-    <span style={{ width:COLW.sty, fontSize:11, fontWeight:700, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{t.isColour?<span style={{ display:"inline-flex", alignItems:"center", gap:6 }}><span style={{ fontSize:8, fontWeight:700, background:"var(--ink)", color:"var(--bg)", padding:"1px 4px" }}>FABRIC</span>{t.colour} <span style={{ color:"var(--muted-1)", fontWeight:400 }}>×{t.count}</span></span>:t.styleNo}</span>
+    <span style={{ width:COLW.sty, fontSize:11, fontWeight:700, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{t.isColour?<span style={{ display:"inline-flex", alignItems:"center", gap:6 }}><span style={{ fontSize:8, fontWeight:700, background:"var(--ink)", color:"var(--bg)", padding:"1px 4px" }}>{t.key==="fabricIH"?"FABRIC":"COLOUR"}</span>{t.colour} <span style={{ color:"var(--muted-1)", fontWeight:400 }}>×{t.count}</span></span>:t.styleNo}</span>
     <span style={{ width:COLW.jr, fontSize:10, color:"var(--muted-5)" }}>{t.junior||"—"}</span>
     <span style={{ width:COLW.act, fontSize:10, fontWeight:700, color:"#333" }}>{t.activity}</span>
     <span style={{ width:COLW.br, fontSize:10, color:"var(--muted-3)" }}>{t.branch}</span>
@@ -2674,17 +2697,21 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
     {t.isColour && <button onClick={(e)=>{ e.stopPropagation(); copyPlainText(t.colour); }} title="Copy this colour/group text to clipboard" style={{ flexShrink:0, fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"4px 9px", cursor:"pointer", border:"1px solid var(--line-2)", borderRadius:8, background:"var(--bg)", color:"var(--ink)", userSelect:"none", WebkitUserSelect:"none" }}>Copy</button>}
     <button onClick={(e)=>{ e.stopPropagation(); onJump(t.id,t.key); }} title="Open this style/stage in Tracker" style={{ flexShrink:0, fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"4px 9px", cursor:"pointer", border:"1px solid var(--ink)", borderRadius:8, background:"var(--surface)", color:"var(--ink)", userSelect:"none", WebkitUserSelect:"none" }}>Open</button>
   </div>);
-  return (<div style={{ padding:"16px 22px", maxWidth:1080 }}>
+  const activitySummary=Object.values(shown.reduce((acc,t)=>{ const k=t.activity||"(blank)"; const cur=acc[k]||(acc[k]={ activity:k, upcoming:0, overdue:0, critical:0, total:0 }); cur.total++; if(t.overdue){ cur.overdue++; if((Number(t.daysLate)||0)>5) cur.critical++; } else cur.upcoming++; return acc; },{})).sort((a,b)=>b.critical-a.critical||b.overdue-a.overdue||b.total-a.total).slice(0,10);
+  const card=(title,n,sub,color)=> <div style={{ minWidth:145, flex:"1 1 145px", border:"1px solid var(--line-2)", borderRadius:12, background:"var(--surface)", padding:"9px 11px", boxShadow:"var(--card-shadow)" }}><div style={{ fontSize:9, textTransform:"uppercase", color:"var(--muted-2)", fontWeight:900 }}>{title}</div><div style={{ fontSize:22, fontFamily:"'Archivo',sans-serif", fontWeight:900, color:color||"var(--ink)", lineHeight:1.1 }}>{n}</div><div style={{ fontSize:9, color:"var(--muted-2)" }}>{sub}</div></div>;
+  return (<div style={{ padding:"16px 22px", maxWidth:1180 }}>
     <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8 }}>
       <span style={{ fontSize:10, color:"var(--muted-2)" }}>Showing {shown.length} of {displayItems.length}</span>
       <button onClick={()=>setCfg&&setCfg(c=>({ ...c, todoEscalationRows:!(c&&c.todoEscalationRows!==false) }))} disabled={!canEditSettings} title="Adds/removes separate escalation action rows in To-Do. It does not change the base activity row." style={{ fontFamily:"inherit", fontSize:10, padding:"4px 9px", cursor:canEditSettings?"pointer":"not-allowed", border:"1px solid var(--ink)", background:includeEsc?"var(--accent-tint)":"var(--surface)", fontWeight:800 }}>Escalation rows: {includeEsc?"ON":"OFF"}</button>
       {anyF && <button onClick={()=>{ setTf({}); setFilter&&setFilter({}); }} style={{ fontFamily:"inherit", fontSize:10, padding:"4px 9px", cursor:"pointer", border:"1px solid var(--danger)", background:"var(--surface)", color:"var(--danger)", fontWeight:700 }}>clear filters</button>}
       <span style={{ marginLeft:"auto" }}><ReportExportMenu title="To-Do" prefix="todo" sheets={todoSheets} defaultMode="detailed" /></span>
     </div>
-    <div style={{ display:"flex", alignItems:"baseline", gap:12, margin:"4px 0 6px" }}><span style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13 }}>TO-DO · {shown.length}</span>{overdue.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"var(--danger)" }}>{overdue.length} overdue</span>}{upcoming.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"#7a560f" }}>{upcoming.length} upcoming</span>}</div>
+    <div style={{ display:"flex", alignItems:"baseline", gap:12, margin:"4px 0 8px" }}><span style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13 }}>TO-DO · {shown.length}</span>{overdue.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"var(--danger)" }}>{overdue.length} overdue</span>}{upcoming.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"#7a560f" }}>{upcoming.length} upcoming</span>}{critical.length>0 && <span style={{ fontSize:11, fontWeight:900, color:"var(--danger)" }}>{critical.length} critical &gt;5d</span>}</div>
+    <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:10 }}>{card("Shown",shown.length,"current filter total")}{card("Upcoming",upcoming.length,"within watch window","#7a560f")}{card("Overdue",overdue.length,"missed plan/revised","var(--danger)")}{card("Critical",critical.length,">5 working days late","var(--danger)")}</div>
+    <div style={{ border:"1px solid var(--line-2)", borderRadius:12, background:"var(--surface)", boxShadow:"var(--card-shadow)", padding:10, marginBottom:10 }}><div style={{ fontSize:10, fontWeight:900, color:"var(--muted-3)", textTransform:"uppercase", marginBottom:6 }}>Activity summary</div><div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(190px,1fr))", gap:7 }}>{activitySummary.map(a=><button key={a.activity} onClick={()=>set("activity",[a.activity])} style={{ border:"1px solid var(--line-3)", background:"var(--bg)", textAlign:"left", padding:"7px 9px", cursor:"pointer", fontFamily:"inherit" }}><div style={{ fontSize:10.5, fontWeight:900, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{a.activity}</div><div style={{ fontSize:9, color:"var(--muted-2)", marginTop:2 }}>U {a.upcoming} · O {a.overdue} · Critical {a.critical}</div></button>)}</div></div>
     {head}
     {shown.length?shown.map(row):<div style={{ fontSize:11, color:"var(--muted-1)", padding:"8px 12px" }}>Nothing due or coming up. 👍</div>}
-    <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:14 }}>One list, most urgent first. Toggle adds/removes separate escalation rows; base activity rows stay unchanged. Chase Label = blocker, Escalation Owner = who must chase now as per Settings.</div>
+    <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:14 }}>One list, most urgent first. Multiple filters are supported. Lab Dip/Fabric items are colour-grouped; a 2-colour style counts once per colour. Critical = overdue by more than 5 working days.</div>
   </div>);
 }
 
