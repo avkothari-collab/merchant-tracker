@@ -2383,8 +2383,8 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
       {card("Escalation items",escalationTodo.length,escalationTodo.length?"var(--danger)":"var(--success)",()=>drillTodo&&drillTodo({ todoType:"Escalation", priority:"Overdue" }),"who must chase now")}
       {card("Avg late delay",fmtDays(avgDelay),avgDelay>0?"var(--danger)":"var(--success)",null,"delayed stages only")}
       {card("Avg actual time",fmtDays(avgDuration),"var(--info)",null,"stage cycle time")}
-      {card("Avg vs original plan",fmtDays(avgPlanNet),avgPlanNet>0?"var(--danger)":"var(--success)",null,`${planActualRecords.length} completed entries · missed avg ${fmtDays(avgPlanMiss)}`)}
-      {card("Avg vs revised",fmtDays(avgRevNet),avgRevNet>0?"var(--danger)":"var(--success)",null,`${revisedActualRecords.length} revised entries · missed avg ${fmtDays(avgRevMiss)}`)}
+      {/* Technical plan/revised net cards removed from visible Management dashboard.
+          Kept in Performance Analysis columns and Management exports for detailed review. */}
     </div>
 
     <div style={{ display:"flex", flexDirection:"column", gap:12, marginTop:22 }}>
@@ -2407,10 +2407,8 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
         </div>
         {performanceTable(performanceRows)}
       </>, perfView==="stage" ? (perfMode==="delay"?"Stage-wise delay summary only; no early/on-time rows":"Stage-wise completed performance; net delay may be early/on-time/late") : (perfMode==="delay"?"Chase-label delay summary only; no early/on-time rows":"Chase-label completed performance; net delay may be early/on-time/late"))}
-      {section("Plan accuracy", <>
-        {rowBtn("actual-vs-plan","Actual vs original plan",`${fmtDays(avgPlanNet)} net`,avgPlanNet>0?"var(--danger)":"var(--success)",null,`${planActualRecords.length} completed entries · ${planMissedRecords.length} missed · avg missed ${fmtDays(avgPlanMiss)} · worst ${fmtDays(worstPlanMiss)}`)}
-        {rowBtn("actual-vs-revised","Actual vs revised plan",`${fmtDays(avgRevNet)} net`,avgRevNet>0?"var(--danger)":"var(--success)",null,`${revisedActualRecords.length} revised entries · ${revisedMissedRecords.length} missed · avg missed ${fmtDays(avgRevMiss)} · worst ${fmtDays(worstRevMiss)}`)}
-      </>, "Actual vs original plan checks first planned target; Actual vs revised checks latest committed/revised target")}
+      {/* Plan Accuracy section kept out of visible dashboard because it is technical for daily management reading.
+          The same data remains in Performance Analysis columns and export sheets. */}
       {section("Worst completed delays", worstDelays.length?worstDelays.map(r=>rowBtn(r.style+":"+r.stageKey,r.style||r.order,`+${fmtNum(r.delay)}d`,"var(--danger)",()=>goSearch(r.style),`${r.stage} · ${r.buyer||""} · actual ${fmt(r.actual)} · click opens style`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No positive completed delays in this slice.</div>, "Separate exception list: exact styles/stages with completed delay greater than 0")}
     </div>
 
