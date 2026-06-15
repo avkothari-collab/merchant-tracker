@@ -2326,6 +2326,29 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const barLine=(key,label,n,max,color,onClick,right)=>(<button key={key} onClick={onClick} disabled={!onClick} style={{ display:"flex", alignItems:"center", gap:8, width:"100%", border:"none", background:"transparent", cursor:onClick?"pointer":"default", fontFamily:"inherit", padding:"5px 0" }}><span style={{ width:90, fontSize:10, fontWeight:800, color:"var(--muted-4)", textAlign:"left", overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{label}</span><span style={{ flex:1, height:14, background:"#f0ece3", borderRadius:999, overflow:"hidden" }}><span style={{ display:"block", height:"100%", width:`${(n/Math.max(1,max))*100}%`, background:color, borderRadius:999 }}/></span><span style={{ width:58, textAlign:"right", fontSize:10, fontWeight:800 }}>{right||n}</span></button>);
   const toggleBtn=(active,label,onClick)=><button onClick={onClick} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"5px 9px", cursor:"pointer", border:"1px solid var(--line-2)", borderRadius:8, background:active?"var(--ink)":"var(--surface)", color:active?"var(--bg)":"var(--ink)" }}>{label}</button>;
   const perfCell=(v)=>fmtDays(Number.isFinite(Number(v))?Number(v):0);
+  const avgActualBreakup = [...deptRows]
+    .filter(r=>r && r.durN)
+    .sort((a,b)=>avg(b.durSum,b.durN)-avg(a.durSum,a.durN))
+    .slice(0,4)
+    .map(r=>({ label:r.label, count:r.durN, avg:avg(r.durSum,r.durN) }));
+  const actualTimeCard=(
+    <div style={{ flex:"1 1 360px", minWidth:320, textAlign:"left", background:"var(--surface)", border:"1px solid var(--line-2)", borderRadius:12, padding:"14px 16px", fontFamily:"inherit", display:"grid", gridTemplateColumns:"130px 1fr", gap:14, alignItems:"start" }}>
+      <div>
+        <div style={{ fontSize:28, fontWeight:800, fontFamily:"'Archivo',sans-serif", color:"var(--info)", lineHeight:1 }}>{fmtDays(avgDuration)}</div>
+        <div style={{ fontSize:10, color:"var(--muted-2)", marginTop:5, letterSpacing:0.5, textTransform:"uppercase" }}>Avg actual time</div>
+        <div style={{ fontSize:9, color:"var(--muted-1)", marginTop:4 }}>stage cycle time</div>
+      </div>
+      <div style={{ borderLeft:"1px solid var(--line-2)", paddingLeft:12, minWidth:0 }}>
+        <div style={{ fontSize:9, color:"var(--muted-2)", fontWeight:800, textTransform:"uppercase", letterSpacing:0.4, marginBottom:6 }}>Breakup by chase label</div>
+        {avgActualBreakup.length?avgActualBreakup.map(x=>(
+          <div key={x.label} style={{ display:"grid", gridTemplateColumns:"1fr auto", gap:8, fontSize:10, padding:"3px 0", borderBottom:"1px solid var(--line-3)" }}>
+            <span style={{ fontWeight:800, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{x.label}<span style={{ color:"var(--muted-1)", fontWeight:700 }}> · {x.count}</span></span>
+            <span style={{ fontWeight:900, color:"var(--info)" }}>{fmtDays(x.avg)}</span>
+          </div>
+        )):<div style={{ fontSize:10, color:"var(--muted-1)" }}>No duration records yet.</div>}
+      </div>
+    </div>
+  );
   const perfPlanCols=(r)=>({
     planNet:avg(r.planSum||0,r.planN||0),
     planMiss:avg(r.planMissSum||0,r.planMissN||0),
@@ -2382,7 +2405,7 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
       {card("Overdue open activities",overdueAct,"var(--danger)",null,"frontier overdue")}
       {card("Escalation items",escalationTodo.length,escalationTodo.length?"var(--danger)":"var(--success)",()=>drillTodo&&drillTodo({ todoType:"Escalation", priority:"Overdue" }),"who must chase now")}
       {card("Avg late delay",fmtDays(avgDelay),avgDelay>0?"var(--danger)":"var(--success)",null,"delayed stages only")}
-      {card("Avg actual time",fmtDays(avgDuration),"var(--info)",null,"stage cycle time")}
+      {actualTimeCard}
       {/* Technical plan/revised net cards removed from visible Management dashboard.
           Kept in Performance Analysis columns and Management exports for detailed review. */}
     </div>
