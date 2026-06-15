@@ -854,23 +854,27 @@ function MerchTracker({ me, onSignOut }){
   const [entryVal,setEntryVal]=useState("");
   const [entryTouched,setEntryTouched]=useState(false);
   const entryCellRef=useRef("");
+  // Core value/position helpers must be defined before autocomplete calculations.
+  // Earlier autocomplete referenced helpers declared later in the component, which could fail or stay blank while typing.
+  const suggestionFor=(col,raw,id)=>{
+    if(!col||isDateCol(col)) return "";
+    const q=String(raw||"").trim().toLowerCase();
+    if(!q) return "";
+    const ci=colIndex(col), ri=id!=null?rowIndex(id):-1;
+    if(ci<0) return "";
+    const seen=[];
+    const addVal=(row)=>{ if(!row||!row.s) return; const v=String(getVal(row.s,col)||"").trim(); if(v&&!seen.some(x=>x.toLowerCase()===v.toLowerCase())) seen.push(v); };
+    // Prefer values above the active cell, then any visible row in the same filtered table.
+    if(ri>=0){ for(let r=ri-1;r>=0&&seen.length<60;r--) addVal(rows[r]); }
+    for(let r=0;r<rows.length&&seen.length<100;r++) if(r!==ri) addVal(rows[r]);
+    return seen.find(v=>v.toLowerCase().startsWith(q) && v.toLowerCase()!==q)||"";
+  };
   const selectedStyle=sel?styles.find(x=>x.id===sel.id):null;
   const selectedColLabel=sel?(sel.col==="__style"?"Style No":(INFO_COLS.find(c=>c.key===sel.col)?.label||STAGES.find(s=>s.key===sel.col)?.label||sel.col)):"";
   const selectedCellKey=sel?`${sel.id}:${sel.col}`:"";
   const selectedDisplayValue=()=>{ if(!sel||!selectedStyle) return ""; const v=getVal(selectedStyle,sel.col); return isDateCol(sel.col)&&v?fmtTyped(v):String(v??""); };
-  const entrySuggestion=useMemo(()=>{
-    if(!sel||!entryTouched||!entryVal||isDateCol(sel.col)) return "";
-    const ci=colIndex(sel.col), ri=rowIndex(sel.id);
-    if(ci<0||ri<0) return "";
-    const q=String(entryVal).trim().toLowerCase();
-    if(!q) return "";
-    const seen=[];
-    const addVal=(row)=>{ if(!row||!row.s) return; const v=String(getVal(row.s,sel.col)||"").trim(); if(v&&!seen.some(x=>x.toLowerCase()===v.toLowerCase())) seen.push(v); };
-    // Excel-like: prefer values above the active cell, then fall back to other visible rows in the same column.
-    for(let r=ri-1;r>=0&&seen.length<60;r--) addVal(rows[r]);
-    for(let r=0;r<rows.length&&seen.length<80;r++) if(r!==ri) addVal(rows[r]);
-    return seen.find(v=>v.toLowerCase().startsWith(q) && v.toLowerCase()!==String(entryVal).trim().toLowerCase())||"";
-  },[sel,entryTouched,entryVal,rows]);
+  const entrySuggestion=useMemo(()=> sel&&entryTouched ? suggestionFor(sel.col,entryVal,sel.id) : "", [sel,entryTouched,entryVal,rows,navCols]);
+  const editSuggestion=useMemo(()=> editing&&editing.mode==="text" ? suggestionFor(editing.col,editVal,editing.id) : "", [editing,editVal,rows,navCols]);
   useEffect(()=>{
     if(entryCellRef.current!==selectedCellKey){
       entryCellRef.current=selectedCellKey;
@@ -881,14 +885,14 @@ function MerchTracker({ me, onSignOut }){
     if(editing && sel && editing.id===sel.id && editing.col===sel.col && !entryTouched){ setEntryVal(editVal||""); return; }
     if(!entryTouched){ setEntryVal(selectedDisplayValue()); }
   },[selectedCellKey,styles,editing,editVal,entryTouched]);
-  const commitEntry=()=>{
-    if(!sel||!selectedStyle) return;
-    if(!isEditableCol(sel.col)||!canEdit(role,sel.col,"actual")) return;
-    if(peerLockBlocks(sel.id,sel.col)) return;
-    const raw=String(entryVal??"");
+  const commitEntry=(overrideVal)=>{
+    if(!sel||!selectedStyle) return false;
+    if(!isEditableCol(sel.col)||!canEdit(role,sel.col,"actual")) return false;
+    if(peerLockBlocks(sel.id,sel.col)) return false;
+    const raw=String(overrideVal!=null?overrideVal:(entryVal??""));
     if(isDateCol(sel.col)){
       const r=parseTyped(raw);
-      if(r===false){ window.alert('"'+raw+'" isn’t a valid date. Type it as dd/mm/yyyy (e.g. 26/05/2026), or clear the box to leave it empty.'); return; }
+      if(r===false){ window.alert('"'+raw+'" isn’t a valid date. Type it as dd/mm/yyyy (e.g. 26/05/2026), or clear the box to leave it empty.'); return false; }
       setField(sel.id,sel.col,r===""?null:r);
     } else {
       const f=sel.col==="__style"?"styleNo":sel.col;
@@ -897,17 +901,16 @@ function MerchTracker({ me, onSignOut }){
     setEntryTouched(false);
     setEditing(null);
     setEditVal("");
+    return true;
   };
   const beginDate=(id,col,mode,initialChar)=>{ if(!canEdit(role,col,mode)) return; if(peerLockBlocks(id,col)) return; setSel({id,col}); setFocus(null); setEditing({id,col,mode}); setCalOpen(false); const s=styles.find(x=>x.id===id); const cur= mode==="rev"?(s&&s.revs&&s.revs[col]):mode==="reject"?(s&&s.rejects&&s.rejects[col]):(isStageCol(col)?(s&&s.actuals[col]):(s&&s[col])); setEditVal(initialChar!=null?initialChar:(cur?fmtTyped(cur):"")); };
   const commitDate=()=>{ if(!editing) return; const r=parseTyped(editVal); if(r===false){ window.alert('"'+editVal+'" isn\u2019t a valid date. Type it as dd/mm/yyyy (e.g. 26/05/2026), or clear the box to leave it empty.'); return; } if(r!==false){ const val=r===""?null:r; if(val===null){ const s=styles.find(x=>x.id===editing.id); const had= editing.mode==="rev"?(s&&s.revs&&s.revs[editing.col]):editing.mode==="reject"?(s&&s.rejects&&s.rejects[editing.col]):(isStageCol(editing.col)?(s&&s.actuals&&s.actuals[editing.col]):(s&&s[editing.col])); if(had && !window.confirm("Delete this saved date? You can re-enter it later.")){ setEditing(null); setCalOpen(false); return; } } if(editing.mode==="rev") setRev(editing.id,editing.col,val); else if(editing.mode==="reject") setReject(editing.id,editing.col,val); else setField(editing.id,editing.col,val); } setEditing(null); setCalOpen(false); };
   const dateEditor=(id,col,mode)=>{ const s=styles.find(x=>x.id===id); const _cmp=computed.find(x=>x.s.id===id); const _stR=_cmp&&(_cmp.c.stages||[]).find(x=>x.key===col); const planFb=_stR?(_stR.rev||_stR.plan):null; const stored= mode==="rev"?(s&&s.revs&&s.revs[col]):mode==="reject"?(s&&s.rejects&&s.rejects[col]):(isStageCol(col)?(s&&s.actuals[col]):(s&&s[col])); const colLabel=col==="ordRec"?"Order Date":col==="delivery"?"Delivery Date":((STAGES.find(x=>x.key===col)||{}).label||col); const modeLabel=mode==="rev"?"REVISED":mode==="reject"?"REJECTED":"ACTUAL"; const mc=mode==="rev"?"var(--accent)":mode==="reject"?"var(--danger)":"var(--info)"; return (<span onClick={e=>e.stopPropagation()} style={{ position:"absolute", top:1, left:1, zIndex:80, display:"flex", flexDirection:"column", gap:1, background:"var(--surface)", border:"1px solid "+mc, padding:"2px 4px", boxShadow:"2px 2px 0 rgba(0,0,0,0.18)" }}><span style={{ fontSize:8, fontWeight:700, color:mc, textTransform:"uppercase", letterSpacing:0.3, whiteSpace:"nowrap" }}>{colLabel} · {modeLabel}</span><span style={{ display:"flex", alignItems:"center", gap:2, position:"relative" }}><input autoFocus onFocus={e=>{ if((e.target.value||"").length>2) e.target.select(); }} value={editVal} placeholder="dd/mm/yyyy" onChange={e=>setEditVal(e.target.value.replace(/[^0-9\/\-. ]/g,""))} onKeyDown={e=>{ e.stopPropagation(); if(e.key==="Enter") commitDate(); else if(e.key==="Escape"){ setEditing(null); setCalOpen(false); } }} onBlur={()=>{ if(!calOpen) commitDate(); }} style={{ width:80, fontFamily:"inherit", fontSize:11, border:"none", outline:"none" }}/>{stored && <button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); if(mode==="rev") setRev(id,col,null); else if(mode==="reject") setReject(id,col,null); else setField(id,col,null); setEditing(null); setCalOpen(false); }} title={"Clear "+modeLabel.toLowerCase()+" date"} style={{ border:"1px solid var(--line-2)", background:"var(--surface)", cursor:"pointer", padding:"0 4px", fontSize:10, lineHeight:"16px" }}>clear</button>}<button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); setCalOpen(o=>!o); }} title="calendar" style={{ border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:0, fontSize:12 }}>📅</button>{calOpen && <CalPopup label={colLabel+" · "+modeLabel} value={stored} fallback={planFb} onClose={()=>setCalOpen(false)} onPick={(d)=>{ if(mode==="rev") setRev(id,col,d); else if(mode==="reject") setReject(id,col,d); else setField(id,col,d); setEditing(null); setCalOpen(false); }}/>}</span></span>); };
     const startEdit=(id,col,initialChar)=>{ if(!isEditableCol(col)) return; if(!canEdit(role,col,"actual")) return; if(isDateCol(col)){ beginDate(id,col,"actual"); return; } if(peerLockBlocks(id,col)) return; const s=styles.find(x=>x.id===id); setEditing({id,col,mode:"text"}); if(col==="qty") setEditVal(initialChar??String(s.qty)); else if(col==="__style") setEditVal(initialChar??s.styleNo); else setEditVal(initialChar??(s[col]||"")); };
-  const commitText=()=>{ if(!editing) return; const f=editing.col==="__style"?"styleNo":editing.col; if(editing.mode==="text"||editing.mode===undefined){ if(!isDateCol(editing.col)) setField(editing.id,f,editVal); } setEditing(null); };
+  const commitText=(overrideVal)=>{ if(!editing) return false; const f=editing.col==="__style"?"styleNo":editing.col; const raw=overrideVal!=null?overrideVal:editVal; if(editing.mode==="text"||editing.mode===undefined){ if(!isDateCol(editing.col)) setField(editing.id,f,raw); } setEditing(null); return true; };
   const finishEditing=()=>{ if(!editing) return; if(editing.mode==="actual"||editing.mode==="rev"||editing.mode==="reject") commitDate(); else commitText(); };
 
   // ---- selection range ----
-  const rowIndex=(id)=>rows.findIndex(r=>r.s.id===id);
-  const colIndex=(col)=>navCols.indexOf(col);
   const cellRef=(x)=> x? (colLetter(colIndex(x.col))+(rowIndex(x.id)+1)) : "";
   const [nameBox,setNameBox]=useState("");
   useEffect(()=>{ setNameBox(cellRef(sel)); },[sel]);
@@ -929,7 +932,6 @@ function MerchTracker({ me, onSignOut }){
   const applySnap=(d)=>{ setStyles(d.styles); setFills(d.fills); setNotes(d.notes); };
   const undo=()=>{ if(!past.length) return; if(remoteChanged && !window.confirm("Teammates have made changes that aren't merged in yet (the Sync button is highlighted).\n\nUndoing now may overwrite them. Undo anyway?")) return; const prev=past[past.length-1]; setFuture(f=>[...f, snap()]); setPast(p=>p.slice(0,-1)); applySnap(prev); flash(); };
   const redo=()=>{ if(!future.length) return; if(remoteChanged && !window.confirm("Teammates have unmerged changes (the Sync button is highlighted).\n\nRedoing now may overwrite them. Redo anyway?")) return; const nx=future[future.length-1]; setPast(p=>[...p, snap()]); setFuture(f=>f.slice(0,-1)); applySnap(nx); flash(); };
-  const getVal=(s,col)=>{ if(col==="__style") return s.styleNo; if(col==="qty") return String(s.qty); if(STAGE_KEYS.includes(col)) return s.actuals[col]||""; if(col==="ordRec"||col==="delivery"||TEXT_COLS.includes(col)) return s[col]||""; return null; };
   const doCopy=()=>{ const R=rect(); if(!R) return; const values=[]; let any=false; for(let r=R.r1;r<=R.r2;r++){ const row=[]; for(let c=R.c1;c<=R.c2;c++){ const v=rows[r]?getVal(rows[r].s,navCols[c]):null; if(v!=null&&v!=="") any=true; row.push(v); } values.push(row); } if(any){ setClip({ values, h:values.length, w:values[0].length }); flash(); } };
   const canPasteCell=(s,col)=>{ if(!isEditableCol(col)) return false; if(!canEdit(role,col,"actual")) return false; if(STAGE_KEYS.includes(col)){ const st=STAGES.find(x=>x.key===col); if(!(st.flag===null||s[st.flag])) return false; } return true; };
   const doPaste=()=>{ if(!clip||!sel) return; pushHistory(); const R=rect(); const changes={}; const put=(id,col,val)=>{ (changes[id]=changes[id]||{})[col]=val; };
@@ -961,7 +963,8 @@ function MerchTracker({ me, onSignOut }){
     if(editing){ const dm=editing.mode==="actual"||editing.mode==="rev"; if(e.key==="Enter"){ dm?commitDate():commitText(); moveAnchor(1,0); e.preventDefault(); } else if(e.key==="Escape"){ setEditing(null); setCalOpen(false); e.preventDefault(); } else if(e.key==="Tab"){ dm?commitDate():commitText(); moveAnchor(0,e.shiftKey?-1:1); e.preventDefault(); } return; }
     if((e.ctrlKey||e.metaKey)&&(e.key==="c"||e.key==="C")){ doCopy(); e.preventDefault(); return; }
     if((e.ctrlKey||e.metaKey)&&(e.key==="v"||e.key==="V")){ doPaste(); e.preventDefault(); return; }
-    if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(e.key)){ e.preventDefault(); const dr=e.key==="ArrowUp"?-1:e.key==="ArrowDown"?1:0; const dc=e.key==="ArrowLeft"?-1:e.key==="ArrowRight"?1:0; if(e.shiftKey) moveFocus(dr,dc); else moveAnchor(dr,dc); }
+    if(e.key==="Tab"){ e.preventDefault(); if(e.shiftKey) moveAnchor(0,-1); else moveAnchor(0,1); }
+    else if(["ArrowUp","ArrowDown","ArrowLeft","ArrowRight"].includes(e.key)){ e.preventDefault(); const dr=e.key==="ArrowUp"?-1:e.key==="ArrowDown"?1:0; const dc=e.key==="ArrowLeft"?-1:e.key==="ArrowRight"?1:0; if(e.shiftKey) moveFocus(dr,dc); else moveAnchor(dr,dc); }
     else if(e.key==="Enter"||e.key==="F2"){ e.preventDefault(); startEdit(sel.id,sel.col); }
     else if(e.key==="Delete"||e.key==="Backspace"){ if(focus) clearRange(); else if(canPasteCell(styles.find(x=>x.id===sel.id),sel.col)) setField(sel.id,sel.col, STAGE_KEYS.includes(sel.col)?null:(sel.col==="qty"?0:"")); e.preventDefault(); }
     else if(e.key==="Escape"){ setSel(null); setFocus(null); }
@@ -1066,7 +1069,7 @@ function MerchTracker({ me, onSignOut }){
     return (
       <td key={col.key} id={`cell-${s.id}-${col.key}`} onClick={(e)=>onCellClick(e,s.id,col.key)} onDoubleClick={(e)=>{ e.stopPropagation(); startEdit(s.id,col.key); }}
         style={{ border:"1px solid var(--line-1)", padding:"6px 9px", whiteSpace: col.key==="remarks"?"normal":"nowrap", boxShadow:ringFor(s.id,col.key), cursor:"cell", maxWidth:col.w, overflow:"hidden", textOverflow:"ellipsis", fontSize: col.key==="remarks"?10:11, color: col.key==="remarks"?"#a15":"var(--ink)", position:"relative", background:bg, ...freezeStyle(col.key,bg) }}>
-        {editingThis ? (<input autoFocus onFocus={e=>{ if((e.target.value||"").length>1) e.target.select(); }} value={editVal} onClick={e=>e.stopPropagation()} onChange={e=>setEditVal(col.key==="qty"?e.target.value.replace(/[^0-9]/g,""):e.target.value)} onBlur={commitText} style={{ width:Math.max(40,col.w-16), fontFamily:"inherit", fontSize:11, border:"1px solid var(--info)", outline:"none", padding:"1px 3px" }}/>) : (val===""||val==null ? <span style={{color:"var(--line-2)"}}>—</span> : String(val))}
+        {editingThis ? (<span style={{ position:"relative", display:"inline-block" }}><input autoFocus onFocus={e=>{ if((e.target.value||"").length>1) e.target.select(); }} value={editVal} onClick={e=>e.stopPropagation()} onChange={e=>setEditVal(col.key==="qty"?e.target.value.replace(/[^0-9]/g,""):e.target.value)} onKeyDown={e=>{ e.stopPropagation(); if(e.key==="Tab"){ e.preventDefault(); const v=editSuggestion||editVal; commitText(v); moveAnchor(0,e.shiftKey?-1:1); } else if(e.key==="Enter"){ e.preventDefault(); commitText(editSuggestion||editVal); moveAnchor(1,0); } else if(e.key==="Escape"){ e.preventDefault(); setEditing(null); } }} onBlur={()=>commitText()} style={{ width:Math.max(40,col.w-16), fontFamily:"inherit", fontSize:11, border:"1px solid var(--info)", outline:"none", padding:"1px 3px" }}/>{editSuggestion && <button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); setEditVal(editSuggestion); }} title="Click or press Tab to accept" style={{ position:"absolute", left:0, top:"100%", marginTop:3, zIndex:390, maxWidth:220, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"3px 7px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--accent-tint)", boxShadow:"3px 3px 0 var(--ink)" }}>Tab ↹ {editSuggestion}</button>}</span>) : (val===""||val==null ? <span style={{color:"var(--line-2)"}}>—</span> : String(val))}
         <PeerTag who={peerOn(s.id,col.key)}/><NoteTri k={k}/><FillHandle id={s.id} col={col.key}/>
       </td>
     );
@@ -1322,7 +1325,7 @@ function MerchTracker({ me, onSignOut }){
         <div onMouseDown={(e)=>e.stopPropagation()} onClick={(e)=>e.stopPropagation()} style={{ display:"flex", alignItems:"center", gap:6, flex:"1 1 420px", minWidth:320, background:"var(--toolbar-bg)", border:"1px solid var(--toolbar-line)", borderRadius:6, padding:"5px 7px", boxShadow:"0 1px 0 rgba(0,0,0,0.03)", position:"relative" }}>
           <span style={{ fontSize:9, fontWeight:800, color:"var(--muted-2)", textTransform:"uppercase", letterSpacing:0.4 }}>Entry</span>
           <span style={{ fontSize:10, fontWeight:800, color:"var(--accent)", minWidth:34 }}>{sel?cellRef(sel):"—"}</span>
-          <input disabled={!sel} value={entryVal} onMouseDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} onFocus={()=>{ if(editing) setEditing(null); if(!entryTouched) setEntryVal(selectedDisplayValue()); }} onChange={e=>{ setEntryTouched(true); setEntryVal(sel&&sel.col==="qty"?e.target.value.replace(/[^0-9]/g,""):e.target.value); }} onKeyDown={e=>{ e.stopPropagation(); if((e.ctrlKey||e.metaKey)&&(e.key==="z"||e.key==="Z")){ e.preventDefault(); if(e.shiftKey) redo(); else undo(); return; } if((e.ctrlKey||e.metaKey)&&(e.key==="y"||e.key==="Y")){ e.preventDefault(); redo(); return; } if(e.key==="Tab"&&entrySuggestion){ e.preventDefault(); setEntryTouched(true); setEntryVal(entrySuggestion); } else if(e.key==="Enter"){ e.preventDefault(); commitEntry(); } else if(e.key==="Escape"){ setEntryVal(selectedDisplayValue()); setEntryTouched(false); if(editing) setEditing(null); } }} placeholder={sel?("type "+selectedColLabel+"…"):"select a cell"} title="Excel-style entry bar. Shows selected cell value; Tab accepts suggestion from same column; Enter saves; Ctrl/Cmd+Z undo." style={{ flex:1, minWidth:160, fontFamily:"inherit", fontSize:11, padding:"4px 7px", border:"1px solid var(--line-2)", outline:"none", background:sel?"var(--surface)":"var(--line-3)" }}/>
+          <input disabled={!sel} value={entryVal} onMouseDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} onFocus={()=>{ if(editing) setEditing(null); if(!entryTouched) setEntryVal(selectedDisplayValue()); }} onChange={e=>{ setEntryTouched(true); setEntryVal(sel&&sel.col==="qty"?e.target.value.replace(/[^0-9]/g,""):e.target.value); }} onKeyDown={e=>{ e.stopPropagation(); if((e.ctrlKey||e.metaKey)&&(e.key==="z"||e.key==="Z")){ e.preventDefault(); if(e.shiftKey) redo(); else undo(); return; } if((e.ctrlKey||e.metaKey)&&(e.key==="y"||e.key==="Y")){ e.preventDefault(); redo(); return; } if(e.key==="Tab"){ e.preventDefault(); const v=entrySuggestion||entryVal; if(commitEntry(v)) moveAnchor(0,e.shiftKey?-1:1); } else if(e.key==="Enter"){ e.preventDefault(); commitEntry(entrySuggestion||entryVal); } else if(e.key==="Escape"){ setEntryVal(selectedDisplayValue()); setEntryTouched(false); if(editing) setEditing(null); } }} placeholder={sel?("type "+selectedColLabel+"…"):"select a cell"} title="Excel-style entry bar. Shows selected cell value; Tab accepts suggestion from same column; Enter saves; Ctrl/Cmd+Z undo." style={{ flex:1, minWidth:160, fontFamily:"inherit", fontSize:11, padding:"4px 7px", border:"1px solid var(--line-2)", outline:"none", background:sel?"var(--surface)":"var(--line-3)" }}/>
           {entrySuggestion && <button onMouseDown={e=>e.preventDefault()} onClick={()=>{ setEntryTouched(true); setEntryVal(entrySuggestion); }} title="Click or press Tab to accept" style={{ position:"absolute", right:10, top:"100%", marginTop:3, zIndex:390, maxWidth:260, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"4px 8px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--accent-tint)", boxShadow:"3px 3px 0 var(--ink)" }}>Tab ↹ {entrySuggestion}</button>}
           {peerEditingList.length>0 && <span title={peerEditingList.map(p=>(p.name||p.email||"User")+" editing "+p.ref).join("\n")} style={{ fontSize:9, color:"var(--danger)", fontWeight:800, whiteSpace:"nowrap" }}>{peerEditingList.length} editing now</span>}
         </div>
@@ -1365,7 +1368,7 @@ function MerchTracker({ me, onSignOut }){
 
       {rows.length>renderRows.length && <div style={{ margin:"0 22px 8px", border:"1px solid var(--line-2)", background:"var(--accent-tint)", borderRadius:10, padding:"8px 10px", fontSize:10.5, color:"var(--muted-4)", display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}><b>Performance mode:</b> showing first {renderRows.length} of {rows.length} filtered styles to protect P95 speed. Narrow filters for fastest work, or <button onClick={()=>setRenderLimit(Math.min(5000, renderLimit+900))} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"3px 8px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)" }}>show 900 more</button><button onClick={()=>setRenderLimit(5000)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"3px 8px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)" }}>show all up to 5,000</button></div>}
       <div ref={scrollWrapRef} style={{ overflow:"auto", padding:"0 22px", maxHeight:"calc(100vh - 210px)" }}>
-        <table role="grid" aria-label="Pre-production tracker grid. Arrow keys to move, Escape to exit, Tab to leave the grid." style={{ borderCollapse:"separate", borderSpacing:0, zoom:textScale, fontSize:11, fontWeight:tableWeight, tableLayout:"fixed", userSelect:dragSel?"none":"auto" }}>
+        <table role="grid" aria-label="Pre-production tracker grid. Arrow keys move, Shift+arrows select range, Tab moves right, Shift+Tab moves left." style={{ borderCollapse:"separate", borderSpacing:0, zoom:textScale, fontSize:11, fontWeight:tableWeight, tableLayout:"fixed", userSelect:dragSel?"none":"auto" }}>
           <colgroup>
             <col style={{ width:widthOf("__style") }}/>
             {visInfo.map(c=><col key={c.key} style={{ width:widthOf(c.key) }}/>)}
@@ -1382,7 +1385,7 @@ function MerchTracker({ me, onSignOut }){
             {renderRows.map(({s,c},rowIdx)=>{ const t=TONE_STYLE[c.tone]; const sk=cellKey(s.id,"__style"); const styBg=bgFor(s.id,"__style","var(--surface)"); return (
               <tr key={s.id} role="row">
                 <td id={`cell-${s.id}-__style`} onClick={(e)=>onCellClick(e,s.id,"__style")} onDoubleClick={(e)=>{ e.stopPropagation(); startEdit(s.id,"__style"); }} style={{ border:"1px solid var(--line-1)", padding:"6px 9px", overflow:"hidden", cursor:"cell", ...freezeStyle("__style",styBg), boxShadow:ringFor(s.id,"__style")||freezeStyle("__style",styBg).boxShadow }}>
-                  {editing&&editing.id===s.id&&editing.col==="__style" ? (<input autoFocus onFocus={e=>{ if((e.target.value||"").length>1) e.target.select(); }} value={editVal} onClick={e=>e.stopPropagation()} onChange={e=>setEditVal(e.target.value)} onBlur={commitText} style={{ width:150, fontFamily:"inherit", fontSize:11, fontWeight:700, border:"1px solid var(--info)", outline:"none", padding:"1px 3px" }}/>) : <div style={{ fontWeight:700, display:"flex", alignItems:"center", gap:6 }}><span onClick={(e)=>{ e.stopPropagation(); selectRow(s.id); }} title="select row" style={{ fontSize:8, color:"var(--muted-6)", cursor:"pointer", minWidth:14 }}>{rowIdx+1}</span><Star size={11} onClick={(e)=>{ e.stopPropagation(); toggleFollow(s.id); }} title={follows.has(s.id)?"following — click to unfollow":"follow this style"} fill={follows.has(s.id)?"var(--accent)":"none"} color={follows.has(s.id)?"var(--accent)":"#c9c1b3"} style={{ cursor:"pointer", flex:"0 0 auto", opacity:follows.has(s.id)?1:0.5 }}/><span style={{ color:follows.has(s.id)?"#b45309":"inherit" }}>{s.styleNo}</span></div>}
+                  {editing&&editing.id===s.id&&editing.col==="__style" ? (<span style={{ position:"relative", display:"inline-block" }}><input autoFocus onFocus={e=>{ if((e.target.value||"").length>1) e.target.select(); }} value={editVal} onClick={e=>e.stopPropagation()} onChange={e=>setEditVal(e.target.value)} onKeyDown={e=>{ e.stopPropagation(); if(e.key==="Tab"){ e.preventDefault(); const v=editSuggestion||editVal; commitText(v); moveAnchor(0,e.shiftKey?-1:1); } else if(e.key==="Enter"){ e.preventDefault(); commitText(editSuggestion||editVal); moveAnchor(1,0); } else if(e.key==="Escape"){ e.preventDefault(); setEditing(null); } }} onBlur={()=>commitText()} style={{ width:150, fontFamily:"inherit", fontSize:11, fontWeight:700, border:"1px solid var(--info)", outline:"none", padding:"1px 3px" }}/>{editSuggestion && <button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); setEditVal(editSuggestion); }} title="Click or press Tab to accept" style={{ position:"absolute", left:0, top:"100%", marginTop:3, zIndex:390, maxWidth:220, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"3px 7px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--accent-tint)", boxShadow:"3px 3px 0 var(--ink)" }}>Tab ↹ {editSuggestion}</button>}</span>) : <div style={{ fontWeight:700, display:"flex", alignItems:"center", gap:6 }}><span onClick={(e)=>{ e.stopPropagation(); selectRow(s.id); }} title="select row" style={{ fontSize:8, color:"var(--muted-6)", cursor:"pointer", minWidth:14 }}>{rowIdx+1}</span><Star size={11} onClick={(e)=>{ e.stopPropagation(); toggleFollow(s.id); }} title={follows.has(s.id)?"following — click to unfollow":"follow this style"} fill={follows.has(s.id)?"var(--accent)":"none"} color={follows.has(s.id)?"var(--accent)":"#c9c1b3"} style={{ cursor:"pointer", flex:"0 0 auto", opacity:follows.has(s.id)?1:0.5 }}/><span style={{ color:follows.has(s.id)?"#b45309":"inherit" }}>{s.styleNo}</span></div>}
                   <div style={{ fontSize:11, fontWeight:600, color:"var(--muted-4)", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", maxWidth:188, marginTop:2 }}>{s.colour}</div>
                   <div style={{ display:"flex", gap:3, marginTop:4, flexWrap:"wrap" }}>{FLAG_DEFS.map(f=>{ const on=!!s[f.key]; return (<button key={f.key} title={f.title} onClick={(e)=>{ e.stopPropagation(); if(canMaster(role)) toggleFlag(s.id,f.key); }} style={{ fontFamily:"inherit", fontSize:8.5, fontWeight:700, letterSpacing:0.3, padding:"2px 5px", cursor:!canMaster(role)?"not-allowed":"pointer", lineHeight:1.3, border:`1px solid ${on?"var(--ink)":"#cfcabf"}`, background:on?"var(--ink)":"transparent", color:on?"var(--bg)":"var(--muted-6)", opacity:!canMaster(role)?0.5:1 }}>{f.short}</button>); })}</div>
                   <NoteTri k={sk}/>
