@@ -18,6 +18,25 @@ const THEME_CSS = `
   --on-dark:#d8d1c4; --on-dark-2:#a9a095; --on-dark-line:#4a463e;
   --tint-ok:#e5f1ea; --fg-ok:#1c6048; --tint-warn:#f8e9b7; --fg-warn:#7a560f; --tint-late:#f6d3cb; --fg-late:#8c241a; --tint-reject:#f0bdb5; --tint-rework:#fbd9a8; --tint-waive:#e9ddc2; --tint-next:#fdecc9; --tint-histrej:#fbe9e6; --revised:#6a45a8;
 }
+/* Bigger click/tap target without changing the data model. Inline styles still control the visual design. */
+button {
+  min-width: 28px;
+  min-height: 28px;
+  box-sizing: border-box;
+  touch-action: manipulation;
+}
+button svg { pointer-events: none; }
+input, select { min-height: 28px; box-sizing: border-box; }
+/* Tiny in-cell icons remain visually compact but are now easier to hit. */
+td button[title*="revised"],
+td button[title*="REJECTED"],
+td button[title*="rework"],
+td button[title*="skip"],
+td button[title="calendar"],
+td button[title="delete row"] {
+  min-width: 22px;
+  min-height: 22px;
+}
 `;
 const REL_GATE_DAYS = 30, FABRIC_CUTOFF_DAYS = 35, STYLE_W = 190;
 const UPCOMING_DEFAULT = { techpack:2, fitSend:4, fitAppr:1, artwork:2, artAppr:1, strikeOff:3, soAppr:1, labDip:5, labAppr:1, ppSample:4, ppAppr:1, fabricIH:15, prodFile:7 }; // working days before a stage that it becomes "upcoming" in the To-Do list
@@ -335,7 +354,7 @@ function CalPopup({ value, onPick, onClose, label, fallback }){
   );
 }
 const navBtn={ border:"none", background:"transparent", cursor:"pointer", fontSize:18, lineHeight:1, padding:"0 6px", fontFamily:"inherit" };
-const chip={ fontSize:10, padding:"4px 6px", border:"1px solid var(--ink)", background:"var(--bg)", cursor:"pointer", fontFamily:"'JetBrains Mono', monospace", fontWeight:600 };
+const chip={ fontSize:10, padding:"6px 10px", minHeight:30, border:"1px solid var(--ink)", background:"var(--bg)", cursor:"pointer", fontFamily:"'JetBrains Mono', monospace", fontWeight:700, display:"inline-flex", alignItems:"center", justifyContent:"center", gap:4 };
 
 const bulkBtn={ width:"100%", fontFamily:"inherit", fontSize:11, fontWeight:800, padding:"7px 9px", marginBottom:7, cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)", textAlign:"left" };
 const miniBulkBtn={ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"4px 8px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)" };
