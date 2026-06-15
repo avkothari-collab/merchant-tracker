@@ -1,10 +1,10 @@
-import React, { useState, useMemo, useRef, useEffect } from "react";
+import React, { useState, useMemo, useRef, useEffect, useDeferredValue } from "react";
 import { Check, Plus, Lock, Filter, X, Copy, ChevronUp, ChevronDown, CornerDownRight, Columns3, MessageSquare, RotateCcw, Droplet, Snowflake, Trash2, SkipForward, Bell, Clock, Star } from "lucide-react";
 import * as XLSX from "xlsx";
 import { createPortal } from "react-dom";
 import { supabase } from "./supabaseClient";
 
-/* MERCH TRACKER — v30c: chase-standard wording + performance optimization groundwork */
+/* MERCH TRACKER — v31: P95 / large-sheet optimization pass */
 
 const FONT = `@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;800&family=JetBrains+Mono:wght@400;500;700&display=swap');`;
 const THEME_CSS = `
@@ -61,6 +61,14 @@ const iso=(d)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${S
 const colLetter=(n)=>{ let s=""; n=Number(n)+1; if(n<1) return ""; while(n>0){ const m=(n-1)%26; s=String.fromCharCode(65+m)+s; n=Math.floor((n-1)/26); } return s; };
 const letterToIndex=(s)=>{ s=String(s||"").toUpperCase(); if(!/^[A-Z]+$/.test(s)) return -1; let n=0; for(const ch of s) n=n*26+(ch.charCodeAt(0)-64); return n-1; };
 const _now=new Date(); const TODAY=new Date(_now.getFullYear(),_now.getMonth(),_now.getDate()); // live current date (local midnight)
+const perfNow=()=> (typeof performance!=="undefined"&&performance.now)?performance.now():Date.now();
+const lc=(v)=>String(v==null?"":v).toLowerCase();
+const buildSearchIndex=(s,c)=>{
+  const chase=(c&&c.chaseOwners?c.chaseOwners:[]).map(o=>o.owner).join(" ");
+  const byCol={ styleNo:lc(s.styleNo), orderNo:lc(s.orderNo), sampleFit:lc(s.sampleFit), family:lc(s.family), colour:lc(s.colour), color:lc(s.colour), brand:lc(s.brand), buyer:lc(s.buyer), fabricType:lc(s.fabricType), owner:lc(s.owner), remarks:lc(s.remarks), age:lc(s.age), setRole:lc(s.setRole), chase:lc(chase) };
+  return { byCol, auto:[byCol.styleNo,byCol.orderNo,byCol.sampleFit,byCol.family,byCol.colour,byCol.brand,byCol.buyer,byCol.fabricType,byCol.owner,byCol.remarks,byCol.chase].join(" ") };
+};
+const pushPerfSample=(arr,ms)=>{ const n=Number(ms)||0; const next=(arr||[]).concat(n).slice(-80).sort((a,b)=>a-b); return { samples:next, p95:next.length?Math.round(next[Math.min(next.length-1,Math.floor(next.length*0.95))]*10)/10:0 }; };
 
 
 const REJECTABLE=["fitAppr","artAppr","soAppr","labAppr","ppAppr"]; // approval stages that can be rejected
@@ -527,6 +535,7 @@ function MerchTracker({ me, onSignOut }){
   const toggleFlag=(id,flag)=>{ pushHistory(); setStyles(prev=>prev.map(s=>s.id===id?{...s,[flag]:!s[flag]}:s)); flash(); };
   const [bulkOpen,setBulkOpen]=useState(false);
   const [bulkActionsOpen,setBulkActionsOpen]=useState(false);
+  const [bulkConfirm,setBulkConfirm]=useState(null); // review popup before applying bulk row actions
   const [bulkResult,setBulkResult]=useState(null); // upload mapping/preview/result
   const [uploadSkip,setUploadSkip]=useState(new Set()); // order|style keys user chooses not to apply from upload preview
   const toBool=(v)=>{ const s=String(v||"").trim().toLowerCase(); return s==="y"||s==="yes"||s==="true"||s==="1"; };
@@ -565,16 +574,24 @@ function MerchTracker({ me, onSignOut }){
     else { data=rows.map(({s,c})=>{ const o={ "Order No":s.orderNo, "Style No":s.styleNo, "Sample Fit":s.sampleFit, "Family":s.family, "Colour":s.colour, "Brand":s.brand, "Buyer":s.buyer||"", "Age Group":s.age||"", "Fabric Type":s.fabricType, "Junior":s.owner, "Qty":s.qty, "Order Date":fmtIso(s.ordRec), "Delivery":fmtIso(s.delivery), "Status":c.status }; STAGES.forEach(st=>{ o[st.label]=actCell(s,c,st.key); }); return o; }); name="merch_tracker"; }
     if(data&&data.length){ Object.keys(data[0]).forEach(k=>{ if(data.every(r=>r[k]==="n/a")) data.forEach(r=>{ delete r[k]; }); }); }
     const ws=XLSX.utils.json_to_sheet(data); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,sheet); XLSX.writeFile(wb,name+"_"+iso(TODAY)+".xlsx"); }catch(e){ logAppError("export failed",e); alert("Export failed: "+(e.message||e)); } };
-  const archiveFiltered=(val)=>{ const ids=new Set(rows.map(r=>r.s.id)); if(!ids.size) return; if(!window.confirm(`${val?"Archive":"Restore"} ${ids.size} style(s)? Archived styles are hidden from the active sheet — this is reversible.`)) return; pushHistory(); setStyles(prev=>prev.map(s=> ids.has(s.id)?{...s,archived:val}:s)); flash(); };
-  const bulkUpdateVisible=(patch,label)=>{ const ids=new Set(rows.map(r=>r.s.id)); if(!ids.size){ alert("No visible styles to update."); return; } const clean=Object.fromEntries(Object.entries(patch||{}).filter(([_,v])=>v!==undefined)); if(!Object.keys(clean).length) return; if(!window.confirm(`${label} for ${ids.size} visible style(s)? This will save for everyone after auto-save.`)) return; pushHistory(); setStyles(prev=>prev.map(s=>ids.has(s.id)?{...s,...clean}:s)); flash(); setBulkActionsOpen(false); };
-  const bulkAppendRemark=(txt)=>{ const ids=new Set(rows.map(r=>r.s.id)); const note=String(txt||"").trim(); if(!note) return; if(!ids.size){ alert("No visible styles to update."); return; } if(!window.confirm(`Append remark to ${ids.size} visible style(s)?`)) return; pushHistory(); setStyles(prev=>prev.map(s=>ids.has(s.id)?{...s,remarks:[s.remarks,note].filter(Boolean).join(" | ")}:s)); flash(); setBulkActionsOpen(false); };
-  const bulkFlagVisible=(flag,val)=>{ const label=(FLAG_DEFS.find(x=>x.key===flag)||{}).short||flag; bulkUpdateVisible({ [flag]:val }, `Set ${label} = ${val?"Yes":"No"}`); };
+  const bulkVisibleSummary=()=>{ const vis=rows.map(r=>r.s); const buyers=[...new Set(vis.map(s=>s.buyer||s.brand||"—").filter(Boolean))].slice(0,5); const owners=[...new Set(vis.map(s=>s.owner||"—").filter(Boolean))].slice(0,6); const sample=vis.slice(0,8).map(s=>`${s.orderNo||"—"} · ${s.styleNo||"—"}`); return { count:vis.length, buyers, owners, sample, more:Math.max(0,vis.length-sample.length) }; };
+  const openBulkConfirm=(payload)=>{ const ids=rows.map(r=>r.s.id); if(!ids.length){ alert("No visible styles to update."); return; } const summary=bulkVisibleSummary(); setBulkConfirm({ ...payload, ids, summary }); };
+  const applyBulkConfirm=()=>{ const bc=bulkConfirm; if(!bc) return; const ids=new Set(bc.ids||[]); if(!ids.size){ setBulkConfirm(null); return; } pushHistory();
+    if(bc.kind==="appendRemark"){ const note=String(bc.note||"").trim(); setStyles(prev=>prev.map(s=>ids.has(s.id)?{...s,remarks:[s.remarks,note].filter(Boolean).join(" | ")}:s)); }
+    else { const clean=Object.fromEntries(Object.entries(bc.patch||{}).filter(([_,v])=>v!==undefined)); setStyles(prev=>prev.map(s=>ids.has(s.id)?{...s,...clean}:s)); }
+    flash(); setBulkConfirm(null); setBulkActionsOpen(false);
+  };
+  const archiveFiltered=(val)=>{ const label=val?"Archive visible styles":"Restore visible styles"; openBulkConfirm({ title:label, kind:"patch", patch:{ archived:val }, impact:val?"Archived styles will be hidden from the active sheet. This is reversible from Archive view.":"Restored styles will return to the active sheet.", actionText:val?"Archive styles":"Restore styles", danger:val }); };
+  const bulkUpdateVisible=(patch,label,impact)=>{ const clean=Object.fromEntries(Object.entries(patch||{}).filter(([_,v])=>v!==undefined)); if(!Object.keys(clean).length) return; openBulkConfirm({ title:label, kind:"patch", patch:clean, impact:impact||"This changes real row data and will auto-save for everyone.", actionText:"Apply bulk update" }); };
+  const bulkAppendRemark=(txt)=>{ const note=String(txt||"").trim(); if(!note) return; openBulkConfirm({ title:"Append remark", kind:"appendRemark", note, impact:`This remark will be added to every visible style: “${note}”`, actionText:"Append remark" }); };
+  const bulkFlagVisible=(flag,val)=>{ const def=(FLAG_DEFS.find(x=>x.key===flag)||{}); const label=def.short||flag; bulkUpdateVisible({ [flag]:val }, `Set ${label} = ${val?"Yes":"No"}`, `Requirement flag ${def.title||flag} will be set to ${val?"YES":"NO"} for all visible styles.`); };
   const deleteStyle=async(id)=>{ if(!window.confirm("Delete this style row? This removes it for everyone and cannot be undone.")) return; pushHistory(); setStyles(prev=>prev.filter(s=>s.id!==id)); flash(); try{ await supabase.from("stage_dates").delete().eq("style_id",id); await supabase.from("cell_meta").delete().eq("style_id",id); await supabase.from("styles").delete().eq("id",id); }catch(e){ console.error("delete failed",e); } };
 
-  const perfRef=useRef({ computeMs:0, filterMs:0, rowMs:0, rows:0, styles:0, rendered:0, cacheHits:0, recomputed:0, alerts:[] });
+  const perfRef=useRef({ computeMs:0, filterMs:0, rowMs:0, rows:0, styles:0, rendered:0, cacheHits:0, recomputed:0, alerts:[], samples:[], p95Ms:0, deferred:false });
   const computeCacheRef=useRef(new Map());
-  const cfgComputeKey=useMemo(()=>JSON.stringify({ leads:cfg.leads, stageOwners:cfg.stageOwners, rework:cfg.rework, fabricCutoff:cfg.fabricCutoff, relGate:cfg.relGate, upcoming:cfg.upcoming }),[cfg]);
-  const computed=useMemo(()=>{ const t=(typeof performance!=="undefined"?performance.now():Date.now()); const cache=computeCacheRef.current; const liveIds=new Set(); let hits=0, recomputed=0; const out=styles.map(s=>{ liveIds.add(s.id); const old=cache.get(s.id); if(old && old.sRef===s && old.cfgKey===cfgComputeKey){ hits++; return old.out; } const item={s,c:computeStyle(s,cfg)}; cache.set(s.id,{ sRef:s, cfgKey:cfgComputeKey, out:item }); recomputed++; return item; }); for(const id of cache.keys()){ if(!liveIds.has(id)) cache.delete(id); } perfRef.current.computeMs=Math.round(((typeof performance!=="undefined"?performance.now():Date.now())-t)*10)/10; perfRef.current.styles=styles.length; perfRef.current.cacheHits=hits; perfRef.current.recomputed=recomputed; return out; },[styles,cfg,cfgComputeKey]);
+  // Keep compute invalidation tight: changing To-Do watch windows or escalation rules should not recompute every style.
+  const cfgComputeKey=useMemo(()=>JSON.stringify({ leads:cfg.leads, stageOwners:cfg.stageOwners, rework:cfg.rework, fabricCutoff:cfg.fabricCutoff, relGate:cfg.relGate }),[cfg.leads,cfg.stageOwners,cfg.rework,cfg.fabricCutoff,cfg.relGate]);
+  const computed=useMemo(()=>{ const t=perfNow(); const cache=computeCacheRef.current; const liveIds=new Set(); let hits=0, recomputed=0; const out=styles.map(s=>{ liveIds.add(s.id); const old=cache.get(s.id); if(old && old.sRef===s && old.cfgKey===cfgComputeKey){ hits++; return old.out; } const c=computeStyle(s,cfg); const item={s,c,idx:buildSearchIndex(s,c)}; cache.set(s.id,{ sRef:s, cfgKey:cfgComputeKey, out:item }); recomputed++; return item; }); for(const id of cache.keys()){ if(!liveIds.has(id)) cache.delete(id); } const ms=Math.round((perfNow()-t)*10)/10; const hist=pushPerfSample(perfRef.current.samples,ms); perfRef.current.computeMs=ms; perfRef.current.samples=hist.samples; perfRef.current.p95Ms=hist.p95; perfRef.current.styles=styles.length; perfRef.current.cacheHits=hits; perfRef.current.recomputed=recomputed; return out; },[styles,cfg,cfgComputeKey]);
   const chaseOwnerOptions=useMemo(()=>["All", ...Array.from(new Set([...STAGES.map(st=>(cfg.stageOwners&&cfg.stageOwners[st.key])||DEFAULT_STAGE_OWNERS[st.key]||st.owner), ...CHASE_LABELS])).filter(Boolean)], [cfg]);
   const todoItems=useMemo(()=>{
     const enrich=(item)=>{
@@ -642,12 +659,13 @@ function MerchTracker({ me, onSignOut }){
   const restoreView=()=>{ if(!viewSnap) return; setStatusFilter(viewSnap.statusFilter); setOwnerFilter(viewSnap.ownerFilter); setSearch(viewSnap.search); setColFilters(viewSnap.colFilters); setActivityFilter(viewSnap.activityFilter); setSavedView(viewSnap.savedView||""); setViewSnap(null); };
   const applyDrill=(spec)=>{ snapCurrent(); setStatusFilter(spec.status||"All"); setOwnerFilter(spec.owner||"All"); setSearch(spec.search||""); setColFilters(spec.colFilters||{}); setActivityFilter(spec.activity||null); setSavedView(""); setTab("tracker"); };
   const presetPass=(s,c)=>{ if(!savedView) return true; const front=c.frontier?[...c.frontier]:[]; const has=(keys)=>front.some(k=>keys.includes(k)); const dueSoon=front.some(k=>{ const r=(c.stages||[]).find(x=>x.key===k); const d=r&&(r.rev||r.plan); const n=d?netWorkdays(TODAY,d):999; return d && n>=0 && n<=6; }); const anyRework=(c.stages||[]).some(r=>r.rework||r.rejected); if(savedView==="overdue") return (c.tone==="late"||c.status.startsWith("Overdue")); if(savedView==="dueThisWeek") return !c.released && dueSoon; if(savedView==="buyerPending") return !c.released && front.some(k=>((STAGES.find(x=>x.key===k)||{}).owner)==="Buyer"); if(savedView==="fabricPending") return !c.released && has(["labDip","labAppr","fabricIH"]); if(savedView==="ppPending") return !c.released && has(["ppSample","ppAppr","prodFile"]); if(savedView==="deliveryRisk") return c.tone==="late"||String(c.status).toLowerCase().includes("risk"); if(savedView==="following") return follows.has(s.id); if(savedView==="rework") return anyRework; if(savedView==="released") return c.released; return true; };
-  const filterKey=useMemo(()=>JSON.stringify({ search, searchCol, statusFilter, ownerFilter, archiveView, activityFilter, colFilters, followFilter, savedView, follows:[...follows].sort() }),[search,searchCol,statusFilter,ownerFilter,archiveView,activityFilter,colFilters,followFilter,savedView,follows]);
-  const filtered=useMemo(()=>{ const t=(typeof performance!=="undefined"?performance.now():Date.now()); const q=String(search||"").trim().toLowerCase(); const cfEntries=Object.entries(colFilters||{}); const out=computed.filter(({s,c})=>{ const ownerMatch=q?(c.chaseOwners||[]).some(o=>String(o.owner||"").toLowerCase().includes(q)):false; const matchQ = !q ? true : (searchCol==="auto" ? (String(s.styleNo||"").toLowerCase().includes(q)||String(s.colour||"").toLowerCase().includes(q)||String(s.family||"").toLowerCase().includes(q)||String(s.sampleFit||"").toLowerCase().includes(q)||String(s.orderNo||"").toLowerCase().includes(q)||ownerMatch) : String(s[searchCol]==null?"":s[searchCol]).toLowerCase().includes(q)); const matchS=statusFilter==="All"||(statusFilter==="At Risk"&&(c.tone==="late"||c.tone==="warn"))||(statusFilter==="On Track"&&c.tone==="ok")||(statusFilter==="Released"&&c.released); const matchF=cfEntries.every(([col,allowed])=> passCol(s,c,col,allowed)); const matchO=ownerFilter==="All"||(c.chaseOwners||[]).some(o=>o.owner===ownerFilter); const matchA=!activityFilter||(c.frontier&&c.frontier.has(activityFilter)); const matchArch=archiveView==="all"?true:(archiveView==="archived"?!!s.archived:!s.archived); const matchFollow=!followFilter||follows.has(s.id); return matchQ&&matchS&&matchF&&matchO&&matchA&&matchArch&&matchFollow&&presetPass(s,c); }); perfRef.current.filterMs=Math.round(((typeof performance!=="undefined"?performance.now():Date.now())-t)*10)/10; return out; },[computed,filterKey]);
+  const deferredSearch=useDeferredValue(search);
+  const filterKey=useMemo(()=>JSON.stringify({ search:deferredSearch, searchCol, statusFilter, ownerFilter, archiveView, activityFilter, colFilters, followFilter, savedView, follows:[...follows].sort() }),[deferredSearch,searchCol,statusFilter,ownerFilter,archiveView,activityFilter,colFilters,followFilter,savedView,follows]);
+  const filtered=useMemo(()=>{ const t=perfNow(); const q=String(deferredSearch||"").trim().toLowerCase(); const cfEntries=Object.entries(colFilters||{}); const out=computed.filter((row)=>{ const {s,c,idx}=row; const matchQ = !q ? true : (searchCol==="auto" ? (idx&&idx.auto?idx.auto:"").includes(q) : ((idx&&idx.byCol&&idx.byCol[searchCol])!=null?idx.byCol[searchCol]:lc(s[searchCol])).includes(q)); const matchS=statusFilter==="All"||(statusFilter==="At Risk"&&(c.tone==="late"||c.tone==="warn"))||(statusFilter==="On Track"&&c.tone==="ok")||(statusFilter==="Released"&&c.released); const matchF=cfEntries.every(([col,allowed])=> passCol(s,c,col,allowed)); const matchO=ownerFilter==="All"||(c.chaseOwners||[]).some(o=>o.owner===ownerFilter); const matchA=!activityFilter||(c.frontier&&c.frontier.has(activityFilter)); const matchArch=archiveView==="all"?true:(archiveView==="archived"?!!s.archived:!s.archived); const matchFollow=!followFilter||follows.has(s.id); return matchQ&&matchS&&matchF&&matchO&&matchA&&matchArch&&matchFollow&&presetPass(s,c); }); perfRef.current.filterMs=Math.round((perfNow()-t)*10)/10; perfRef.current.deferred=deferredSearch!==search; return out; },[computed,filterKey,deferredSearch,search]);
   const toneRank={ late:0, warn:1, ok:2, done:3, na:4 };
   const fitNum=(s)=>{ const m=String(s.sampleFit).match(/\d+/); return m?Number(m[0]):Infinity; };
   const sortVal=(col,{s,c})=>{ switch(col){ case "__style": return s.styleNo.toLowerCase(); case "orderNo": return (s.orderNo||"~").toLowerCase(); case "sampleFit": return fitNum(s); case "family": return s.family.toLowerCase(); case "colour": return s.colour.toLowerCase(); case "owner": return (s.owner||"").toLowerCase(); case "setId": return (s.setId||"~").toLowerCase(); case "setRole": return (s.setRole||"").toLowerCase(); case "qty": return s.qty; case "ordRec": return s.ordRec?new Date(s.ordRec).getTime():Infinity; case "delivery": return s.delivery?new Date(s.delivery).getTime():Infinity; case "overall": return toneRank[c.tone]; case "fit": return toneRank[c.fitBranch.tone]; case "print": return toneRank[c.printBranch.tone]; case "fabric": return toneRank[c.fabricBranch.tone]; case "pp": return toneRank[c.ppBranch.tone]; case "prod": return toneRank[c.prodFileBranch.tone]; case "fabricCD": return c.fabricCountdown.n==null?Infinity:c.fabricCountdown.n; case "proj": return c.projRelease?c.projRelease.getTime():Infinity; case "pct": return c.pct; case "chase": return (c.chaseOwners||[]).length; case "float": return c.float==null?Infinity:c.float; case "idle": return c.idle==null?-1:c.idle; case "remarks": return (s.remarks||"~").toLowerCase(); default: { const a=s.actuals[col]; return a?new Date(a).getTime():Infinity; } } };
-  const rows=useMemo(()=>{ const t=(typeof performance!=="undefined"?performance.now():Date.now()); const out=!sort.col ? filtered : [...filtered].sort((A,B)=>{ const a=sortVal(sort.col,A), b=sortVal(sort.col,B); return a<b?-sort.dir:a>b?sort.dir:0; }); perfRef.current.rowMs=Math.round(((typeof performance!=="undefined"?performance.now():Date.now())-t)*10)/10; perfRef.current.rows=out.length; perfRef.current.alerts=[perfRef.current.computeMs>300?"compute slow":"", perfRef.current.filterMs>150?"filter slow":"", perfRef.current.rowMs>120?"sort slow":"", out.length>900?"large visible rows":""].filter(Boolean); return out; },[filtered,sort]);
+  const rows=useMemo(()=>{ const t=perfNow(); const out=!sort.col ? filtered : [...filtered].sort((A,B)=>{ const a=sortVal(sort.col,A), b=sortVal(sort.col,B); return a<b?-sort.dir:a>b?sort.dir:0; }); perfRef.current.rowMs=Math.round((perfNow()-t)*10)/10; perfRef.current.rows=out.length; perfRef.current.alerts=[perfRef.current.p95Ms>800?"P95 >800ms":"", perfRef.current.computeMs>300?"compute slow":"", perfRef.current.filterMs>200?"filter slow":"", perfRef.current.rowMs>200?"sort slow":"", out.length>900?"large visible rows":"", styles.length>1000?"1000+ active styles":"", perfRef.current.deferred?"search catching up":""].filter(Boolean); return out; },[filtered,sort,styles.length]);
   const [renderLimit,setRenderLimit]=useState(()=>{ try{ const v=parseInt(localStorage.getItem("mt_render_limit"),10); return (isFinite(v)&&v>=300&&v<=5000)?v:900; }catch(e){ return 900; } });
   useEffect(()=>{ try{ localStorage.setItem("mt_render_limit",String(renderLimit)); }catch(e){} },[renderLimit]);
   useEffect(()=>{ if(rows.length<=renderLimit && renderLimit>900) setRenderLimit(900); },[rows.length,renderLimit]);
@@ -1006,6 +1024,32 @@ function MerchTracker({ me, onSignOut }){
         </div>
       </div>)}
 
+      {bulkConfirm && (<div onClick={()=>setBulkConfirm(null)} style={{ position:"fixed", inset:0, background:"rgba(26,26,26,0.62)", zIndex:230, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
+        <div onClick={e=>e.stopPropagation()} style={{ background:"var(--bg)", border:"2px solid var(--ink)", boxShadow:"8px 8px 0 var(--ink)", width:560, maxWidth:"100%", padding:20, fontFamily:"'JetBrains Mono',monospace" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", gap:12, marginBottom:8 }}>
+            <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:18 }}>Confirm bulk action</div>
+            <button onClick={()=>setBulkConfirm(null)} style={{ border:"none", background:"transparent", cursor:"pointer" }}><X size={18}/></button>
+          </div>
+          <div style={{ border:"1px solid var(--ink)", background:"var(--surface)", padding:12, marginBottom:10 }}>
+            <div style={{ fontSize:12, fontWeight:800, marginBottom:5 }}>{bulkConfirm.title}</div>
+            <div style={{ fontSize:11, color:"var(--muted-3)", lineHeight:1.5 }}>{bulkConfirm.impact || "This changes real row data and will auto-save for everyone."}</div>
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:8, marginBottom:10 }}>
+            <div style={{ border:"1px solid var(--line-2)", background:"var(--surface)", padding:8 }}><div style={{ fontSize:20, fontWeight:800, color:"var(--accent)", fontFamily:"'Archivo',sans-serif" }}>{bulkConfirm.summary?.count||0}</div><div style={{ fontSize:9, color:"var(--muted-2)", textTransform:"uppercase" }}>visible styles</div></div>
+            <div style={{ border:"1px solid var(--line-2)", background:"var(--surface)", padding:8 }}><div style={{ fontSize:11, fontWeight:800 }}>{(bulkConfirm.summary?.owners||[]).join(", ")||"—"}</div><div style={{ fontSize:9, color:"var(--muted-2)", textTransform:"uppercase", marginTop:4 }}>current owners</div></div>
+            <div style={{ border:"1px solid var(--line-2)", background:"var(--surface)", padding:8 }}><div style={{ fontSize:11, fontWeight:800 }}>{(bulkConfirm.summary?.buyers||[]).join(", ")||"—"}</div><div style={{ fontSize:9, color:"var(--muted-2)", textTransform:"uppercase", marginTop:4 }}>buyers/brands</div></div>
+          </div>
+          {bulkConfirm.kind==="patch" && <div style={{ fontSize:10, marginBottom:10, border:"1px solid var(--line-2)", background:"var(--surface)", padding:8 }}><b>Field changes:</b>{Object.entries(bulkConfirm.patch||{}).map(([k,v])=><div key={k} style={{ marginTop:3 }}>• {k}: <b>{typeof v==="boolean"?(v?"Yes":"No"):String(v||"—")}</b></div>)}</div>}
+          {bulkConfirm.kind==="appendRemark" && <div style={{ fontSize:10, marginBottom:10, border:"1px solid var(--line-2)", background:"var(--surface)", padding:8 }}><b>Remark to append:</b><div style={{ marginTop:4, color:"var(--muted-3)" }}>{bulkConfirm.note}</div></div>}
+          <div style={{ fontSize:10, color:"var(--muted-3)", marginBottom:10 }}>Sample affected rows: {(bulkConfirm.summary?.sample||[]).join("; ")}{bulkConfirm.summary?.more?` … +${bulkConfirm.summary.more} more`:""}</div>
+          <div style={{ fontSize:10, color:"var(--danger)", fontWeight:800, background:"#fbeaea", border:"1px solid #e8b4ae", padding:"7px 9px", marginBottom:12 }}>This is not a temporary view action. It will change actual data for all selected visible styles.</div>
+          <div style={{ display:"flex", gap:8, justifyContent:"flex-end" }}>
+            <button onClick={()=>setBulkConfirm(null)} style={{ fontFamily:"inherit", fontSize:11, padding:"8px 12px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)" }}>Cancel</button>
+            <button onClick={applyBulkConfirm} style={{ fontFamily:"inherit", fontSize:11, fontWeight:800, padding:"8px 14px", cursor:"pointer", border:"1px solid var(--ink)", background:bulkConfirm.danger?"var(--danger)":"var(--success)", color:"var(--surface)" }}>{bulkConfirm.actionText||"Apply bulk action"}</button>
+          </div>
+        </div>
+      </div>)}
+
       {tab==="tracker" && (<>
       <div style={{ display:"flex", padding:"12px 22px 0", flexWrap:"wrap" }}>
         {Object.entries(funnel).map(([k,v],i,arr)=>(<div key={k} style={{ flex:1, minWidth:90, background:"var(--surface)", border:"1px solid var(--line-2)", borderRight:i===arr.length-1?"1px solid var(--line-2)":"none", padding:"8px 10px" }}><div style={{ fontSize:22, fontWeight:700, lineHeight:1, fontFamily:"'Archivo',sans-serif", color:k==="Released"?"var(--success)":k==="Fabric IH"?"var(--danger)":"var(--ink)" }}>{v}</div><div style={{ fontSize:9, color:"var(--muted-2)", marginTop:3, letterSpacing:0.5, textTransform:"uppercase" }}>{k}</div></div>))}
@@ -1118,7 +1162,7 @@ function MerchTracker({ me, onSignOut }){
 
       {showJump && <button onClick={jumpToTop} title="Back to controls / top" style={{ position:"fixed", bottom:24, right:24, zIndex:70, width:42, height:42, borderRadius:21, border:"1px solid var(--ink)", background:"var(--accent)", color:"var(--ink)", boxShadow:"2px 2px 0 var(--ink)", cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}><ChevronUp size={20}/></button>}
 
-      {rows.length>renderRows.length && <div style={{ margin:"0 22px 8px", border:"1px solid var(--line-2)", background:"var(--accent-tint)", borderRadius:10, padding:"8px 10px", fontSize:10.5, color:"var(--muted-4)", display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}><b>Performance mode:</b> showing first {renderRows.length} of {rows.length} filtered styles. Narrow filters for fastest work, or <button onClick={()=>setRenderLimit(Math.min(5000, renderLimit+900))} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"3px 8px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)" }}>show 900 more</button><button onClick={()=>setRenderLimit(5000)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"3px 8px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)" }}>show all up to 5,000</button></div>}
+      {rows.length>renderRows.length && <div style={{ margin:"0 22px 8px", border:"1px solid var(--line-2)", background:"var(--accent-tint)", borderRadius:10, padding:"8px 10px", fontSize:10.5, color:"var(--muted-4)", display:"flex", gap:10, alignItems:"center", flexWrap:"wrap" }}><b>Performance mode:</b> showing first {renderRows.length} of {rows.length} filtered styles to protect P95 speed. Narrow filters for fastest work, or <button onClick={()=>setRenderLimit(Math.min(5000, renderLimit+900))} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"3px 8px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)" }}>show 900 more</button><button onClick={()=>setRenderLimit(5000)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"3px 8px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)" }}>show all up to 5,000</button></div>}
       <div ref={scrollWrapRef} style={{ overflow:"auto", padding:"0 22px", maxHeight:"calc(100vh - 210px)" }}>
         <table role="grid" aria-label="Pre-production tracker grid. Arrow keys to move, Escape to exit, Tab to leave the grid." style={{ borderCollapse:"separate", borderSpacing:0, zoom:textScale, fontSize:11, fontWeight:tableWeight, tableLayout:"fixed", userSelect:dragSel?"none":"auto" }}>
           <colgroup>
@@ -1239,7 +1283,7 @@ function MerchTracker({ me, onSignOut }){
       </div>
 
       <div style={{ padding:"10px 22px", display:"flex", gap:16, flexWrap:"wrap", alignItems:"center", fontSize:11, borderTop:"1px solid var(--line-3)" }}>
-        {(() => { const rs=rows; const n=rs.length; const rel=rs.filter(r=>r.c.released).length; const risk=rs.filter(r=>r.c.tone==="late"||r.c.tone==="warn").length; const ok=rs.filter(r=>(r.c.tone==="ok")&&!r.c.released).length; const qty=rs.reduce((a,r)=>a+(Number(r.s.qty)||0),0); const avg=n?Math.round(rs.reduce((a,r)=>a+(r.c.pct||0),0)/n):0; return <span style={{ display:"flex", gap:14, flexWrap:"wrap", alignItems:"center" }}><span><b>{n}</b> styles</span><span style={{ color:"var(--danger)" }}><b>{risk}</b> at risk</span><span><b>{ok}</b> on track</span><span><b>{rel}</b> released</span><span>total qty <b>{qty.toLocaleString()}</b></span><span>avg <b>{avg}%</b> done</span><span style={{ color:(perfRef.current.alerts||[]).length?"var(--danger)":"var(--muted-2)" }}>Perf: compute <b>{perfRef.current.computeMs}ms</b> · filter <b>{perfRef.current.filterMs}ms</b> · sort <b>{perfRef.current.rowMs}ms</b> · rendered <b>{perfRef.current.rendered}/{perfRef.current.rows}</b> · recomputed <b>{perfRef.current.recomputed}</b>{(perfRef.current.alerts||[]).length?" · "+perfRef.current.alerts.join(", "):""}</span></span>; })()}
+        {(() => { const rs=rows; const n=rs.length; const rel=rs.filter(r=>r.c.released).length; const risk=rs.filter(r=>r.c.tone==="late"||r.c.tone==="warn").length; const ok=rs.filter(r=>(r.c.tone==="ok")&&!r.c.released).length; const qty=rs.reduce((a,r)=>a+(Number(r.s.qty)||0),0); const avg=n?Math.round(rs.reduce((a,r)=>a+(r.c.pct||0),0)/n):0; return <span style={{ display:"flex", gap:14, flexWrap:"wrap", alignItems:"center" }}><span><b>{n}</b> styles</span><span style={{ color:"var(--danger)" }}><b>{risk}</b> at risk</span><span><b>{ok}</b> on track</span><span><b>{rel}</b> released</span><span>total qty <b>{qty.toLocaleString()}</b></span><span>avg <b>{avg}%</b> done</span><span style={{ color:(perfRef.current.alerts||[]).length?"var(--danger)":"var(--muted-2)" }}>Perf: P95 <b>{perfRef.current.p95Ms||0}ms</b> · compute <b>{perfRef.current.computeMs}ms</b> · filter <b>{perfRef.current.filterMs}ms</b> · sort <b>{perfRef.current.rowMs}ms</b> · rendered <b>{perfRef.current.rendered}/{perfRef.current.rows}</b> · recomputed <b>{perfRef.current.recomputed}</b> · cache <b>{perfRef.current.cacheHits}</b>{perfRef.current.deferred?" · search catching up":""}{(perfRef.current.alerts||[]).length?" · "+perfRef.current.alerts.join(", "):""}</span></span>; })()}
         <span style={{ marginLeft:"auto", fontSize:9, color:"var(--muted-7)", display:"flex", alignItems:"center", gap:4, flexWrap:"wrap" }}>Ctrl/Cmd C·V copy-paste · Z / Shift+Z undo-redo · F2 edit · Del clears · drag blue corner to fill · <span style={{ width:0,height:0, borderTop:"7px solid var(--danger)", borderLeft:"7px solid transparent", display:"inline-block" }}/> comment · <RotateCcw size={10} color="var(--revised)"/> revised plan · <Snowflake size={10} color="#2563a6"/> freeze cols</span>
       </div>
       </>)}
@@ -1630,42 +1674,78 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const brandData=brandRows.map(r=>({"Buyer / Brand":r.label,"Completed Entries":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Time Days":r1(avg(r.durSum,r.durN)),"Worst Delay Days":r1(r.maxDelay)}));
   const delayData=worstDelays.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Chase Label":r.owner,"Stage":r.stage,"Department":r.dept,"Delay Days":r1(r.delay),"Duration Days":r.duration==null?"":r1(r.duration),"Due":fmt(r.due),"Actual":fmt(r.actual)}));
   const calcBreakup=delayRecords.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Chase Label":r.owner,"Stage":r.stage,"Stage Key":r.stageKey,"Department":r.dept,"Auto Plan Date":r.plan?fmt(r.plan):"","Revised Date":r.revised?fmt(r.revised):"","Due Date Used":fmt(r.due),"Actual Date":fmt(r.actual),"Start Date Used":r.start?fmt(r.start):"","Delay vs Due Days":r1(r.delay),"Delay vs Auto Plan Days":r.delayPlan==null?"":r1(r.delayPlan),"Actual vs Revised Days":r.delayRevised==null?"":r1(r.delayRevised),"Duration Days":r.duration==null?"":r1(r.duration),"Included in Avg Delay":"YES","Included in Avg Actual Time":r.duration==null?"NO - start date missing":"YES","Included in Revised Accuracy":r.delayRevised==null?"NO - no revised+actual":"YES"}));
-  const explainDelay=(r)=>{ const d=r1(r.delay); const dueKind=r.revised?"revised commitment":"auto plan"; if(d>0) return `${r.style||"This style"} missed ${r.stage} by ${fmtDays(d)} versus the ${dueKind}.`; if(d<0) return `${r.stage} closed ${fmtDays(Math.abs(d))} early versus the ${dueKind}.`; return `${r.stage} closed on the ${dueKind}.`; };
-  const actionFor=(r,type="General")=>{ const d=r1(r.delay); if(type==="Buyer Approval") return d>0?"Buyer approval slipped. Follow up with buyer / brand, record reason in comments, and add buffer for repeat buyer delays.":"Buyer approval closed within plan; no escalation required."; if(type==="Stage Performance") return d>0?`Stage chase label ${r.dept||"team"} to review lead-time and reason for ${r.stage} delay.`:"Keep current process; stage is closing within plan."; if(type==="Department Performance") return d>0?`Department ${r.dept||"team"} needs daily chase on open/repeat delays and capacity check.`:"No department escalation needed."; if(type==="Chase Delay Ranking") return d>0?`Chase ${r.dept||"team"} for repeat delay on ${r.stage}; check capacity, handoff gap, and next commitment.`:"This chase label closed the activity within plan."; if(type==="Buyer Brand Delays") return d>0?"Tighten buyer follow-up cadence and add future TNA buffer for this buyer/brand." : "Buyer/brand timing is acceptable for this activity."; if(type==="Worst Performing Styles") return d>0?"Prepare style recovery plan: latest blocker, revised commitment, responsible person, and next chase time." : "No recovery action needed for this stage."; if(type==="Revised vs Actual") return r.delayRevised>0?"Revised commitment was missed; ask for reason before accepting next revised date.":"Revised commitment held; planning accuracy is acceptable."; return d>0?"Review this style/stage with the responsible chase label; use comments/history for reason." : "No delay action needed."; };
-  const detailRowsFor=(type,records=delayRecords)=>records.map(r=>({
-    "Report Context":type,
-    "Style No":r.style||"", "Order No":r.order||"", "Buyer / Brand":r.buyer||"", "Junior":r.owner||"",
-    "Stage / Activity":r.stage||"", "Department Responsible":r.dept||"",
-    "Auto Plan":r.plan?fmt(r.plan):"", "Revised Plan":r.revised?fmt(r.revised):"", "Due Used":r.due?fmt(r.due):"", "Actual Done":r.actual?fmt(r.actual):"", "Start Used":r.start?fmt(r.start):"",
-    "Actual Time Taken":r.duration==null?"Start date missing":fmtDays(r.duration),
-    "Delay vs Due":fmtDays(r.delay), "Delay vs Original Plan":r.delayPlan==null?"":fmtDays(r.delayPlan), "Actual vs Revised":r.delayRevised==null?"No revised plan":fmtDays(r.delayRevised),
-    "Result":r.delay>0?"Late":(r.delay<0?"Early":"On time"),
-    "How this number was calculated":`${type}: ${r.stage} due used = ${r.revised?"revised plan":"auto plan"}. Delay = actual done (${fmt(r.actual)}) minus due used (${fmt(r.due)}), counted in working days excluding Sundays. Actual time = ${r.start?"actual done minus previous/order start date":"not calculated because start date is missing"}.`,
-    "Management Reading": type==="Buyer Approval" ? `${r.buyer||"Buyer"} approval for ${r.stage} on style ${r.style} ${r.delay>0?"is late and needs buyer follow-up":"closed within plan"}.` : type==="Stage Performance" ? `${r.stage} performance for style ${r.style}: ${explainDelay(r)}` : type==="Department Performance" ? `${r.dept||"Department"} handled ${r.stage} for ${r.style}; ${explainDelay(r)}` : type==="Chase Delay Ranking" ? `${r.dept||"Chase label"} was responsible for ${r.stage} on style ${r.style}; ${explainDelay(r)}` : type==="Buyer Brand Delays" ? `${r.buyer||"Buyer/Brand"} trend input: ${explainDelay(r)}` : type==="Worst Performing Styles" ? `This row explains one contributor to the style-level delay: ${r.stage} at ${fmtDays(r.delay)}.` : type==="Revised vs Actual" ? (r.delayRevised===0?"Revised plan was met.":(r.delayRevised>0?`Actual missed revised date by ${fmtDays(r.delayRevised)}.`:`Actual beat revised date by ${fmtDays(Math.abs(r.delayRevised))}.`)) : explainDelay(r),
-    "Suggested Action":actionFor(r,type)
-  }));
+  // Export cleanup: delay/chase detail sheets should show problem rows only and use short management text.
+  const lateRecords=delayRecords.filter(r=>r.delay>0);
+  const buyerApprovalStageNames=["Fit Appr","Art Appr","S/O Appr","Lab Dip Appr","PP Appr"];
+  const buyerApprovalLateRecords=lateRecords.filter(r=>buyerApprovalStageNames.includes(r.stage));
+  const revisedActualRecords=delayRecords.filter(r=>r.delayRevised!=null);
+  const revisedMissedRecords=revisedActualRecords.filter(r=>r.delayRevised>0);
+  const dueKind=(r)=>r.revised?"Revised Plan":"Auto Plan";
+  const delayText=(d)=>{ const n=r1(d||0); if(n>0) return `${n}d late`; if(n<0) return `${Math.abs(n)}d early`; return "On time"; };
+  const resultFor=(r,type)=>{
+    if(type==="Revised vs Actual") return r.delayRevised>0?"Revised missed":(r.delayRevised<0?"Early vs revised":"On revised date");
+    return r.delay>0?"Delayed":(r.delay<0?"Early":"On time");
+  };
+  const readingFor=(r,type)=>{
+    if(type==="Revised vs Actual") return r.delayRevised>0?`Missed revised by ${r1(r.delayRevised)}d`:(r.delayRevised<0?`Beat revised by ${Math.abs(r1(r.delayRevised))}d`:"Met revised date");
+    if(r.delay>0) return `${r.stage} delayed by ${r1(r.delay)}d`;
+    if(r.delay<0) return `Closed ${Math.abs(r1(r.delay))}d early`;
+    return "Closed on time";
+  };
+  const actionFor=(r,type="General")=>{
+    if(type==="Buyer Approval") return "Buyer follow-up today";
+    if(type==="Chase Delay Ranking") return `Chase ${r.dept||"responsible team"}`;
+    if(type==="Buyer Brand Delays") return "Tighten buyer follow-up";
+    if(type==="Worst Performing Styles") return "Make recovery plan";
+    if(type==="Revised vs Actual") return r.delayRevised>0?"Ask reason before next revision":"No action";
+    if(type==="Stage Performance") return r.delay>0?`Review ${r.stage} handoff` : "No action";
+    if(type==="Department Performance") return r.delay>0?`Review ${r.dept||"team"} capacity` : "No action";
+    return r.delay>0?"Review blocker" : "No action";
+  };
+  const detailRowsFor=(type,records=delayRecords,opts={})=>{
+    const problemOnly=!!opts.problemOnly;
+    const src=problemOnly?records.filter(r=> type==="Revised vs Actual" ? r.delayRevised>0 : r.delay>0):records;
+    return src.map(r=>({
+      "Report Context":type,
+      "Style No":r.style||"", "Order No":r.order||"", "Buyer / Brand":r.buyer||"", "Junior / Style Owner":r.owner||"",
+      "Stage / Activity":r.stage||"", "Chase Label":r.dept||"",
+      "Auto Plan":r.plan?fmt(r.plan):"", "Revised Plan":r.revised?fmt(r.revised):"", "Due Used":r.due?fmt(r.due):"", "Actual Done":r.actual?fmt(r.actual):"", "Start Used":r.start?fmt(r.start):"",
+      "Actual Time Taken":r.duration==null?"Start missing":`${r1(r.duration)}d`,
+      "Delay vs Due":delayText(r.delay), "Delay vs Original Plan":r.delayPlan==null?"":delayText(r.delayPlan), "Actual vs Revised":r.delayRevised==null?"No revised plan":delayText(r.delayRevised),
+      "Result":resultFor(r,type),
+      "How calculated":`Due = ${dueKind(r)}`,
+      "Management Reading":readingFor(r,type),
+      "Suggested Action":actionFor(r,type)
+    }));
+  };
+  const compactAgg=(records,keyFn,labelName)=>{
+    const m={}; records.forEach(r=>{ const k=keyFn(r)||"(blank)"; const o=m[k]=m[k]||{ label:k, n:0, delaySum:0, worst:0 }; o.n++; o.delaySum+=Math.max(0,r.delay||0); o.worst=Math.max(o.worst,Math.max(0,r.delay||0)); });
+    return Object.values(m).sort((a,b)=>b.delaySum-a.delaySum).map(o=>({ [labelName]:o.label, "Delayed Entries":o.n, "Total Delay Days":r1(o.delaySum), "Avg Delay Days":r1(avg(o.delaySum,o.n)), "Worst Delay Days":r1(o.worst) }));
+  };
   const managementDetailRows=detailRowsFor("Management Summary",delayRecords);
-  const revisedActualData=delayRecords.filter(r=>r.delayRevised!=null).map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Chase Label":r.owner,"Stage":r.stage,"Department":r.dept,"Auto Plan Date":r.plan?fmt(r.plan):"","Revised Date":fmt(r.revised),"Actual Date":fmt(r.actual),"Actual vs Revised Days":r1(r.delayRevised),"Accuracy":r.delayRevised===0?"On revised date":(r.delayRevised>0?"Late vs revised":"Early vs revised"),"Management Reading":r.delayRevised===0?"Revised plan was accurate.":(r.delayRevised>0?`Actual was ${fmtDays(r.delayRevised)} later than revised plan.`:`Actual was ${fmtDays(Math.abs(r.delayRevised))} earlier than revised plan.`)}));
-  const buyerApprovalRecords=delayRecords.filter(r=>["Fit Appr","Art Appr","S/O Appr","Lab Dip Appr","PP Appr"].includes(r.stage));
-  const buyerApprovalDetail=detailRowsFor("Buyer Approval",buyerApprovalRecords);
+  const revisedActualData=revisedActualRecords.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Chase Label":r.dept,"Stage":r.stage,"Auto Plan Date":r.plan?fmt(r.plan):"","Revised Date":fmt(r.revised),"Actual Date":fmt(r.actual),"Actual vs Revised Days":r1(r.delayRevised),"Accuracy":r.delayRevised===0?"On revised date":(r.delayRevised>0?"Late vs revised":"Early vs revised"),"Management Reading":readingFor(r,"Revised vs Actual")}));
+  const buyerApprovalDetail=detailRowsFor("Buyer Approval",buyerApprovalLateRecords,{problemOnly:true});
   const stageDetailRows=detailRowsFor("Stage Performance",delayRecords);
   const deptDetailRows=detailRowsFor("Department Performance",delayRecords);
-  const chaseDetailRows=detailRowsFor("Chase Delay Ranking",delayRecords);
-  const brandDetailRows=detailRowsFor("Buyer Brand Delays",delayRecords);
+  const chaseDetailRows=detailRowsFor("Chase Delay Ranking",lateRecords,{problemOnly:true});
+  const brandDetailRows=detailRowsFor("Buyer Brand Delays",lateRecords,{problemOnly:true});
   const styleAgg={};
-  delayRecords.forEach(r=>{ const key=(r.order||"")+"|"+(r.style||""); const o=styleAgg[key]=styleAgg[key]||{ order:r.order, style:r.style, buyer:r.buyer, owner:r.owner, completed:0, late:0, delaySum:0, worstDelay:-999, worstStage:"", stages:[] }; o.completed++; if(r.delay>0) o.late++; o.delaySum+=r.delay; if(r.delay>o.worstDelay){ o.worstDelay=r.delay; o.worstStage=r.stage; } o.stages.push(r.stage+" "+fmtDays(r.delay)); });
-  const worstStyleData=Object.values(styleAgg).sort((a,b)=>b.delaySum-a.delaySum).slice(0,25).map(o=>({"Style No":o.style,"Order No":o.order,"Buyer / Brand":o.buyer,"Junior / Owner":o.owner,"Completed Stage Count":o.completed,"Late Stage Count":o.late,"Total Delay Days":fmtDays(o.delaySum),"Worst Stage":o.worstStage,"Worst Stage Delay":fmtDays(o.worstDelay),"Management Reading":`${o.style} has ${o.late} late completed stage(s), total delay ${fmtDays(o.delaySum)} across completed stages.`}));
+  lateRecords.forEach(r=>{ const key=(r.order||"")+"|"+(r.style||""); const o=styleAgg[key]=styleAgg[key]||{ order:r.order, style:r.style, buyer:r.buyer, owner:r.owner, completed:0, late:0, delaySum:0, worstDelay:0, worstStage:"", stages:[] }; o.completed++; o.late++; o.delaySum+=Math.max(0,r.delay||0); if((r.delay||0)>o.worstDelay){ o.worstDelay=r.delay; o.worstStage=r.stage; } o.stages.push(`${r.stage} ${r1(r.delay)}d`); });
+  const worstStyleData=Object.values(styleAgg).sort((a,b)=>b.delaySum-a.delaySum).slice(0,25).map(o=>({"Style No":o.style,"Order No":o.order,"Buyer / Brand":o.buyer,"Junior / Style Owner":o.owner,"Late Stage Count":o.late,"Total Delay Days":`${r1(o.delaySum)}d`,"Worst Stage":o.worstStage,"Worst Stage Delay":`${r1(o.worstDelay)}d`,"Management Reading":`${o.late} delayed stage(s); ${r1(o.delaySum)}d total delay`,"Suggested Action":"Make recovery plan"}));
   const worstKeys=new Set(Object.values(styleAgg).sort((a,b)=>b.delaySum-a.delaySum).slice(0,25).map(o=>(o.order||"")+"|"+(o.style||"")));
-  const worstStyleDetail=detailRowsFor("Worst Performing Styles",delayRecords.filter(r=>worstKeys.has((r.order||"")+"|"+(r.style||""))));
-  const lateDetailRows=detailRowsFor("Worst Delays",delayRecords.filter(r=>r.delay>0));
+  const worstStyleDetail=detailRowsFor("Worst Performing Styles",lateRecords.filter(r=>worstKeys.has((r.order||"")+"|"+(r.style||""))),{problemOnly:true});
+  const lateDetailRows=detailRowsFor("Worst Delays",lateRecords,{problemOnly:true});
+  const exportChaseDelayData=compactAgg(lateRecords,r=>r.dept,"Chase Label");
+  const exportBuyerDelayData=compactAgg(buyerApprovalLateRecords,r=>r.buyer||"(No buyer)","Buyer / Brand");
+  const exportBrandDelayData=compactAgg(lateRecords,r=>r.buyer||"(No buyer)","Buyer / Brand");
   const analyticsSheets=[
       { label:"Summary", data:mgmtSummary, detailData:managementDetailRows, modes:["summary","detailed"] },
       { label:"Calculation Checks", data:checks, modes:["summary","detailed"] },
       { label:"Stage Performance", data:stageData, detailData:stageDetailRows, modes:["summary","detailed"] },
       { label:"Department Performance", data:dept, detailData:deptDetailRows, modes:["summary","detailed"] },
-      { label:"Buyer Approval", data:buyerData, detailData:buyerApprovalDetail, modes:["summary","detailed"] },
-      { label:"Chase Delay Ranking", data:chaseData, detailData:chaseDetailRows, modes:["summary","detailed"] },
-      { label:"Buyer Brand Delays", data:brandData, detailData:brandDetailRows, modes:["summary","detailed"] },
+      { label:"Buyer Approval", data:exportBuyerDelayData, detailData:buyerApprovalDetail, modes:["summary","detailed"] },
+      { label:"Chase Delay Ranking", data:exportChaseDelayData, detailData:chaseDetailRows, modes:["summary","detailed"] },
+      { label:"Buyer Brand Delays", data:exportBrandDelayData, detailData:brandDetailRows, modes:["summary","detailed"] },
       { label:"Escalation Owner Load", data:escRows.map(([owner,count])=>({"Escalation Owner":owner,"Overdue Items":count})), detailData:(todoItems||[]).filter(t=>t.overdue&&t.escalationOwner).map(t=>({"Order No":t.orderNo||"","Style No":t.styleNo||"","Activity":t.activity||"","Chase Label":t.owner||"","Escalation Owner":t.escalationOwner||"","Escalation Level":t.escalationLevel||"","Days Overdue":t.daysLate||"","Action":t.escalationAction||""})), modes:["summary","detailed"] },
       { label:"Current Slice", data:currentStyles, detailData:managementDetailRows, modes:["detailed"] },
       { label:"Worst Delays", data:delayData, detailData:lateDetailRows, modes:["detailed"] },
