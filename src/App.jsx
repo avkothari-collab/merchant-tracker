@@ -1454,6 +1454,9 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
   useEffect(()=>{ try{ localStorage.setItem("mt_dashfilter", JSON.stringify(df)); }catch(e){} },[df]);
   const [mgmtOpen,setMgmtOpen]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("mt_mgmt_open")||"{}"); }catch(e){ return {}; } });
   useEffect(()=>{ try{ localStorage.setItem("mt_mgmt_open", JSON.stringify(mgmtOpen)); }catch(e){} },[mgmtOpen]);
+  const [perfView,setPerfView]=useState(()=>{ try{ return localStorage.getItem("mt_mgmt_perf_view")||"chase"; }catch(e){ return "chase"; } }); // chase | stage
+  const [perfMode,setPerfMode]=useState(()=>{ try{ return localStorage.getItem("mt_mgmt_perf_mode")||"all"; }catch(e){ return "all"; } }); // all | delay
+  useEffect(()=>{ try{ localStorage.setItem("mt_mgmt_perf_view",perfView); localStorage.setItem("mt_mgmt_perf_mode",perfMode); }catch(e){} },[perfView,perfMode]);
   const isMgmtOpen=(key)=> mgmtOpen[key]!==false;
   const toggleMgmt=(key)=>setMgmtOpen(o=>({ ...o, [key]: !isMgmtOpen(key) }));
   const matchDf=(st,except)=> (except==="order"||!df.order||st.orderNo===df.order) && (except==="fit"||!df.fit||st.sampleFit===df.fit) && (except==="junior"||!df.junior||st.owner===df.junior) && (except==="family"||!df.family||st.family===df.family) && (except==="brand"||!df.brand||st.brand===df.brand) && (except==="fabric"||!df.fabric||st.fabricType===df.fabric) && (except==="colour"||!df.colour||String(st.colour||"").split(/[,/]/).map(x=>x.trim()).includes(df.colour));
@@ -1756,17 +1759,26 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const exportChaseDelayData=compactAgg(lateRecords,r=>r.dept,"Chase Label");
   const exportBuyerDelayData=compactAgg(buyerApprovalLateRecords,r=>r.buyer||"(No buyer)","Buyer / Brand");
   const exportBrandDelayData=compactAgg(lateRecords,r=>r.buyer||"(No buyer)","Buyer / Brand");
+
+  const stageDelayData=compactAgg(lateRecords,r=>r.stage,"Stage").map(o=>({ ...o, "Chase Label":(STAGES.find(s=>s.label===o.Stage)||{}).owner||"" }));
+  const performanceAnalysisData = perfMode==="delay"
+    ? (perfView==="stage" ? stageDelayData : exportChaseDelayData)
+    : (perfView==="stage" ? stageData : dept.map(r=>({ "Chase Label":r.Department, "Completed":r.Completed, "Late Count":r["Late Count"], "Avg Net Delay Days":r["Avg Net Delay Days"], "Avg Actual Duration Days":r["Avg Actual Duration Days"], "Duration Records":r["Duration Records"], "Worst Delay Days":r["Worst Delay Days"] })));
+  const performanceAnalysisDetail = detailRowsFor("Performance Analysis", perfMode==="delay" ? lateRecords : delayRecords, { problemOnly: perfMode==="delay" }).filter(r=>{
+    if(perfView!=="stage") return true;
+    return !!r["Stage / Activity"];
+  });
+  const performanceAnalysisMeta=[{ "View By":perfView==="stage"?"Stage":"Chase Label", "Data Type":perfMode==="delay"?"Delay Only":"All Completed Performance", "Rows":performanceAnalysisData.length, "Detail Rows":performanceAnalysisDetail.length, "Rule":perfMode==="delay"?"Only positive delay/problem rows":"All completed actual date rows; net delay may be early/on-time/late" }];
   const analyticsSheets=[
       { label:"Summary", data:mgmtSummary, detailData:managementDetailRows, modes:["summary","detailed"] },
       { label:"Calculation Checks", data:checks, modes:["summary","detailed"] },
-      { label:"Stage Performance", data:stageData, detailData:stageDetailRows, modes:["summary","detailed"] },
-      { label:"Department Performance", data:dept, detailData:deptDetailRows, modes:["summary","detailed"] },
+      { label:"Performance Analysis", data:performanceAnalysisData.length?performanceAnalysisData:performanceAnalysisMeta, detailData:performanceAnalysisDetail, modes:["summary","detailed"] },
       { label:"Buyer Approval", data:exportBuyerDelayData, detailData:buyerApprovalDetail, modes:["summary","detailed"] },
       { label:"Chase Delay Ranking", data:exportChaseDelayData, detailData:chaseDetailRows, modes:["summary","detailed"] },
       { label:"Buyer Brand Delays", data:exportBrandDelayData, detailData:brandDetailRows, modes:["summary","detailed"] },
       { label:"Escalation Owner Load", data:escRows.map(([owner,count])=>({"Escalation Owner":owner,"Overdue Items":count})), detailData:(todoItems||[]).filter(t=>t.overdue&&t.escalationOwner).map(t=>({"Order No":t.orderNo||"","Style No":t.styleNo||"","Activity":t.activity||"","Chase Label":t.owner||"","Escalation Owner":t.escalationOwner||"","Escalation Level":t.escalationLevel||"","Days Overdue":t.daysLate||"","Action":t.escalationAction||""})), modes:["summary","detailed"] },
       { label:"Current Slice", data:currentStyles, detailData:managementDetailRows, modes:["detailed"] },
-      { label:"Worst Delays", data:delayData, detailData:lateDetailRows, modes:["detailed"] },
+      { label:"Worst Completed Delays", data:delayData, detailData:lateDetailRows, modes:["summary","detailed"] },
       { label:"Worst Performing Styles", data:worstStyleData, detailData:worstStyleDetail, modes:["summary","detailed"] },
       { label:"Calculation Breakup", data:managementDetailRows, modes:["detailed"] },
       { label:"Revised vs Actual", data:revisedActualData, detailData:detailRowsFor("Revised vs Actual", delayRecords.filter(r=>r.delayRevised!=null)), modes:["detailed"] },
@@ -1777,6 +1789,10 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const section=(title,children,sub)=>{ const key=String(title||"").toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_|_$/g,"")||"section"; const open=isMgmtOpen(key); return (<div style={{ flex:"1 1 100%", width:"100%", minWidth:"100%", background:"var(--surface)", border:"1px solid var(--line-2)", borderRadius:14, overflow:"hidden", boxShadow:"var(--card-shadow)" }}><button onClick={()=>toggleMgmt(key)} title={open?"Collapse this management table":"Expand this management table"} style={{ width:"100%", border:"none", background:open?"var(--accent-tint)":"var(--surface)", cursor:"pointer", padding:"13px 16px", display:"flex", alignItems:"center", justifyContent:"space-between", gap:12, fontFamily:"inherit", textAlign:"left" }}><span style={{ minWidth:0 }}><span style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:14 }}>{title}</span>{sub&&<span style={{ display:"block", fontSize:10, color:"var(--muted-2)", marginTop:3, whiteSpace:"normal" }}>{sub}</span>}</span><span style={{ flex:"0 0 auto", fontSize:15, fontWeight:900, color:"var(--muted-3)" }}>{open?"−":"+"}</span></button>{open&&<div style={{ padding:"6px 16px 14px", borderTop:"1px solid var(--line-3)" }}>{children}</div>}</div>); };
   const rowBtn=(key,label,right,color,onClick,sub)=>(<button key={key} onClick={onClick} disabled={!onClick} style={{ width:"100%", display:"grid", gridTemplateColumns:"minmax(120px,1fr) 96px", alignItems:"center", gap:10, border:"none", borderBottom:"1px solid var(--line-3)", background:"transparent", cursor:onClick?"pointer":"default", fontFamily:"inherit", padding:"8px 0", textAlign:"left" }}><span style={{ minWidth:0 }}><span style={{ display:"block", fontSize:11, fontWeight:800, color:color||"var(--ink)", overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{label}</span>{sub&&<span style={{ display:"block", fontSize:9, color:"var(--muted-2)", marginTop:2, overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{sub}</span>}</span><span style={{ fontSize:11, fontWeight:800, color:color||"var(--ink)", whiteSpace:"nowrap", textAlign:"right" }}>{right}</span></button>);
   const barLine=(key,label,n,max,color,onClick,right)=>(<button key={key} onClick={onClick} disabled={!onClick} style={{ display:"flex", alignItems:"center", gap:8, width:"100%", border:"none", background:"transparent", cursor:onClick?"pointer":"default", fontFamily:"inherit", padding:"5px 0" }}><span style={{ width:90, fontSize:10, fontWeight:800, color:"var(--muted-4)", textAlign:"left", overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{label}</span><span style={{ flex:1, height:14, background:"#f0ece3", borderRadius:999, overflow:"hidden" }}><span style={{ display:"block", height:"100%", width:`${(n/Math.max(1,max))*100}%`, background:color, borderRadius:999 }}/></span><span style={{ width:58, textAlign:"right", fontSize:10, fontWeight:800 }}>{right||n}</span></button>);
+  const toggleBtn=(active,label,onClick)=><button onClick={onClick} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"5px 9px", cursor:"pointer", border:"1px solid var(--line-2)", borderRadius:8, background:active?"var(--ink)":"var(--surface)", color:active?"var(--bg)":"var(--ink)" }}>{label}</button>;
+  const performanceRows = perfMode==="delay"
+    ? (perfView==="stage" ? makeDelayAgg(lateRecords,r=>r.stage).slice(0,10).map(r=>({ ...r, displayLabel:r.label, right:`${r1(r.delaySum)}d total`, sub:`${r.delayed} delayed entries · avg ${fmtDays(avg(r.delaySum,r.delayed))} · worst ${fmtDays(r.maxDelay)}`, color:"var(--danger)", jump:()=>goStageOpen((STAGES.find(s=>s.label===r.label)||{}).key) })) : chaseDelayRows.map(r=>({ ...r, displayLabel:r.label, right:`${r1(r.delaySum)}d total`, sub:`${r.delayed} delayed entries · avg ${fmtDays(avg(r.delaySum,r.delayed))} · worst ${fmtDays(r.maxDelay)}`, color:"var(--danger)", jump:()=>goSearch(r.label) })))
+    : (perfView==="stage" ? stageRows.slice(0,10).map(r=>({ ...r, displayLabel:r.label, right:`${fmtDays(avg(r.durSum,r.durN))} / ${fmtDays(avg(r.delaySum,r.n))}`, sub:`${r.owner||""} · ${r.n} done · ${r.lateN} late · net performance shown`, color:r.lateN?"var(--danger)":"var(--success)", jump:()=>goStageOpen(r.key) })) : deptRows.map(r=>({ ...r, displayLabel:r.label, right:`${fmtDays(avg(r.durSum,r.durN))} avg · ${fmtDays(avg(r.delaySum,r.n))} net`, sub:`${r.n} completed · ${r.lateN} late`, color:r.lateN?"var(--danger)":"var(--success)", jump:null })));
 
   return (<div style={{ padding:"16px 22px", maxWidth:1280 }}>
     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:16, marginBottom:14, flexWrap:"wrap" }}>
@@ -1815,9 +1831,19 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
     </div>
 
     <div style={{ display:"flex", flexDirection:"column", gap:12, marginTop:12 }}>
-      {section("Department actual performance", deptRows.length?deptRows.map(r=>rowBtn(r.key,r.label,`${fmtDays(avg(r.durSum,r.durN))} avg · ${fmtDays(avg(r.delaySum,r.n))} net`,r.lateN?"var(--danger)":"var(--success)",null,`${r.n} completed · ${r.lateN} late`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No completed stage dates yet.</div>, "Based on actual date entries")}
-      {section("Stage performance", stageRows.slice(0,10).map(r=>rowBtn(r.key,r.label,`${fmtDays(avg(r.durSum,r.durN))} / ${fmtDays(avg(r.delaySum,r.n))}`,r.lateN?"var(--danger)":"var(--success)",()=>goStageOpen(r.key),`${r.owner||""} · ${r.n} done · ${r.lateN} late · net delay shown · click opens current pending stage`)), "Actual duration / net delay by stage")}
-      {section("Worst completed delays", worstDelays.length?worstDelays.map(r=>rowBtn(r.style+":"+r.stageKey,r.style||r.order,`+${fmtNum(r.delay)}d`,"var(--danger)",()=>goSearch(r.style),`${r.stage} · ${r.buyer||""} · actual ${fmt(r.actual)}`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No positive completed delays in this slice.</div>, "Problem rows only: completed stages with delay greater than 0")}
+      {section("Performance analysis", <>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", margin:"0 0 8px" }}>
+          <span style={{ fontSize:10, fontWeight:800, color:"var(--muted-2)", textTransform:"uppercase" }}>View by:</span>
+          {toggleBtn(perfView==="chase","Chase Label",()=>setPerfView("chase"))}
+          {toggleBtn(perfView==="stage","Stage",()=>setPerfView("stage"))}
+          <span style={{ width:10 }}/>
+          <span style={{ fontSize:10, fontWeight:800, color:"var(--muted-2)", textTransform:"uppercase" }}>Data:</span>
+          {toggleBtn(perfMode==="all","All completed",()=>setPerfMode("all"))}
+          {toggleBtn(perfMode==="delay","Delay only",()=>setPerfMode("delay"))}
+        </div>
+        {performanceRows.length?performanceRows.map(r=>rowBtn(r.key||r.label,r.displayLabel,r.right,r.color,r.jump,r.sub)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>{perfMode==="delay"?"No positive delays in this slice.":"No completed stage dates yet."}</div>}
+      </>, perfView==="stage" ? (perfMode==="delay"?"Stage-wise delay summary only; no early/on-time rows":"Stage-wise completed performance; net delay may be early/on-time/late") : (perfMode==="delay"?"Chase-label delay summary only; no early/on-time rows":"Chase-label completed performance; net delay may be early/on-time/late"))}
+      {section("Worst completed delays", worstDelays.length?worstDelays.map(r=>rowBtn(r.style+":"+r.stageKey,r.style||r.order,`+${fmtNum(r.delay)}d`,"var(--danger)",()=>goSearch(r.style),`${r.stage} · ${r.buyer||""} · actual ${fmt(r.actual)}`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No positive completed delays in this slice.</div>, "Separate exception list: exact styles/stages with completed delay greater than 0")}
     </div>
 
     <div style={{ display:"flex", flexDirection:"column", gap:12, marginTop:12 }}>
