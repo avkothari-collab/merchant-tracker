@@ -1700,6 +1700,15 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const maxPhase=Math.max(1,...Object.values(phase));
 
   const stageDef=(k)=>STAGES.find(x=>x.key===k)||{};
+  const stageStartFor=(s,c,r)=>{
+    const st=stageDef(r.key);
+    const byKey={};
+    (c.stages||[]).forEach(x=>{ byKey[x.key]=x; });
+    if(r.key==="fabricIH") return (s.labDipReq && byKey.labAppr && byKey.labAppr.actual) ? byKey.labAppr.actual : parse(s.ordRec);
+    if(st.pred==="__ord") return parse(s.ordRec);
+    return byKey[st.pred] ? byKey[st.pred].actual : null;
+  };
+  const stageState=(r)=> r.skipped?"Waived / skipped":(r.rejected?"Rejected":(r.rework?"Rework / resend":(r.actual?"Done":(r.rev?"Revised plan":"Pending"))));
   const delayRecords=[]; const stagePerf={}; const deptPerf={}; const buyerPerf={}; const chaseDelay={}; const brandDelay={};
   const addPerf=(bucket,key,label,delay,duration,extra={})=>{ const o=bucket[key]=bucket[key]||{ key, label, n:0, lateN:0, delaySum:0, durSum:0, durN:0, maxDelay:-999, ...extra }; o.n++; if(delay>0) o.lateN++; o.delaySum+=delay; if(duration!=null){ o.durSum+=duration; o.durN++; } o.maxDelay=Math.max(o.maxDelay,delay); return o; };
   const avg=(n,d)=> d?Math.round((n/d)*10)/10:0;
