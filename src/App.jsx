@@ -20,13 +20,13 @@ const THEME_CSS = `
 }
 /* Bigger click/tap target without changing the data model. Inline styles still control the visual design. */
 button {
-  min-width: 28px;
-  min-height: 28px;
+  min-width: 34px;
+  min-height: 34px;
   box-sizing: border-box;
   touch-action: manipulation;
 }
 button svg { pointer-events: none; }
-input, select { min-height: 28px; box-sizing: border-box; }
+input, select { min-height: 34px; box-sizing: border-box; }
 /* Tiny in-cell icons remain visually compact but are now easier to hit. */
 td button[title*="revised"],
 td button[title*="REJECTED"],
@@ -34,9 +34,14 @@ td button[title*="rework"],
 td button[title*="skip"],
 td button[title="calendar"],
 td button[title="delete row"] {
-  min-width: 22px;
-  min-height: 22px;
+  min-width: 28px !important;
+  min-height: 28px !important;
+  padding: 5px !important;
+  align-items: center;
+  justify-content: center;
 }
+/* Panel/header buttons were visually close together; keep hit area generous everywhere. */
+[role="button"], button { -webkit-tap-highlight-color: transparent; }
 `;
 const REL_GATE_DAYS = 30, FABRIC_CUTOFF_DAYS = 35, STYLE_W = 190;
 const UPCOMING_DEFAULT = { techpack:2, fitSend:4, fitAppr:1, artwork:2, artAppr:1, strikeOff:3, soAppr:1, labDip:5, labAppr:1, ppSample:4, ppAppr:1, fabricIH:15, prodFile:7 }; // working days before a stage that it becomes "upcoming" in the To-Do list
@@ -1680,7 +1685,7 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
                   return (
                     <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} onDoubleClick={(e)=>{ e.stopPropagation(); if(editable) beginDate(s.id,st.key,"actual"); }}
                       style={{ border:"1px solid var(--line-1)", padding:0, position:"relative", overflow:(editing&&editing.id===s.id&&editing.col===st.key)?"visible":"hidden", background:bg, boxShadow:ringFor(s.id,st.key)||(isNext?"inset 0 0 0 2px var(--accent)":null), cursor:editable?"cell":"default", ...activeCellStyle(s.id,st.key) }}>
-                      <div style={{ minHeight:Math.max(30,rowH-8), padding:"5px 8px", fontSize:12.5, color:cs.actual?"var(--ink)":"var(--muted-6)" }}>
+                      <div style={{ minHeight:Math.max(30,rowH-8), padding:"6px 34px 6px 34px", fontSize:12.5, color:cs.actual?"var(--ink)":"var(--muted-6)" }}>
                         {showAux && cs.plan && <span style={{ display:"block", fontSize:8, color:"#bcb6a8", lineHeight:1.3 }}>auto {fmt(cs.plan)}{cs.rev?` · rev ${fmt(cs.rev)}`:""}</span>}
                         {cs.autoClosed ? (
                           <span style={{ color:"var(--line-2)", fontSize:11 }}>—</span>
@@ -1708,10 +1713,10 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
                           </span>
                         )}
                       </div>
-                      {canRev && !cs.skipped && !cs.autoClosed && (!cs.actual || cs.rework) && (<button title="set revised plan date" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"rev"); }} style={{ position:"absolute", top:3, right:3, border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:1, display:"flex" }}><RotateCcw size={11} color="var(--revised)"/></button>)}
-                      {canRej && !cs.skipped && !cs.autoClosed && !cs.actual && REJECTABLE.includes(st.key) && (<button title={cs.rejected?"clear rejection (remove rework)":"mark REJECTED (log rejection date)"} onClick={(e)=>{ e.stopPropagation(); if(cs.rejected){ if(window.confirm(`Clear the rejection on "${st.label}" for ${s.styleNo}? This removes the rework flag.`)) setReject(s.id,st.key,null); } else beginDate(s.id,st.key,"reject"); }} style={{ position:"absolute", top:3, right:20, border:"none", background:cs.rejected?"#b03020":"transparent", borderRadius:2, cursor:"pointer", padding:cs.rejected?2:0, lineHeight:1, display:"flex" }}><X size={cs.rejected?9:11} color={cs.rejected?"var(--surface)":"#b03020"}/></button>)}
-                      {canSkp && !cs.autoClosed && SKIPPABLE_STAGES.includes(st.key) && (cs.skipped || !cs.actual || cs.rework || cs.rejected) && (<button title={cs.skipped?"un-skip (restore this activity)":"skip this activity (waive — counts as resolved, not done)"} onClick={(e)=>{ e.stopPropagation(); if(cs.skipped){ if(window.confirm(`Un-skip "${st.label}" for ${s.styleNo}? This restores the activity.`)) setSkip(s.id,st.key,null); } else if(window.confirm(`Skip / waive "${st.label}" for ${s.styleNo}?\n\nIt will count as RESOLVED (not done) and drop off the to-do. You can un-skip later.`)){ setSkip(s.id,st.key,iso(TODAY)); } }} style={{ position:"absolute", bottom:3, right:3, border:"none", background:cs.skipped?"#8a6d3b":"transparent", borderRadius:2, cursor:"pointer", padding:cs.skipped?2:0, lineHeight:1, display:"flex" }}><SkipForward size={cs.skipped?9:12} color={cs.skipped?"var(--surface)":"#b8a98a"}/></button>)}
-                      {cs.rework && canRej && (<button title="clear rework (un-reject the approval)" onClick={(e)=>{ e.stopPropagation(); if(window.confirm(`Clear the rework on "${st.label}" for ${s.styleNo}? This un-rejects the approval.`)) setReject(s.id, APPR_OF_SEND[st.key], null); }} style={{ position:"absolute", top:3, right:20, border:"none", background:"#b03020", borderRadius:2, cursor:"pointer", padding:2, lineHeight:1, display:"flex" }}><X size={9} color="var(--surface)"/></button>)}
+                      {canRev && !cs.skipped && !cs.autoClosed && (!cs.actual || cs.rework) && (<button title="set revised plan date" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"rev"); }} style={{ position:"absolute", top:2, right:2, border:"1px solid transparent", background:"rgba(255,253,248,0.72)", borderRadius:6, cursor:"pointer", padding:5, lineHeight:1, display:"flex", alignItems:"center", justifyContent:"center" }}><RotateCcw size={12} color="var(--revised)"/></button>)}
+                      {canRej && !cs.skipped && !cs.autoClosed && !cs.actual && REJECTABLE.includes(st.key) && (<button title={cs.rejected?"clear rejection (remove rework)":"mark REJECTED (log rejection date)"} onClick={(e)=>{ e.stopPropagation(); if(cs.rejected){ if(window.confirm(`Clear the rejection on "${st.label}" for ${s.styleNo}? This removes the rework flag.`)) setReject(s.id,st.key,null); } else beginDate(s.id,st.key,"reject"); }} style={{ position:"absolute", top:2, left:2, border:"1px solid transparent", background:cs.rejected?"#b03020":"rgba(255,253,248,0.72)", borderRadius:6, cursor:"pointer", padding:5, lineHeight:1, display:"flex", alignItems:"center", justifyContent:"center" }}><X size={cs.rejected?10:12} color={cs.rejected?"var(--surface)":"#b03020"}/></button>)}
+                      {canSkp && !cs.autoClosed && SKIPPABLE_STAGES.includes(st.key) && (cs.skipped || !cs.actual || cs.rework || cs.rejected) && (<button title={cs.skipped?"un-skip (restore this activity)":"skip this activity (waive — counts as resolved, not done)"} onClick={(e)=>{ e.stopPropagation(); if(cs.skipped){ if(window.confirm(`Un-skip "${st.label}" for ${s.styleNo}? This restores the activity.`)) setSkip(s.id,st.key,null); } else if(window.confirm(`Skip / waive "${st.label}" for ${s.styleNo}?\n\nIt will count as RESOLVED (not done) and drop off the to-do. You can un-skip later.`)){ setSkip(s.id,st.key,iso(TODAY)); } }} style={{ position:"absolute", bottom:2, right:2, border:"1px solid transparent", background:cs.skipped?"#8a6d3b":"rgba(255,253,248,0.72)", borderRadius:6, cursor:"pointer", padding:5, lineHeight:1, display:"flex", alignItems:"center", justifyContent:"center" }}><SkipForward size={cs.skipped?10:13} color={cs.skipped?"var(--surface)":"#b8a98a"}/></button>)}
+                      {cs.rework && canRej && (<button title="clear rework (un-reject the approval)" onClick={(e)=>{ e.stopPropagation(); if(window.confirm(`Clear the rework on "${st.label}" for ${s.styleNo}? This un-rejects the approval.`)) setReject(s.id, APPR_OF_SEND[st.key], null); }} style={{ position:"absolute", top:2, left:2, border:"1px solid transparent", background:"#b03020", borderRadius:6, cursor:"pointer", padding:5, lineHeight:1, display:"flex", alignItems:"center", justifyContent:"center" }}><X size={10} color="var(--surface)"/></button>)}
                       {editing&&editing.id===s.id&&editing.col===st.key&&editable && dateEditor(s.id,st.key,editing.mode)}
                       <PeerTag who={peerOn(s.id,st.key)}/><NoteTri k={k}/><FillHandle id={s.id} col={st.key}/>
                     </td>
@@ -1909,18 +1914,18 @@ function ReviewTabView({ computed, todoItems, auditRows, auditBusy, loadAuditRow
   const filteredActivity=useMemo(()=> activityRows.filter(r=>activityPassExcept(r,null)),[activityRows,category,q,activityType,activityUser]);
   const counts=useMemo(()=>({ total:items.length, critical:items.filter(x=>x.severity==="Critical").length, warning:items.filter(x=>x.severity==="Warning").length, dq:items.filter(x=>x.category==="Data Quality").length, comments:allComments.length, unread:allNotifications.filter(n=>!n.read).length }),[items,allComments,allNotifications]);
   const badge=(txt,bg,fg="var(--ink)")=><span style={{ display:"inline-flex", alignItems:"center", padding:"3px 7px", borderRadius:999, background:bg, color:fg, fontSize:9, fontWeight:900, whiteSpace:"nowrap" }}>{txt}</span>;
-  const inputStyle={ fontFamily:"inherit", fontSize:11, padding:"7px 9px", border:"1px solid var(--ink)", background:"var(--surface)" };
-  const modeBtn=(k,l,cnt)=><button onClick={()=>{ setMode(k); setCategory("All"); setSeverity("All"); setQ(""); }} style={{ fontFamily:"inherit", fontSize:11, fontWeight:900, padding:"8px 12px", cursor:"pointer", border:"1px solid var(--line-2)", background:mode===k?"var(--ink)":"var(--surface)", color:mode===k?"var(--surface)":"var(--ink)", borderRadius:999 }}>{l}{cnt!=null?` · ${cnt}`:""}</button>;
+  const inputStyle={ fontFamily:"inherit", fontSize:11, padding:"9px 12px", border:"1px solid var(--ink)", background:"var(--surface)", borderRadius:8, minWidth:130 };
+  const modeBtn=(k,l,cnt)=><button onClick={()=>{ setMode(k); setCategory("All"); setSeverity("All"); setQ(""); }} style={{ fontFamily:"inherit", fontSize:11, fontWeight:900, padding:"10px 15px", cursor:"pointer", border:"1px solid var(--line-2)", background:mode===k?"var(--ink)":"var(--surface)", color:mode===k?"var(--surface)":"var(--ink)", borderRadius:999 }}>{l}{cnt!=null?` · ${cnt}`:""}</button>;
   return <div style={{ padding:"18px 22px 36px" }}>
     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:16, marginBottom:14 }}>
       <div><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:24 }}>Review</div><div style={{ fontSize:11.5, color:"var(--muted-3)", marginTop:4, maxWidth:900, lineHeight:1.45 }}>Category-wise review centre. Review Inbox summarizes work/data checks. Comments and Notifications have their own views with user-wise and business-category filters.</div></div>
-      <button onClick={loadAuditRows} style={{ fontFamily:"inherit", fontSize:11, fontWeight:800, padding:"7px 11px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)" }}>{auditBusy?"Loading…":"Refresh review"}</button>
+      <button onClick={loadAuditRows} style={{ fontFamily:"inherit", fontSize:11, fontWeight:900, padding:"10px 15px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)", borderRadius:9 }}>{auditBusy?"Loading…":"Refresh review"}</button>
     </div>
     <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(145px,1fr))", gap:10, marginBottom:12 }}>
       {[ ["Open review items",counts.total,"var(--surface)"], ["Critical",counts.critical,"#f6d3cb"], ["Warnings",counts.warning,"#f8e9b7"], ["Comments",counts.comments,"#e7ecff"], ["Unread notifications",counts.unread,"#fff3df"], ["Data quality",counts.dq,"#e3edfb"] ].map(([l,v,b])=><div key={l} style={{ background:b, border:"1px solid var(--line-2)", borderRadius:12, padding:12 }}><div style={{ fontSize:10, color:"var(--muted-3)", fontWeight:900, textTransform:"uppercase" }}>{l}</div><div style={{ fontFamily:"'Archivo',sans-serif", fontSize:25, fontWeight:800 }}>{v}</div></div>)}
     </div>
-    <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:12 }}>{modeBtn("inbox","Review Inbox",items.length)}{modeBtn("activity","Activity History",activityRows.length)}{modeBtn("comments","Comments",allComments.length)}{modeBtn("notifications","Notifications",allNotifications.length)}{modeBtn("changes","Changes",(auditRows||[]).length)}{modeBtn("errors","Errors",(errorLog||[]).length)}</div>
-    <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom:12, background:"var(--toolbar-bg)", border:"1px solid var(--toolbar-line)", borderRadius:12, padding:10 }}>
+    <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:14 }}>{modeBtn("inbox","Review Inbox",items.length)}{modeBtn("activity","Activity History",activityRows.length)}{modeBtn("comments","Comments",allComments.length)}{modeBtn("notifications","Notifications",allNotifications.length)}{modeBtn("changes","Changes",(auditRows||[]).length)}{modeBtn("errors","Errors",(errorLog||[]).length)}</div>
+    <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"center", marginBottom:14, background:"var(--toolbar-bg)", border:"1px solid var(--toolbar-line)", borderRadius:14, padding:14 }}>
       <select value={category} onChange={e=>setCategory(e.target.value)} style={inputStyle}>{categories.map(c=><option key={c} value={c}>{c}</option>)}</select>
       {mode==="inbox" && <select value={severity} onChange={e=>setSeverity(e.target.value)} style={inputStyle}>{severities.map(c=><option key={c} value={c}>{c}</option>)}</select>}
       {mode==="comments" && <><select value={commentScope} onChange={e=>setCommentScope(e.target.value)} style={inputStyle}>{["All comments","To me","By me","Unresolved"].map(c=><option key={c} value={c}>{c}</option>)}</select><select value={commentUser} onChange={e=>setCommentUser(e.target.value)} style={inputStyle}>{commentUsers.map(c=><option key={c} value={c}>{c}</option>)}</select></>}
@@ -2875,7 +2880,7 @@ function UsersPanel({ onClose }){
   const ROLE_OPTS=["pending"].concat(Object.keys(ROLES));
   return (<div onClick={onClose} style={{ position:"fixed", inset:0, background:"rgba(26,26,26,0.55)", zIndex:400, display:"flex", alignItems:"center", justifyContent:"center", padding:20 }}>
     <div onClick={e=>e.stopPropagation()} style={{ background:"var(--bg)", border:"2px solid var(--ink)", boxShadow:"8px 8px 0 var(--ink)", width:560, maxWidth:"100%", maxHeight:"86vh", overflowY:"auto", padding:22, fontFamily:"'JetBrains Mono',monospace" }}>
-      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:18 }}>Users &amp; roles</div><button onClick={onClose} style={{ border:"none", background:"transparent", cursor:"pointer" }}><X size={18}/></button></div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:18 }}>Users &amp; roles</div><button onClick={onClose} title="Close users panel" style={{ border:"1px solid var(--line-2)", background:"var(--surface)", cursor:"pointer", borderRadius:9, padding:"7px 10px", display:"inline-flex", alignItems:"center", gap:5 }}><X size={16}/><span style={{ fontSize:11, fontWeight:800 }}>Close</span></button></div>
       <p style={{ fontSize:11, color:"var(--muted-3)", lineHeight:1.55, marginBottom:12 }}>Each person signs in with their own email + password; their access follows the role you set here. Set anyone to "pending" to suspend access.</p>
       {list===null ? <div style={{ fontSize:12, color:"var(--muted-2)" }}>Loading…</div> : list.length===0 ? <div style={{ fontSize:12, color:"var(--muted-2)" }}>No users yet — have your team sign up from the login screen.</div> : (
         <div style={{ border:"1px solid var(--ink)", background:"var(--surface)" }}>{list.map((u,i)=>(<div key={u.id} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 10px", borderBottom:i<list.length-1?"1px solid #eee7da":"none" }}>
