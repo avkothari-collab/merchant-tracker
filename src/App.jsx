@@ -81,6 +81,23 @@ const STAGES = [
   { key:"prodFile",  label:"Prod File",    lead:3, owner:"Merchant", flag:null, pred:"ppAppr" },
 ];
 const STAGE_KEYS = STAGES.map(s=>s.key);
+
+const STAGE_ORDER_INDEX = Object.fromEntries(STAGES.map((stage, index)=>[stage.key, index + 1]));
+const STAGE_SECTION_BY_KEY = {
+  techpack: "Techpack / Start",
+  fitSend: "Fit", fitAppr: "Fit",
+  artwork: "Print / Strike-off", artAppr: "Print / Strike-off", strikeOff: "Print / Strike-off", soAppr: "Print / Strike-off",
+  labDip: "Lab Dip / Fabric", labAppr: "Lab Dip / Fabric", fabricIH: "Lab Dip / Fabric",
+  ppSample: "PP / Production File", ppAppr: "PP / Production File", prodFile: "PP / Production File",
+};
+const stageOrderOf=(keyOrLabel)=>{
+  const key=STAGE_ORDER_INDEX[keyOrLabel]!=null ? keyOrLabel : (STAGES.find(stage=>stage.label===keyOrLabel)||{}).key;
+  return STAGE_ORDER_INDEX[key] || 999;
+};
+const stageSectionOf=(keyOrLabel)=>{
+  const key=STAGE_ORDER_INDEX[keyOrLabel]!=null ? keyOrLabel : (STAGES.find(stage=>stage.label===keyOrLabel)||{}).key;
+  return STAGE_SECTION_BY_KEY[key] || "Other";
+};
 const CHASE_LABELS = ["Management","Sr Merchant","Jr Merchant","CAD","Designer","Store","Buyer","Merchant","Mill"];
 const DEFAULT_STAGE_OWNERS = Object.fromEntries(STAGES.map(s=>[s.key, s.owner==="Merchant"?"Jr Merchant":s.owner==="Mill"?"Store":s.owner]));
 const DEFAULT_ESCALATION_RULES = [
@@ -2377,7 +2394,7 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const chaseDelayRows=makeDelayAgg(lateRecords,r=>r.dept||"(No chase label)").slice(0,8);
   const brandDelayRows=makeDelayAgg(lateRecords,r=>r.buyer||"(No buyer)").slice(0,8);
   const buyerDelayRows=makeDelayAgg(buyerApprovalLateRecords,r=>r.buyer||"(No buyer)").slice(0,8);
-  const stageRows=Object.values(stagePerf).sort((a,b)=>avg(b.delaySum,b.n)-avg(a.delaySum,a.n));
+  const stageRows=Object.values(stagePerf).sort((a,b)=>stageOrderOf(a.key)-stageOrderOf(b.key));
   const deptRows=Object.values(deptPerf).sort((a,b)=>avg(b.delaySum,b.n)-avg(a.delaySum,a.n));
   const buyerRows=Object.values(buyerPerf).sort((a,b)=>avg(b.durSum,b.durN)-avg(a.durSum,a.durN)).slice(0,8);
   const actualDone=delayRecords.length;
@@ -2407,7 +2424,7 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const goStageOpen=(key)=>applyDrill({ status:"All", activity:key, colFilters:spliceCols(), search:spliceSearch() });
   const anyDf=Object.values(df).some(v=>Array.isArray(v)?v.length:!!v);
 
-  const mgmtSummary=[{ "Report Type":"Management", "Styles in Slice":total, "On Track":onTrack, "At Risk":atRisk, "Delivery Risk":delRisk, "Released":released, "Release %":completionPct, "Overdue Open Activities":overdueAct, "Completed Stage Entries":actualDone, "Delayed Stage Entries":lateDone, "Avg Late Delay Days":r1(avgDelay), "Avg Actual Time Days":r1(avgDuration), "Actual vs Original Plan Records":planActualRecords.length, "Avg Actual vs Original Plan Net Days":r1(avgPlanNet), "Avg Missed Original Plan Days":r1(avgPlanMiss), "Worst Missed Original Plan Days":r1(worstPlanMiss), "Actual vs Revised Records":revisedActualRecords.length, "Avg Actual vs Revised Net Days":r1(avgRevNet), "Avg Missed Revised Days":r1(avgRevMiss), "Worst Missed Revised Days":r1(worstRevMiss) }];
+  const mgmtSummary=[{ "Report Type":"Management", "Styles in Slice":total, "On Track":onTrack, "At Risk":atRisk, "Delivery Risk":delRisk, "Released":released, "Release %":completionPct, "Overdue Open Activities":overdueAct, "Completed Stage Entries":actualDone, "Delayed Stage Entries":lateDone, "Avg Delay vs Due Days":r1(avgDelay), "Avg Actual Time Days":r1(avgDuration), "Original Plan Records":planActualRecords.length, "Avg Actual vs Original Plan Days":r1(avgPlanNet), "Revised Records":revisedActualRecords.length, "Avg Actual vs Revised Plan Days":r1(avgRevNet), "Worst Delay vs Due Days":r1(worstDelays.length?worstDelays[0].delay:0) }];
   const checks=[
       { Check:"Status partition", Formula:"On Track + At Risk + Released should equal Styles in Slice", Value:onTrack+atRisk+released, Expected:total, Result:(onTrack+atRisk+released)===total?"OK":"CHECK" },
       { Check:"Open activity overdue", Formula:"Sum overdue counts from Open Activities", Value:overdueAct, Expected:acts.reduce((a,[,v])=>a+v.over,0), Result:overdueAct===acts.reduce((a,[,v])=>a+v.over,0)?"OK":"CHECK" },
@@ -2425,9 +2442,9 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const currentStyles=fc.map(({s,c})=>({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Fit":s.sampleFit||"", "Family":s.family||"", "Colour":s.colour||"", "Brand":s.brand||"", "Buyer":s.buyer||"", "Junior":s.owner||"", "Qty":s.qty||0, "Delivery":s.delivery||"", "Status":c.status||"", "Tone":c.tone||"", "Released":c.released?"YES":"", "% Done":c.pct, "Chase":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Next Pending":c.nextPending?c.nextPending.label:"", "Projected Release":c.projRelease?fmt(c.projRelease):"" }));
   const currentSliceStageDetail=[];
   fc.forEach(({s,c})=>{ (c.stages||[]).forEach(r=>{ const due=r.rev||r.plan; const start=stageStartFor(s,c,r); const delayDue=(due&&r.actual)?netWorkdays(due,r.actual):null; const delayPlan=(r.plan&&r.actual)?netWorkdays(r.plan,r.actual):null; const delayRevised=(r.rev&&r.actual)?netWorkdays(r.rev,r.actual):null; const duration=(start&&r.actual)?Math.max(0,netWorkdays(start,r.actual)||0):null; currentSliceStageDetail.push({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Buyer / Brand":s.buyer||s.brand||"", "Junior / Style Owner":s.owner||"", "Stage":r.label||"", "Chase Label":r.owner||"", "State":stageState(r), "Auto Plan Date":r.plan?fmt(r.plan):"", "Revised Date":r.rev?fmt(r.rev):"", "Due Used":due?fmt(due):"", "Actual Date":r.actual?fmt(r.actual):"", "Start Used":start?fmt(start):"", "Delay vs Due Days":delayDue==null?"":r1(delayDue), "Actual vs Original Plan Days":delayPlan==null?"":r1(delayPlan), "Actual vs Revised Days":delayRevised==null?"":r1(delayRevised), "Actual Duration Days":duration==null?"":r1(duration), "Actionable Frontier?":(c.frontier&&c.frontier.has(r.key))?"YES":"NO" }); }); });
-  const stageData=stageRows.map(r=>({"Stage":r.label,"Chase Label":r.owner||"","Completed":r.n,"Late Count":r.lateN,"Avg Net Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Duration Days":r1(avg(r.durSum,r.durN)),"Avg Actual vs Original Plan Net Days":r1(avg(r.planSum,r.planN)),"Avg Missed Original Plan Days":r1(avg(r.planMissSum,r.planMissN)),"Avg Actual vs Revised Net Days":r1(avg(r.revSum,r.revN)),"Avg Missed Revised Days":r1(avg(r.revMissSum,r.revMissN)),"Duration Records":r.durN,"Original Plan Records":r.planN,"Revised Records":r.revN,"Worst Delay Days":r1(r.maxDelay)}));
-  const dept=deptRows.map(r=>({"Department":r.label,"Completed":r.n,"Late Count":r.lateN,"Avg Net Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Duration Days":r1(avg(r.durSum,r.durN)),"Avg Actual vs Original Plan Net Days":r1(avg(r.planSum,r.planN)),"Avg Missed Original Plan Days":r1(avg(r.planMissSum,r.planMissN)),"Avg Actual vs Revised Net Days":r1(avg(r.revSum,r.revN)),"Avg Missed Revised Days":r1(avg(r.revMissSum,r.revMissN)),"Duration Records":r.durN,"Original Plan Records":r.planN,"Revised Records":r.revN,"Worst Delay Days":r1(r.maxDelay)}));
-  const buyerData=buyerRows.map(r=>({"Buyer / Brand":r.label,"Approvals":r.n,"Late Count":r.lateN,"Avg Approval Time Days":r1(avg(r.durSum,r.durN)),"Avg Net Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual vs Original Plan Net Days":r1(avg(r.planSum,r.planN)),"Avg Missed Original Plan Days":r1(avg(r.planMissSum,r.planMissN)),"Avg Actual vs Revised Net Days":r1(avg(r.revSum,r.revN)),"Avg Missed Revised Days":r1(avg(r.revMissSum,r.revMissN)),"Worst Delay Days":r1(r.maxDelay)}));
+  const stageData=stageRows.map(r=>({"TNA Order":stageOrderOf(r.key),"Section":stageSectionOf(r.key),"Stage":r.label,"Chase Label":r.owner||"","Completed":r.n,"Late Count":r.lateN,"Late %":r.n?Math.round((r.lateN/r.n)*100):0,"Avg Actual Time Days":r1(avg(r.durSum,r.durN)),"Avg Actual vs Original Plan Days":r1(avg(r.planSum,r.planN)),"Avg Delay vs Due Days":r1(avg(r.delaySum,r.n)),"Avg Actual vs Revised Plan Days":r1(avg(r.revSum,r.revN)),"Worst Delay vs Due Days":r1(r.maxDelay),"Duration Records":r.durN,"Original Plan Records":r.planN,"Revised Records":r.revN}));
+  const dept=deptRows.map(r=>({"Department":r.label,"Completed":r.n,"Late Count":r.lateN,"Late %":r.n?Math.round((r.lateN/r.n)*100):0,"Avg Actual Time Days":r1(avg(r.durSum,r.durN)),"Avg Actual vs Original Plan Days":r1(avg(r.planSum,r.planN)),"Avg Delay vs Due Days":r1(avg(r.delaySum,r.n)),"Avg Actual vs Revised Plan Days":r1(avg(r.revSum,r.revN)),"Worst Delay vs Due Days":r1(r.maxDelay),"Duration Records":r.durN,"Original Plan Records":r.planN,"Revised Records":r.revN}));
+  const buyerData=buyerRows.map(r=>({"Buyer / Brand":r.label,"Approvals":r.n,"Late Count":r.lateN,"Late %":r.n?Math.round((r.lateN/r.n)*100):0,"Avg Approval Time Days":r1(avg(r.durSum,r.durN)),"Avg Actual vs Original Plan Days":r1(avg(r.planSum,r.planN)),"Avg Delay vs Due Days":r1(avg(r.delaySum,r.n)),"Avg Actual vs Revised Plan Days":r1(avg(r.revSum,r.revN)),"Worst Delay vs Due Days":r1(r.maxDelay)}));
   const chaseData=chaseDelayRows.map(r=>({"Chase Label":r.label,"Delayed Entries":r.delayed,"Total Delay Days":r1(r.delaySum),"Avg Delay Days":r1(avg(r.delaySum,r.delayed)),"Worst Delay Days":r1(r.maxDelay)}));
   const brandData=brandDelayRows.map(r=>({"Buyer / Brand":r.label,"Delayed Entries":r.delayed,"Total Delay Days":r1(r.delaySum),"Avg Delay Days":r1(avg(r.delaySum,r.delayed)),"Worst Delay Days":r1(r.maxDelay)}));
   const delayData=worstDelays.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Chase Label":r.owner,"Stage":r.stage,"Department":r.dept,"Delay Days":r1(r.delay),"Actual vs Original Plan Days":r.delayPlan==null?"":r1(r.delayPlan),"Actual vs Revised Days":r.delayRevised==null?"":r1(r.delayRevised),"Duration Days":r.duration==null?"":r1(r.duration),"Due":fmt(r.due),"Auto Plan":r.plan?fmt(r.plan):"","Revised Plan":r.revised?fmt(r.revised):"","Actual":fmt(r.actual)}));
@@ -2487,10 +2504,8 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
       "Delayed Entries":o.n,
       "Total Delay Days":r1(o.delaySum),
       "Avg Delay Days":r1(avg(o.delaySum,o.n)),
-      "Actual vs Original Plan Net Days":r1(avg(o.planSum,o.planN)),
-      "Missed Original Avg Days":r1(avg(o.planMissSum,o.planMissN)),
-      "Actual vs Revised Net Days":r1(avg(o.revSum,o.revN)),
-      "Missed Revised Avg Days":r1(avg(o.revMissSum,o.revMissN)),
+      "Avg Actual vs Original Plan Days":r1(avg(o.planSum,o.planN)),
+      "Avg Actual vs Revised Plan Days":r1(avg(o.revSum,o.revN)),
       "Original Plan Records":o.planN,
       "Revised Records":o.revN,
       "Worst Delay Days":r1(o.worst)
@@ -2514,7 +2529,7 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const worstStyleData=Object.values(styleAgg).sort((a,b)=>b.delaySum-a.delaySum).slice(0,25).map(o=>{
     const rows=lateRecords.filter(r=>(r.order||"")+"|"+(r.style||"")===(o.order||"")+"|"+(o.style||""));
     const p=rows.filter(r=>r.delayPlan!=null), pm=p.filter(r=>r.delayPlan>0), rv=rows.filter(r=>r.delayRevised!=null), rvm=rv.filter(r=>r.delayRevised>0);
-    return {"Style No":o.style,"Order No":o.order,"Buyer / Brand":o.buyer,"Junior / Style Owner":o.owner,"Late Stage Count":o.late,"Total Delay Days":`${r1(o.delaySum)}d`,"Avg Actual vs Original Plan Net Days":r1(avg(p.reduce((s,r)=>s+(r.delayPlan||0),0),p.length)),"Avg Missed Original Plan Days":r1(avg(pm.reduce((s,r)=>s+(r.delayPlan||0),0),pm.length)),"Avg Actual vs Revised Net Days":r1(avg(rv.reduce((s,r)=>s+(r.delayRevised||0),0),rv.length)),"Avg Missed Revised Days":r1(avg(rvm.reduce((s,r)=>s+(r.delayRevised||0),0),rvm.length)),"Worst Stage":o.worstStage,"Worst Stage Delay":`${r1(o.worstDelay)}d`,"Management Reading":`${o.late} delayed stage(s); ${r1(o.delaySum)}d total delay`,"Suggested Action":"Make recovery plan"};
+    return {"Style No":o.style,"Order No":o.order,"Buyer / Brand":o.buyer,"Junior / Style Owner":o.owner,"Late Stage Count":o.late,"Total Delay Days":`${r1(o.delaySum)}d`,"Avg Actual vs Original Plan Days":r1(avg(p.reduce((s,r)=>s+(r.delayPlan||0),0),p.length)),"Avg Actual vs Revised Plan Days":r1(avg(rv.reduce((s,r)=>s+(r.delayRevised||0),0),rv.length)),"Worst Stage":o.worstStage,"Worst Stage Delay":`${r1(o.worstDelay)}d`,"Management Reading":`${o.late} delayed stage(s); ${r1(o.delaySum)}d total delay`,"Suggested Action":"Make recovery plan"};
   });
   const worstKeys=new Set(Object.values(styleAgg).sort((a,b)=>b.delaySum-a.delaySum).slice(0,25).map(o=>(o.order||"")+"|"+(o.style||"")));
   const worstStyleDetail=detailRowsFor("Worst Performing Styles",lateRecords.filter(r=>worstKeys.has((r.order||"")+"|"+(r.style||""))),{problemOnly:true});
@@ -2523,10 +2538,10 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const exportBuyerDelayData=compactAgg(buyerApprovalLateRecords,r=>r.buyer||"(No buyer)","Buyer / Brand");
   const exportBrandDelayData=compactAgg(lateRecords,r=>r.buyer||"(No buyer)","Buyer / Brand");
 
-  const stageDelayData=compactAgg(lateRecords,r=>r.stage,"Stage").map(o=>({ ...o, "Chase Label":(STAGES.find(s=>s.label===o.Stage)||{}).owner||"" }));
+  const stageDelayData=compactAgg(lateRecords,r=>r.stage,"Stage").map(o=>{ const def=STAGES.find(s=>s.label===o.Stage)||{}; return { "TNA Order":stageOrderOf(def.key||o.Stage), "Section":stageSectionOf(def.key||o.Stage), ...o, "Chase Label":def.owner||"" }; }).sort((a,b)=>(Number(a["TNA Order"])||999)-(Number(b["TNA Order"])||999));
   const performanceAnalysisData = perfMode==="delay"
     ? (perfView==="stage" ? stageDelayData : exportChaseDelayData)
-    : (perfView==="stage" ? stageData : dept.map(r=>({ "Chase Label":r.Department, "Completed":r.Completed, "Late Count":r["Late Count"], "Avg Net Delay Days":r["Avg Net Delay Days"], "Avg Actual Duration Days":r["Avg Actual Duration Days"], "Avg Actual vs Original Plan Net Days":r["Avg Actual vs Original Plan Net Days"], "Avg Missed Original Plan Days":r["Avg Missed Original Plan Days"], "Avg Actual vs Revised Net Days":r["Avg Actual vs Revised Net Days"], "Avg Missed Revised Days":r["Avg Missed Revised Days"], "Duration Records":r["Duration Records"], "Original Plan Records":r["Original Plan Records"], "Revised Records":r["Revised Records"], "Worst Delay Days":r["Worst Delay Days"] })));
+    : (perfView==="stage" ? stageData : dept.map(r=>({ "Chase Label":r.Department, "Completed":r.Completed, "Late Count":r["Late Count"], "Late %":r["Late %"], "Avg Actual Time Days":r["Avg Actual Time Days"], "Avg Actual vs Original Plan Days":r["Avg Actual vs Original Plan Days"], "Avg Delay vs Due Days":r["Avg Delay vs Due Days"], "Avg Actual vs Revised Plan Days":r["Avg Actual vs Revised Plan Days"], "Worst Delay vs Due Days":r["Worst Delay vs Due Days"], "Duration Records":r["Duration Records"], "Original Plan Records":r["Original Plan Records"], "Revised Records":r["Revised Records"] })));
   const performanceAnalysisDetail = detailRowsFor("Performance Analysis", perfMode==="delay" ? lateRecords : delayRecords, { problemOnly: perfMode==="delay" }).filter(r=>{
     if(perfView!=="stage") return true;
     return !!r["Stage / Activity"];
@@ -2582,31 +2597,32 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   );
   const perfPlanCols=(r)=>({
     planNet:avg(r.planSum||0,r.planN||0),
-    planMiss:avg(r.planMissSum||0,r.planMissN||0),
     revNet:avg(r.revSum||0,r.revN||0),
-    revMiss:avg(r.revMissSum||0,r.revMissN||0),
+    planN:r.planN||0,
+    revN:r.revN||0,
+    durN:r.durN||0,
   });
   const performanceRows = perfMode==="delay"
-    ? (perfView==="stage" ? makeDelayAgg(lateRecords,r=>r.stage).slice(0,10).map(r=>({ ...r, displayLabel:r.label, count:r.delayed, late:r.delayed, avgDuration:null, avgDelay:avg(r.delaySum,r.delayed), worst:r.maxDelay, ...perfPlanCols(r) })) : chaseDelayRows.map(r=>({ ...r, displayLabel:r.label, count:r.delayed, late:r.delayed, avgDuration:null, avgDelay:avg(r.delaySum,r.delayed), worst:r.maxDelay, ...perfPlanCols(r) })))
-    : (perfView==="stage" ? stageRows.slice(0,10).map(r=>({ ...r, displayLabel:r.label, count:r.n, late:r.lateN, avgDuration:avg(r.durSum,r.durN), avgDelay:avg(r.delaySum,r.n), worst:r.maxDelay, ...perfPlanCols(r), owner:r.owner||"" })) : deptRows.map(r=>({ ...r, displayLabel:r.label, count:r.n, late:r.lateN, avgDuration:avg(r.durSum,r.durN), avgDelay:avg(r.delaySum,r.n), worst:r.maxDelay, ...perfPlanCols(r) })));
+    ? (perfView==="stage" ? makeDelayAgg(lateRecords,r=>r.stage).map(r=>{ const def=STAGES.find(s=>s.label===r.label)||{}; return { ...r, key:def.key||r.key||r.label, stageOrder:stageOrderOf(def.key||r.label), stageSection:stageSectionOf(def.key||r.label), displayLabel:r.label, count:r.delayed, late:r.delayed, avgDuration:null, avgDelay:avg(r.delaySum,r.delayed), worst:r.maxDelay, ...perfPlanCols(r), owner:def.owner||"" }; }).sort((a,b)=>a.stageOrder-b.stageOrder) : chaseDelayRows.map(r=>({ ...r, displayLabel:r.label, count:r.delayed, late:r.delayed, avgDuration:null, avgDelay:avg(r.delaySum,r.delayed), worst:r.maxDelay, ...perfPlanCols(r) })))
+    : (perfView==="stage" ? stageRows.map(r=>({ ...r, stageOrder:stageOrderOf(r.key), stageSection:stageSectionOf(r.key), displayLabel:r.label, count:r.n, late:r.lateN, avgDuration:avg(r.durSum,r.durN), avgDelay:avg(r.delaySum,r.n), worst:r.maxDelay, ...perfPlanCols(r), owner:r.owner||"" })) : deptRows.map(r=>({ ...r, displayLabel:r.label, count:r.n, late:r.lateN, avgDuration:avg(r.durSum,r.durN), avgDelay:avg(r.delaySum,r.n), worst:r.maxDelay, ...perfPlanCols(r) })));
   const performanceTable=(rows)=> rows.length?(
     <div style={{ overflowX:"auto" }}>
       <table style={{ width:"100%", borderCollapse:"collapse", fontSize:10 }}>
-        <thead><tr>{[perfView==="stage"?"Stage":"Chase Label","Completed / delayed","Late","Avg actual time","Avg delay / net","Actual vs original","Missed original avg","Actual vs revised","Missed revised avg","Worst"].map((h,i)=><th key={h} style={{ textAlign:i===0?"left":"right", padding:"7px 8px", borderBottom:"1px solid var(--line-2)", color:"var(--muted-2)", textTransform:"uppercase", letterSpacing:0.4, whiteSpace:"nowrap" }}>{h}</th>)}</tr></thead>
-        <tbody>{rows.map(r=><tr key={r.key||r.label}>
-          <td style={{ padding:"7px 8px", fontWeight:800, whiteSpace:"nowrap" }}>{r.displayLabel}{r.owner?<span style={{ color:"var(--muted-2)", fontWeight:700 }}> · {r.owner}</span>:null}</td>
+        <thead><tr>{[perfView==="stage"?"Stage":"Chase Label","Completed / delayed","Late","Late %","Avg actual time","Avg actual vs original","Avg delay vs due","Avg actual vs revised","Worst","Data records"].map((h,i)=><th key={h} style={{ textAlign:i===0?"left":"right", padding:"7px 8px", borderBottom:"1px solid var(--line-2)", color:"var(--muted-2)", textTransform:"uppercase", letterSpacing:0.4, whiteSpace:"nowrap" }}>{h}</th>)}</tr></thead>
+        <tbody>{rows.map((r,idx)=>{ const showSection=perfView==="stage" && r.stageSection && (!idx || rows[idx-1].stageSection!==r.stageSection); const latePct=(r.count||0)?Math.round(((r.late||0)/(r.count||1))*100):0; return <React.Fragment key={r.key||r.label}>{showSection && <tr><td colSpan={10} style={{ padding:"8px 8px 5px", background:"var(--toolbar-subtle)", color:"var(--accent)", fontWeight:900, textTransform:"uppercase", letterSpacing:0.6, fontSize:9, borderTop:"1px solid var(--line-2)", borderBottom:"1px solid var(--line-3)" }}>{r.stageSection}</td></tr>}<tr>
+          <td style={{ padding:"7px 8px", fontWeight:800, whiteSpace:"nowrap" }}>{perfView==="stage"&&r.stageOrder?<span style={{ color:"var(--muted-2)", fontWeight:900, marginRight:6 }}>{r.stageOrder}.</span>:null}{r.displayLabel}{r.owner?<span style={{ color:"var(--muted-2)", fontWeight:700 }}> · {r.owner}</span>:null}</td>
           <td style={{ padding:"7px 8px", textAlign:"right" }}>{r.count||0}</td>
           <td style={{ padding:"7px 8px", textAlign:"right", color:(r.late||0)>0?"var(--danger)":"var(--success)", fontWeight:800 }}>{r.late||0}</td>
+          <td style={{ padding:"7px 8px", textAlign:"right", fontWeight:800 }}>{latePct}%</td>
           <td style={{ padding:"7px 8px", textAlign:"right" }}>{r.avgDuration==null?"—":perfCell(r.avgDuration)}</td>
-          <td style={{ padding:"7px 8px", textAlign:"right" }}>{perfCell(r.avgDelay)}</td>
           <td style={{ padding:"7px 8px", textAlign:"right", color:r.planNet>0?"var(--danger)":"var(--success)", fontWeight:800 }}>{perfCell(r.planNet)}</td>
-          <td style={{ padding:"7px 8px", textAlign:"right" }}>{perfCell(r.planMiss)}</td>
-          <td style={{ padding:"7px 8px", textAlign:"right", color:r.revNet>0?"var(--danger)":"var(--success)", fontWeight:800 }}>{perfCell(r.revNet)}</td>
-          <td style={{ padding:"7px 8px", textAlign:"right" }}>{perfCell(r.revMiss)}</td>
+          <td style={{ padding:"7px 8px", textAlign:"right", color:r.avgDelay>0?"var(--danger)":"var(--success)", fontWeight:800 }}>{perfCell(r.avgDelay)}</td>
+          <td style={{ padding:"7px 8px", textAlign:"right", color:r.revNet>0?"var(--danger)":"var(--success)", fontWeight:800 }}>{r.revN?perfCell(r.revNet):"—"}</td>
           <td style={{ padding:"7px 8px", textAlign:"right", color:(r.worst||0)>0?"var(--danger)":"var(--ink)", fontWeight:800 }}>{perfCell(Math.max(0,r.worst||0))}</td>
-        </tr>)}</tbody>
+          <td title="O = original plan records, R = revised records, D = duration records. These are data confidence counts, not performance scores." style={{ padding:"7px 8px", textAlign:"right", color:"var(--muted-2)", whiteSpace:"nowrap" }}>O:{r.planN||0} · R:{r.revN||0} · D:{r.durN||0}</td>
+        </tr></React.Fragment>; })}</tbody>
       </table>
-      <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8 }}>Side-by-side plan columns are averages for the same selected view and data mode. Original = auto/system plan. Revised = latest revised commitment.</div>
+      <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8, lineHeight:1.45 }}>Avg actual vs original = actual date minus original auto/system target, showing TNA drift. Avg delay vs due = actual date minus active due date, where revised plan wins over auto plan. Avg actual vs revised = whether meeting/revised commitments were still missed. Data records: O original-plan records, R revised records, D duration records.{perfView==="stage"?" Stage view follows fixed TNA flow order, not alphabetical or delay ranking.":""}</div>
     </div>
   ):<div style={{ fontSize:11, color:"var(--muted-1)" }}>{perfMode==="delay"?"No positive delays in this slice.":"No completed stage dates yet."}</div>;
 
@@ -2637,8 +2653,8 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
       {card("Escalation items",escalationTodo.length,escalationTodo.length?"var(--danger)":"var(--success)",()=>drillTodo&&drillTodo({ todoType:"Escalation", priority:"Overdue" }),"who must chase now")}
       {card("Avg late delay",fmtDays(avgDelay),avgDelay>0?"var(--danger)":"var(--success)",null,"delayed stages only")}
       {actualTimeCard}
-      {/* Technical plan/revised net cards removed from visible Management dashboard.
-          Kept in Performance Analysis columns and Management exports for detailed review. */}
+      {/* Technical missed-only plan/revised cards removed from visible Management dashboard.
+          Main Performance Analysis now shows original target drift, active due delay, revised commitment performance, and data-confidence records. */}
     </div>
 
     <div style={{ display:"flex", flexDirection:"column", gap:12, marginTop:22 }}>
@@ -2661,8 +2677,8 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
         </div>
         {performanceTable(performanceRows)}
       </>, perfView==="stage" ? (perfMode==="delay"?"Stage-wise delay summary only; no early/on-time rows":"Stage-wise completed performance; net delay may be early/on-time/late") : (perfMode==="delay"?"Chase-label delay summary only; no early/on-time rows":"Chase-label completed performance; net delay may be early/on-time/late"))}
-      {/* Plan Accuracy section kept out of visible dashboard because it is technical for daily management reading.
-          The same data remains in Performance Analysis columns and export sheets. */}
+      {/* Missed-only plan accuracy section kept out of visible dashboard because it is technical for daily management reading.
+          Original/revised performance remains in simplified Performance Analysis columns and export sheets. */}
       {section("Worst completed delays", worstDelays.length?worstDelays.map(r=>rowBtn(r.style+":"+r.stageKey,r.style||r.order,`+${fmtNum(r.delay)}d`,"var(--danger)",()=>goSearch(r.style),`${r.stage} · ${r.buyer||""} · actual ${fmt(r.actual)} · click opens style`)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No positive completed delays in this slice.</div>, "Separate exception list: exact styles/stages with completed delay greater than 0")}
     </div>
 
