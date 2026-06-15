@@ -784,10 +784,38 @@ function MerchTracker({ me, onSignOut }){
   const selectedStyle=sel?styles.find(x=>x.id===sel.id):null;
   const selectedColLabel=sel?(sel.col==="__style"?"Style No":(INFO_COLS.find(c=>c.key===sel.col)?.label||STAGES.find(s=>s.key===sel.col)?.label||sel.col)):"";
   const selectedDisplayValue=()=>{ if(!sel||!selectedStyle) return ""; const v=getVal(selectedStyle,sel.col); return isDateCol(sel.col)&&v?fmtTyped(v):String(v??""); };
-  const entrySuggestion=useMemo(()=>{ if(!sel||!entryTouched||!entryVal||isDateCol(sel.col)) return ""; const ci=colIndex(sel.col), ri=rowIndex(sel.id); if(ci<0||ri<0) return ""; const q=String(entryVal).toLowerCase(); const seen=[]; for(let r=ri-1;r>=0&&seen.length<25;r--){ const row=rows[r]; if(!row) continue; const v=String(getVal(row.s,sel.col)||"").trim(); if(v&&!seen.includes(v)) seen.push(v); } return seen.find(v=>v.toLowerCase().startsWith(q)&&v.toLowerCase()!==q)||""; },[sel,entryTouched,entryVal,rows]);
-  useEffect(()=>{ if(editing && sel && editing.id===sel.id && editing.col===sel.col){ setEntryVal(editVal||""); return; } setEntryVal(selectedDisplayValue()); setEntryTouched(false); },[sel,styles,editing,editVal]);
-  const beginEntryEdit=()=>{ if(!sel||!selectedStyle) return false; if(!isEditableCol(sel.col)||!canEdit(role,sel.col,"actual")) return false; if(!editing || editing.id!==sel.id || editing.col!==sel.col){ if(isDateCol(sel.col)) beginDate(sel.id,sel.col,"actual"); else startEdit(sel.id,sel.col); } return true; };
-  const commitEntry=()=>{ if(!sel) return; if(!editing || editing.id!==sel.id || editing.col!==sel.col){ if(!beginEntryEdit()) return; } if(isDateCol(sel.col)) commitDate(); else commitText(); setEntryTouched(false); };
+  const entrySuggestion=useMemo(()=>{
+    if(!sel||!entryTouched||!entryVal||isDateCol(sel.col)) return "";
+    const ci=colIndex(sel.col), ri=rowIndex(sel.id);
+    if(ci<0||ri<0) return "";
+    const q=String(entryVal).trim().toLowerCase();
+    if(!q) return "";
+    const seen=[];
+    for(let r=ri-1;r>=0&&seen.length<40;r--){
+      const row=rows[r]; if(!row||!row.s) continue;
+      const v=String(getVal(row.s,sel.col)||"").trim();
+      if(v&&!seen.some(x=>x.toLowerCase()===v.toLowerCase())) seen.push(v);
+    }
+    return seen.find(v=>v.toLowerCase().startsWith(q) && v!==entryVal)||"";
+  },[sel,entryTouched,entryVal,rows]);
+  useEffect(()=>{ if(editing && sel && editing.id===sel.id && editing.col===sel.col && !entryTouched){ setEntryVal(editVal||""); return; } if(!entryTouched){ setEntryVal(selectedDisplayValue()); } },[sel,styles,editing,editVal,entryTouched]);
+  const commitEntry=()=>{
+    if(!sel||!selectedStyle) return;
+    if(!isEditableCol(sel.col)||!canEdit(role,sel.col,"actual")) return;
+    if(peerLockBlocks(sel.id,sel.col)) return;
+    const raw=String(entryVal??"");
+    if(isDateCol(sel.col)){
+      const r=parseTyped(raw);
+      if(r===false){ window.alert('"'+raw+'" isn’t a valid date. Type it as dd/mm/yyyy (e.g. 26/05/2026), or clear the box to leave it empty.'); return; }
+      setField(sel.id,sel.col,r===""?null:r);
+    } else {
+      const f=sel.col==="__style"?"styleNo":sel.col;
+      setField(sel.id,f,sel.col==="qty"?raw.replace(/[^0-9]/g,""):raw);
+    }
+    setEntryTouched(false);
+    setEditing(null);
+    setEditVal("");
+  };
   const beginDate=(id,col,mode,initialChar)=>{ if(!canEdit(role,col,mode)) return; if(peerLockBlocks(id,col)) return; setSel({id,col}); setFocus(null); setEditing({id,col,mode}); setCalOpen(false); const s=styles.find(x=>x.id===id); const cur= mode==="rev"?(s&&s.revs&&s.revs[col]):mode==="reject"?(s&&s.rejects&&s.rejects[col]):(isStageCol(col)?(s&&s.actuals[col]):(s&&s[col])); setEditVal(initialChar!=null?initialChar:(cur?fmtTyped(cur):"")); };
   const commitDate=()=>{ if(!editing) return; const r=parseTyped(editVal); if(r===false){ window.alert('"'+editVal+'" isn\u2019t a valid date. Type it as dd/mm/yyyy (e.g. 26/05/2026), or clear the box to leave it empty.'); return; } if(r!==false){ const val=r===""?null:r; if(val===null){ const s=styles.find(x=>x.id===editing.id); const had= editing.mode==="rev"?(s&&s.revs&&s.revs[editing.col]):editing.mode==="reject"?(s&&s.rejects&&s.rejects[editing.col]):(isStageCol(editing.col)?(s&&s.actuals&&s.actuals[editing.col]):(s&&s[editing.col])); if(had && !window.confirm("Delete this saved date? You can re-enter it later.")){ setEditing(null); setCalOpen(false); return; } } if(editing.mode==="rev") setRev(editing.id,editing.col,val); else if(editing.mode==="reject") setReject(editing.id,editing.col,val); else setField(editing.id,editing.col,val); } setEditing(null); setCalOpen(false); };
   const dateEditor=(id,col,mode)=>{ const s=styles.find(x=>x.id===id); const _cmp=computed.find(x=>x.s.id===id); const _stR=_cmp&&(_cmp.c.stages||[]).find(x=>x.key===col); const planFb=_stR?(_stR.rev||_stR.plan):null; const stored= mode==="rev"?(s&&s.revs&&s.revs[col]):mode==="reject"?(s&&s.rejects&&s.rejects[col]):(isStageCol(col)?(s&&s.actuals[col]):(s&&s[col])); const colLabel=col==="ordRec"?"Order Date":col==="delivery"?"Delivery Date":((STAGES.find(x=>x.key===col)||{}).label||col); const modeLabel=mode==="rev"?"REVISED":mode==="reject"?"REJECTED":"ACTUAL"; const mc=mode==="rev"?"var(--accent)":mode==="reject"?"var(--danger)":"var(--info)"; return (<span onClick={e=>e.stopPropagation()} style={{ position:"absolute", top:1, left:1, zIndex:80, display:"flex", flexDirection:"column", gap:1, background:"var(--surface)", border:"1px solid "+mc, padding:"2px 4px", boxShadow:"2px 2px 0 rgba(0,0,0,0.18)" }}><span style={{ fontSize:8, fontWeight:700, color:mc, textTransform:"uppercase", letterSpacing:0.3, whiteSpace:"nowrap" }}>{colLabel} · {modeLabel}</span><span style={{ display:"flex", alignItems:"center", gap:2, position:"relative" }}><input autoFocus onFocus={e=>{ if((e.target.value||"").length>2) e.target.select(); }} value={editVal} placeholder="dd/mm/yyyy" onChange={e=>setEditVal(e.target.value.replace(/[^0-9\/\-. ]/g,""))} onKeyDown={e=>{ e.stopPropagation(); if(e.key==="Enter") commitDate(); else if(e.key==="Escape"){ setEditing(null); setCalOpen(false); } }} onBlur={()=>{ if(!calOpen) commitDate(); }} style={{ width:80, fontFamily:"inherit", fontSize:11, border:"none", outline:"none" }}/>{stored && <button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); if(mode==="rev") setRev(id,col,null); else if(mode==="reject") setReject(id,col,null); else setField(id,col,null); setEditing(null); setCalOpen(false); }} title={"Clear "+modeLabel.toLowerCase()+" date"} style={{ border:"1px solid var(--line-2)", background:"var(--surface)", cursor:"pointer", padding:"0 4px", fontSize:10, lineHeight:"16px" }}>clear</button>}<button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); setCalOpen(o=>!o); }} title="calendar" style={{ border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:0, fontSize:12 }}>📅</button>{calOpen && <CalPopup label={colLabel+" · "+modeLabel} value={stored} fallback={planFb} onClose={()=>setCalOpen(false)} onPick={(d)=>{ if(mode==="rev") setRev(id,col,d); else if(mode==="reject") setReject(id,col,d); else setField(id,col,d); setEditing(null); setCalOpen(false); }}/>}</span></span>); };
@@ -895,7 +923,22 @@ function MerchTracker({ me, onSignOut }){
   const notifyFollowers=async(changedList)=>{ try{ const byStyle={}; for(const x of changedList){ const sid=x.row.style_id; (byStyle[sid]=byStyle[sid]||[]).push(x.row.stage); } const ids=Object.keys(byStyle).map(Number); if(!ids.length) return; const { data }=await supabase.from("style_follows").select("user_id,style_id").in("style_id",ids); if(!data||!data.length) return; const notifs=[]; for(const f of data){ if(f.user_id===me.id) continue; const sNo=(styles.find(s=>s.id===f.style_id)||{}).styleNo||""; const stg=(byStyle[f.style_id]||[])[0]; notifs.push({ user_id:f.user_id, type:"follow", body:(me.name||"Someone")+" updated "+sNo+" · "+colLabelOf(stg), style_id:f.style_id, style_no:sNo, col:stg, actor_name:me.name||me.email, read:false }); } if(notifs.length) await supabase.from("notifications").insert(notifs); }catch(e){} };
   const beginNote=()=>{ if(!sel) return; setNoteText(notes[cellKey(sel.id,sel.col)]||""); setNoteEditing(true); };
 
-  const distinctFor=(col)=>{ const set=new Set(); computed.forEach(({s,c})=>{ const passOthers=Object.entries(colFilters).every(([cc,allowed])=> cc===col || passCol(s,c,cc,allowed)); if(!passOthers) return; if(col==="chase"){ const owners=(c.chaseOwners||[]).map(o=>o.owner); if(owners.length===0) set.add("(Blanks)"); else owners.forEach(o=>set.add(o)); } else set.add(valueFor(s,c,col)); }); return [...set].sort((a,b)=> a==="(Blanks)"?1:b==="(Blanks)"?-1:(a>b?1:a<b?-1:0)); };
+  // Cascading header-filter options: every column dropdown is built from the rows that already match
+  // all other active filters (search, status, chase, activity, archive, following, saved view, and other column filters).
+  // This prevents irrelevant/blank values from unrelated rows appearing after a slice such as Activity = Lab Dip.
+  const passForFilterOptions=(row,exceptCol)=>{
+    const {s,c,idx}=row;
+    const q=String(deferredSearch||search||"").trim().toLowerCase();
+    const matchQ=!q ? true : (searchCol==="auto" ? (idx&&idx.auto?idx.auto:"").includes(q) : ((idx&&idx.byCol&&idx.byCol[searchCol])!=null?idx.byCol[searchCol]:lc(s[searchCol])).includes(q));
+    const matchS=statusFilter==="All"||(statusFilter==="At Risk"&&(c.tone==="late"||c.tone==="warn"))||(statusFilter==="On Track"&&c.tone==="ok")||(statusFilter==="Released"&&c.released);
+    const matchF=Object.entries(colFilters||{}).every(([cc,allowed])=> cc===exceptCol || passCol(s,c,cc,allowed));
+    const matchO=ownerFilter==="All"||(c.chaseOwners||[]).some(o=>o.owner===ownerFilter);
+    const matchA=!activityFilter||(c.frontier&&c.frontier.has(activityFilter));
+    const matchArch=archiveView==="all"?true:(archiveView==="archived"?!!s.archived:!s.archived);
+    const matchFollow=!followFilter||follows.has(s.id);
+    return matchQ&&matchS&&matchF&&matchO&&matchA&&matchArch&&matchFollow&&presetPass(s,c);
+  };
+  const distinctFor=(col)=>{ const set=new Set(); computed.forEach((row)=>{ if(!passForFilterOptions(row,col)) return; const {s,c}=row; if(col==="chase"){ const owners=(c.chaseOwners||[]).map(o=>o.owner); if(owners.length===0) set.add("(Blanks)"); else owners.forEach(o=>set.add(o)); } else set.add(valueFor(s,c,col)); }); return [...set].sort((a,b)=> a==="(Blanks)"?1:b==="(Blanks)"?-1:(a>b?1:a<b?-1:0)); };
   const filterProps=(col)=>({ filterActive: !!colFilters[col], filterOpen: filterCol===col, filterValues: filterCol===col?distinctFor(col):null, filterAllowed: colFilters[col]||null,
     onToggleFilter:()=>{ finishEditing(); setFilterCol(p=>p===col?null:col); },
     onSetFilter:(arr)=>setColFilters(f=>{ const n={...f}; if(!arr) delete n[col]; else n[col]=arr; return n; }),
@@ -1186,8 +1229,8 @@ function MerchTracker({ me, onSignOut }){
         <div style={{ display:"flex", alignItems:"center", gap:6, flex:"1 1 420px", minWidth:320, background:"var(--toolbar-bg)", border:"1px solid var(--toolbar-line)", borderRadius:6, padding:"5px 7px", boxShadow:"0 1px 0 rgba(0,0,0,0.03)", position:"relative" }}>
           <span style={{ fontSize:9, fontWeight:800, color:"var(--muted-2)", textTransform:"uppercase", letterSpacing:0.4 }}>Entry</span>
           <span style={{ fontSize:10, fontWeight:800, color:"var(--accent)", minWidth:34 }}>{sel?cellRef(sel):"—"}</span>
-          <input disabled={!sel} value={entryVal} onChange={e=>{ setEntryTouched(true); setEntryVal(e.target.value); if(beginEntryEdit()) setEditVal(e.target.value); }} onKeyDown={e=>{ if(e.key==="Tab"&&entrySuggestion){ e.preventDefault(); setEntryVal(entrySuggestion); setEditVal(entrySuggestion); } else if(e.key==="Enter"){ e.preventDefault(); commitEntry(); } else if(e.key==="Escape"){ setEntryVal(selectedDisplayValue()); setEntryTouched(false); if(editing) setEditing(null); } }} placeholder={sel?("type "+selectedColLabel+"…"):"select a cell"} title="Excel-style entry bar. Type here; Tab accepts the suggestion from values above; Enter saves." style={{ flex:1, minWidth:160, fontFamily:"inherit", fontSize:11, padding:"4px 7px", border:"1px solid var(--line-2)", outline:"none", background:sel?"var(--surface)":"var(--line-3)" }}/>
-          {entrySuggestion && <button onMouseDown={e=>e.preventDefault()} onClick={()=>{ setEntryVal(entrySuggestion); setEditVal(entrySuggestion); setEntryTouched(false); }} title="Click or press Tab to accept" style={{ position:"absolute", right:10, top:"100%", marginTop:3, zIndex:390, maxWidth:260, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"4px 8px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--accent-tint)", boxShadow:"3px 3px 0 var(--ink)" }}>Tab ↹ {entrySuggestion}</button>}
+          <input disabled={!sel} value={entryVal} onChange={e=>{ setEntryTouched(true); setEntryVal(sel&&sel.col==="qty"?e.target.value.replace(/[^0-9]/g,""):e.target.value); }} onKeyDown={e=>{ if(e.key==="Tab"&&entrySuggestion){ e.preventDefault(); setEntryTouched(true); setEntryVal(entrySuggestion); } else if(e.key==="Enter"){ e.preventDefault(); commitEntry(); } else if(e.key==="Escape"){ setEntryVal(selectedDisplayValue()); setEntryTouched(false); if(editing) setEditing(null); } }} placeholder={sel?("type "+selectedColLabel+"…"):"select a cell"} title="Excel-style entry bar. Type here; Tab accepts the suggestion from values above; Enter saves. Entry bar saves directly and will not open an inline cell editor while typing." style={{ flex:1, minWidth:160, fontFamily:"inherit", fontSize:11, padding:"4px 7px", border:"1px solid var(--line-2)", outline:"none", background:sel?"var(--surface)":"var(--line-3)" }}/>
+          {entrySuggestion && <button onMouseDown={e=>e.preventDefault()} onClick={()=>{ setEntryTouched(true); setEntryVal(entrySuggestion); }} title="Click or press Tab to accept" style={{ position:"absolute", right:10, top:"100%", marginTop:3, zIndex:390, maxWidth:260, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"4px 8px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--accent-tint)", boxShadow:"3px 3px 0 var(--ink)" }}>Tab ↹ {entrySuggestion}</button>}
           {peerEditingList.length>0 && <span title={peerEditingList.map(p=>(p.name||p.email||"User")+" editing "+p.ref).join("\n")} style={{ fontSize:9, color:"var(--danger)", fontWeight:800, whiteSpace:"nowrap" }}>{peerEditingList.length} editing now</span>}
         </div>
         <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap", background:"var(--toolbar-bg)", border:"1px solid var(--toolbar-line)", borderRadius:6, padding:"5px 7px", boxShadow:"0 1px 0 rgba(0,0,0,0.03)" }}>
@@ -1377,10 +1420,11 @@ function EscalationMatrixView({ computed, cfg, applyDrill }){
     const front=c.frontier?[...c.frontier]:[];
     return front.map(k=>{ const r=(c.stages||[]).find(x=>x.key===k); const due=r&&(r.rev||r.plan); if(!r||!due||r.done) return null; const days=Math.max(0,netWorkdays(due,TODAY)||0); if(days<=0) return null; const esc=escalationFor(cfg,days); return { id:s.id, orderNo:s.orderNo, styleNo:s.styleNo, family:s.family, colour:s.colour, buyer:s.buyer||s.brand||"", junior:s.owner, stageKey:k, stage:r.label, chase:r.owner||"—", due, days, bucket:esc.rangeLabel, status:c.status, risk:c.tone, escalationOwner:esc.owner, escalationLevel:esc.level, escalationAction:esc.action }; }).filter(Boolean);
   });
-  const owners=["All",...Array.from(new Set(all.map(x=>x.chase))).filter(Boolean).sort()];
-  const escOwners=["All",...Array.from(new Set(all.map(x=>x.escalationOwner))).filter(Boolean).sort()];
-  const buckets=["All",...rules.map(r=>`${r.from}-${r.to==null?"∞":r.to}d`)];
-  const rows=all.filter(r=>{ const qq=q.trim().toLowerCase(); const hit=!qq || [r.styleNo,r.orderNo,r.family,r.colour,r.buyer,r.junior,r.stage,r.chase,r.escalationOwner,r.escalationLevel].some(v=>String(v||"").toLowerCase().includes(qq)); const ow=owner==="All"||r.chase===owner; const eo=escOwner==="All"||r.escalationOwner===escOwner; const bk=bucket==="All"||r.bucket===bucket; return hit&&ow&&eo&&bk; }).sort((a,b)=>b.days-a.days || String(a.escalationOwner).localeCompare(String(b.escalationOwner)));
+  const escMatchExcept=(r,except)=>{ const qq=q.trim().toLowerCase(); const hit=!qq || [r.styleNo,r.orderNo,r.family,r.colour,r.buyer,r.junior,r.stage,r.chase,r.escalationOwner,r.escalationLevel].some(v=>String(v||"").toLowerCase().includes(qq)); const ow=except==="owner"||owner==="All"||r.chase===owner; const eo=except==="escOwner"||escOwner==="All"||r.escalationOwner===escOwner; const bk=except==="bucket"||bucket==="All"||r.bucket===bucket; return hit&&ow&&eo&&bk; };
+  const owners=["All",...Array.from(new Set(all.filter(r=>escMatchExcept(r,"owner")).map(x=>x.chase))).filter(Boolean).sort()];
+  const escOwners=["All",...Array.from(new Set(all.filter(r=>escMatchExcept(r,"escOwner")).map(x=>x.escalationOwner))).filter(Boolean).sort()];
+  const buckets=["All",...Array.from(new Set(all.filter(r=>escMatchExcept(r,"bucket")).map(x=>x.bucket))).filter(Boolean).sort((a,b)=>parseInt(a,10)-parseInt(b,10))];
+  const rows=all.filter(r=>escMatchExcept(r,null)).sort((a,b)=>b.days-a.days || String(a.escalationOwner).localeCompare(String(b.escalationOwner)));
   const summary=rows.reduce((m,r)=>{ const k=r.escalationOwner; if(!m[k]) m[k]={ chase:k, count:0, total:0, max:0, urgent:0 }; m[k].count++; m[k].total+=r.days; m[k].max=Math.max(m[k].max,r.days); if(r.escalationLevel==="Critical"||r.days>=8) m[k].urgent++; return m; },{});
   const sumRows=Object.values(summary).sort((a,b)=>b.max-a.max||b.count-a.count);
   const exportRows=rows.map(r=>({ "Chase Label":r.chase, "Escalation Bucket":r.bucket, "Days Overdue":r.days, "Escalation Owner":r.escalationOwner, "Escalation Level":r.escalationLevel, "Order No":r.orderNo, "Style No":r.styleNo, "Family":r.family, "Colour":r.colour, "Buyer / Brand":r.buyer, "Junior / Owner":r.junior, "Stage / Activity":r.stage, "Due Date":fmtD(r.due), "Current Status":r.status, "Management Reading":`${r.stage} overdue ${r.days}d`, "Suggested Action":r.escalationAction||`Chase ${r.escalationOwner}` }));
@@ -1476,25 +1520,31 @@ function ReviewTabView({ computed, todoItems, auditRows, auditBusy, loadAuditRow
     (errorLog||[]).forEach(e=> push({ id:`err-${e.id}`, category:"System / Sync", severity:"Critical", issue:`${e.area||"App"}: ${e.msg||"Error"}`, action:"Check console / refresh after saving work", source:"Error Log", at:e.at }));
     return out.sort((a,b)=>{ const sev={Critical:0,Warning:1,Info:2}; const sa=sev[a.severity]??9, sb=sev[b.severity]??9; if(sa!==sb) return sa-sb; return String(b.at||"").localeCompare(String(a.at||"")); });
   },[computed,todoItems,auditRows,errorLog,allComments,allNotifications,colLabelOf]);
-  const categories=useMemo(()=>["All",...Array.from(new Set((mode==="comments"?allComments:mode==="notifications"?allNotifications:items).map(x=>x.category))).sort((a,b)=>a.localeCompare(b))],[items,allComments,allNotifications,mode]);
-  const commentUsers=useMemo(()=>["All users",...Array.from(new Set(allComments.map(c=>c.author).filter(Boolean))).sort((a,b)=>a.localeCompare(b))],[allComments]);
-  const filtered=useMemo(()=>{ const needle=q.trim().toLowerCase(); return items.filter(x=>(category==="All"||x.category===category)&&(severity==="All"||x.severity===severity)&&(!needle||[x.category,x.severity,x.status,x.styleNo,x.orderNo,x.buyer,x.brand,x.issue,x.action,x.source].join(" ").toLowerCase().includes(needle))); },[items,category,severity,q]);
   const myId=me&&me.id; const myName=String((me&&(me.name||me.email))||"").toLowerCase();
-  const filteredComments=useMemo(()=>{ const needle=q.trim().toLowerCase(); return allComments.filter(c=>{
-    if(category!=="All"&&c.category!==category) return false;
-    if(commentUser!=="All users"&&c.author!==commentUser) return false;
-    if(commentScope==="To me" && !(Array.isArray(c.mentions)&&c.mentions.includes(myId)) && !(myName && String(c.body||"").toLowerCase().includes("@"+myName.replace(/\s+/g,""))) && !(myName && String(c.body||"").toLowerCase().includes("@"+myName))) return false;
-    if(commentScope==="By me" && c.authorId!==myId && String(c.author||"").toLowerCase()!==myName) return false;
-    if(commentScope==="Unresolved" && c.resolved) return false;
-    if(needle && ![c.category,c.styleNo,c.orderNo,c.buyer,c.brand,c.body,c.author].join(" ").toLowerCase().includes(needle)) return false;
-    return true;
-  }); },[allComments,category,commentUser,commentScope,q,myId,myName]);
-  const filteredNotifications=useMemo(()=>{ const needle=q.trim().toLowerCase(); return allNotifications.filter(n=>{
-    if(category!=="All"&&n.category!==category) return false;
-    if(notifStatus!=="All"&&n.status!==notifStatus) return false;
-    if(needle && ![n.category,n.status,n.styleNo,n.orderNo,n.body,n.source,n.actor].join(" ").toLowerCase().includes(needle)) return false;
-    return true;
-  }); },[allNotifications,category,notifStatus,q]);
+  const needle=q.trim().toLowerCase();
+  const textMatch=(vals)=>!needle||vals.join(" ").toLowerCase().includes(needle);
+  const itemPassExcept=(x,except)=> (except==="category"||category==="All"||x.category===category) && (except==="severity"||severity==="All"||x.severity===severity) && textMatch([x.category,x.severity,x.status,x.styleNo,x.orderNo,x.buyer,x.brand,x.issue,x.action,x.source]);
+  const commentPassExcept=(c,except)=>{
+    if(except!=="category"&&category!=="All"&&c.category!==category) return false;
+    if(except!=="commentUser"&&commentUser!=="All users"&&c.author!==commentUser) return false;
+    if(except!=="commentScope"){
+      if(commentScope==="To me" && !(Array.isArray(c.mentions)&&c.mentions.includes(myId)) && !(myName && String(c.body||"").toLowerCase().includes("@"+myName.replace(/\s+/g,""))) && !(myName && String(c.body||"").toLowerCase().includes("@"+myName))) return false;
+      if(commentScope==="By me" && c.authorId!==myId && String(c.author||"").toLowerCase()!==myName) return false;
+      if(commentScope==="Unresolved" && c.resolved) return false;
+    }
+    return textMatch([c.category,c.styleNo,c.orderNo,c.buyer,c.brand,c.body,c.author]);
+  };
+  const notificationPassExcept=(n,except)=> (except==="category"||category==="All"||n.category===category) && (except==="notifStatus"||notifStatus==="All"||n.status===notifStatus) && textMatch([n.category,n.status,n.styleNo,n.orderNo,n.body,n.source,n.actor]);
+  const categories=useMemo(()=>{
+    const src=mode==="comments"?allComments.filter(c=>commentPassExcept(c,"category")):mode==="notifications"?allNotifications.filter(n=>notificationPassExcept(n,"category")):items.filter(x=>itemPassExcept(x,"category"));
+    return ["All",...Array.from(new Set(src.map(x=>x.category))).sort((a,b)=>a.localeCompare(b))];
+  },[items,allComments,allNotifications,mode,severity,q,commentUser,commentScope,notifStatus,category]);
+  const severities=useMemo(()=>["All",...Array.from(new Set(items.filter(x=>itemPassExcept(x,"severity")).map(x=>x.severity))).sort((a,b)=>a.localeCompare(b))],[items,category,q,severity]);
+  const commentUsers=useMemo(()=>["All users",...Array.from(new Set(allComments.filter(c=>commentPassExcept(c,"commentUser")).map(c=>c.author).filter(Boolean))).sort((a,b)=>a.localeCompare(b))],[allComments,category,commentScope,q,commentUser]);
+  const notifStatuses=useMemo(()=>["All",...Array.from(new Set(allNotifications.filter(n=>notificationPassExcept(n,"notifStatus")).map(n=>n.status))).sort((a,b)=>a.localeCompare(b))],[allNotifications,category,q,notifStatus]);
+  const filtered=useMemo(()=> items.filter(x=>itemPassExcept(x,null)),[items,category,severity,q]);
+  const filteredComments=useMemo(()=> allComments.filter(c=>commentPassExcept(c,null)),[allComments,category,commentUser,commentScope,q,myId,myName]);
+  const filteredNotifications=useMemo(()=> allNotifications.filter(n=>notificationPassExcept(n,null)),[allNotifications,category,notifStatus,q]);
   const counts=useMemo(()=>({ total:items.length, critical:items.filter(x=>x.severity==="Critical").length, warning:items.filter(x=>x.severity==="Warning").length, dq:items.filter(x=>x.category==="Data Quality").length, comments:allComments.length, unread:allNotifications.filter(n=>!n.read).length }),[items,allComments,allNotifications]);
   const badge=(txt,bg,fg="var(--ink)")=><span style={{ display:"inline-flex", alignItems:"center", padding:"3px 7px", borderRadius:999, background:bg, color:fg, fontSize:9, fontWeight:900, whiteSpace:"nowrap" }}>{txt}</span>;
   const inputStyle={ fontFamily:"inherit", fontSize:11, padding:"7px 9px", border:"1px solid var(--ink)", background:"var(--surface)" };
@@ -1510,9 +1560,9 @@ function ReviewTabView({ computed, todoItems, auditRows, auditBusy, loadAuditRow
     <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:12 }}>{modeBtn("inbox","Review Inbox",items.length)}{modeBtn("comments","Comments",allComments.length)}{modeBtn("notifications","Notifications",allNotifications.length)}{modeBtn("changes","Changes",(auditRows||[]).length)}{modeBtn("errors","Errors",(errorLog||[]).length)}</div>
     <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom:12, background:"var(--toolbar-bg)", border:"1px solid var(--toolbar-line)", borderRadius:12, padding:10 }}>
       <select value={category} onChange={e=>setCategory(e.target.value)} style={inputStyle}>{categories.map(c=><option key={c} value={c}>{c}</option>)}</select>
-      {mode==="inbox" && <select value={severity} onChange={e=>setSeverity(e.target.value)} style={inputStyle}>{["All","Critical","Warning","Info"].map(c=><option key={c} value={c}>{c}</option>)}</select>}
+      {mode==="inbox" && <select value={severity} onChange={e=>setSeverity(e.target.value)} style={inputStyle}>{severities.map(c=><option key={c} value={c}>{c}</option>)}</select>}
       {mode==="comments" && <><select value={commentScope} onChange={e=>setCommentScope(e.target.value)} style={inputStyle}>{["All comments","To me","By me","Unresolved"].map(c=><option key={c} value={c}>{c}</option>)}</select><select value={commentUser} onChange={e=>setCommentUser(e.target.value)} style={inputStyle}>{commentUsers.map(c=><option key={c} value={c}>{c}</option>)}</select></>}
-      {mode==="notifications" && <select value={notifStatus} onChange={e=>setNotifStatus(e.target.value)} style={inputStyle}>{["All","Unread","Read"].map(c=><option key={c} value={c}>{c}</option>)}</select>}
+      {mode==="notifications" && <select value={notifStatus} onChange={e=>setNotifStatus(e.target.value)} style={inputStyle}>{notifStatuses.map(c=><option key={c} value={c}>{c}</option>)}</select>}
       <input value={q} onChange={e=>setQ(e.target.value)} placeholder="search style, order, buyer, issue, user…" style={{ ...inputStyle, flex:"1 1 260px" }} />
       <span style={{ fontSize:10, color:"var(--muted-2)" }}>{mode==="comments"?filteredComments.length:mode==="notifications"?filteredNotifications.length:mode==="errors"?(errorLog||[]).length:mode==="changes"?(auditRows||[]).length:filtered.length} shown</span>
     </div>
@@ -1536,15 +1586,16 @@ function EntryLogView({ auditRows, auditBusy, loadAuditRows, errorLog, clearErro
   const ts=(t)=>{ try{ const d=new Date(t); return d.toLocaleDateString(undefined,{day:"2-digit",month:"short",year:"numeric"})+" "+d.toLocaleTimeString(undefined,{hour:"2-digit",minute:"2-digit"}); }catch(e){ return ""; } };
   const label=(c)=> colLabelOf?colLabelOf(c):c;
   const cutoff=days==="all"?null:(Date.now()-Number(days||30)*86400000);
-  const rows=(auditRows||[]).filter(r=>{
+  const auditMatchExcept=(r,except)=>{
     if(cutoff && new Date(r.created_at).getTime()<cutoff) return false;
-    if(user!=="All" && String(r.actor_name||"")!==user) return false;
-    if(field!=="All" && String(r.field||"")!==field) return false;
+    if(except!=="user" && user!=="All" && String(r.actor_name||"")!==user) return false;
+    if(except!=="field" && field!=="All" && String(r.field||"")!==field) return false;
     const hay=[r.style_no,r.style_id,label(r.col),r.col,r.field,r.old_val,r.new_val,r.actor_name].join(" ").toLowerCase();
     return !q || hay.includes(q.toLowerCase());
-  });
-  const users=["All",...[...new Set((auditRows||[]).map(r=>r.actor_name).filter(Boolean))].sort()];
-  const fields=["All",...[...new Set((auditRows||[]).map(r=>r.field).filter(Boolean))].sort()];
+  };
+  const rows=(auditRows||[]).filter(r=>auditMatchExcept(r,null));
+  const users=["All",...[...new Set((auditRows||[]).filter(r=>auditMatchExcept(r,"user")).map(r=>r.actor_name).filter(Boolean))].sort()];
+  const fields=["All",...[...new Set((auditRows||[]).filter(r=>auditMatchExcept(r,"field")).map(r=>r.field).filter(Boolean))].sort()];
   const exportEntries=()=>{ const data=rows.map(r=>({"Time":ts(r.created_at),"User":r.actor_name||"","Style":r.style_no||r.style_id||"","Field / Stage":label(r.col),"Action Type":r.field||"","Old Value":r.old_val||"","New Value":r.new_val||""})); if(!data.length){ alert("No entry log rows to export."); return; } const ws=XLSX.utils.json_to_sheet(data); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Entry Log"); XLSX.writeFile(wb,"entry_log_"+iso(TODAY)+".xlsx"); };
   const exportErrors=()=>{ const data=(errorLog||[]).map(e=>({"Time":ts(e.at),"Area":e.area||"","Error":e.msg||"","Extra":e.extra||""})); if(!data.length){ alert("No errors to export."); return; } const ws=XLSX.utils.json_to_sheet(data); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"Error Log"); XLSX.writeFile(wb,"error_log_"+iso(TODAY)+".xlsx"); };
   const card={ background:"var(--surface)", border:"1px solid var(--toolbar-line)", borderRadius:14, boxShadow:"var(--card-shadow)" };
@@ -2216,10 +2267,11 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   const baseItems=items||[];
   const escalationRows=includeEsc?baseItems.filter(t=>t.overdue&&t.escalationOwner).map(t=>({ ...t, todoType:"Escalation", activity:`Escalate: ${t.activity}`, owner:t.owner, originalActivity:t.activity })):[];
   const displayItems=[...baseItems.map(t=>({ ...t, todoType:"Activity" })), ...escalationRows];
-  const distinct=(field)=>{ const s=new Set(); displayItems.forEach(t=>{ const v=t[field]; if(v) s.add(v); }); return [...s].sort(); };
-  const orders=distinct("orderNo"), juniors=distinct("junior"), activities=distinct("activity"), branches=distinct("branch"), owners=distinct("owner"), escOwners=distinct("escalationOwner"), types=distinct("todoType");
   const phaseMatch=(t,phase)=>{ if(!phase) return true; const k=t.key||""; if(phase==="Pre-Fit") return k==="techpack"; if(phase==="Fit / Print") return ["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"].includes(k); if(phase==="Lab Dip") return ["labDip","labAppr"].includes(k); if(phase==="Fabric IH") return k==="fabricIH"; if(phase==="PP / Prod") return ["ppSample","ppAppr","prodFile"].includes(k); return true; };
-  const pass=(t)=> phaseMatch(t,tf.phase) && (!tf.priority||(tf.priority==="Overdue"?t.overdue:!t.overdue)) && (!tf.todoType||t.todoType===tf.todoType) && (!tf.orderNo||t.orderNo===tf.orderNo) && (!tf.junior||t.junior===tf.junior) && (!tf.activity||t.activity===tf.activity) && (!tf.branch||t.branch===tf.branch) && (!tf.owner||t.owner===tf.owner) && (!tf.escalationOwner||t.escalationOwner===tf.escalationOwner);
+  const passExcept=(t,except)=> (except==="phase"||phaseMatch(t,tf.phase)) && (except==="priority"||!tf.priority||(tf.priority==="Overdue"?t.overdue:!t.overdue)) && (except==="todoType"||!tf.todoType||t.todoType===tf.todoType) && (except==="orderNo"||!tf.orderNo||t.orderNo===tf.orderNo) && (except==="junior"||!tf.junior||t.junior===tf.junior) && (except==="activity"||!tf.activity||t.activity===tf.activity) && (except==="branch"||!tf.branch||t.branch===tf.branch) && (except==="owner"||!tf.owner||t.owner===tf.owner) && (except==="escalationOwner"||!tf.escalationOwner||t.escalationOwner===tf.escalationOwner);
+  const pass=(t)=>passExcept(t,null);
+  const distinct=(field)=>{ const vals=new Set(); displayItems.forEach(t=>{ if(!passExcept(t,field)) return; if(field==="priority") vals.add(t.overdue?"Overdue":"Upcoming"); else { const v=t[field]; if(v) vals.add(v); } }); return [...vals].sort(); };
+  const orders=distinct("orderNo"), juniors=distinct("junior"), activities=distinct("activity"), branches=distinct("branch"), owners=distinct("owner"), escOwners=distinct("escalationOwner"), types=distinct("todoType"), priorities=distinct("priority");
   const shown=displayItems.filter(pass);
   const overdue=shown.filter(t=>t.overdue), upcoming=shown.filter(t=>!t.overdue);
   const anyF=Object.values(tf).some(Boolean);
@@ -2227,7 +2279,7 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   const set=(k,v)=>{ const upd=f=>({ ...(f||{}), [k]:v||undefined }); setTf(upd); setFilter&&setFilter(upd); };
   const hsel=(w,k,opts,first)=>(<select value={tf[k]||""} onChange={e=>set(k,e.target.value)} onClick={e=>e.stopPropagation()} style={{ width:w, fontFamily:"inherit", fontSize:9, padding:"2px 1px", border:"1px solid "+(tf[k]?"var(--accent)":"var(--line-2)"), background:tf[k]?"var(--accent-tint)":"var(--surface)" }}><option value="">{first}</option>{opts.map(o=>(<option key={o} value={o}>{o}</option>))}</select>);
   const head=(<div style={{ display:"flex", alignItems:"flex-end", gap:10, padding:"6px 12px 4px", borderBottom:"2px solid var(--ink)" }}>
-    {hsel(COLW.pri,"priority",["Overdue","Upcoming"],"Priority")}
+    {hsel(COLW.pri,"priority",priorities,"Priority")}
     {hsel(COLW.type,"todoType",types,"Type")}
     {hsel(COLW.ord,"orderNo",orders,"Order")}
     <span style={{ width:COLW.sty, fontSize:9, fontWeight:700, textTransform:"uppercase", color:"#8a857a" }}>Style / Colour</span>
