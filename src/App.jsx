@@ -4,7 +4,7 @@ import * as XLSX from "xlsx";
 import { createPortal } from "react-dom";
 import { supabase } from "./supabaseClient";
 
-/* MERCH TRACKER — compact grid, v11 UI polish: clean pills + calmer settings */
+/* MERCH TRACKER — v30: temporary/default views, management-readable exports, timeline/Gantt */
 
 const FONT = `@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;800&family=JetBrains+Mono:wght@400;500;700&display=swap');`;
 const THEME_CSS = `
@@ -283,6 +283,15 @@ const pickReportSheets=(reportName,sheets,mode)=>{
 };
 const safeSheetName=(name)=>String(name||"Sheet").slice(0,31).replace(/[\\/?*\[\]:]/g," ");
 const safeFilePart=(name)=>String(name||"report").toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"").slice(0,60)||"report";
+const TRACKER_VIEW_SETTING_ID="tracker_views";
+const DEFAULT_NAMED_TRACKER_VIEWS=[
+  { name:"Management View", shared:true, state:{ columnView:"management", hidden:null, statusFilter:"All", ownerFilter:"All", archiveView:"active", savedView:"", search:"", searchCol:"auto", activityFilter:null, colFilters:{}, sort:{ col:null, dir:1 }, freezeN:1 } },
+  { name:"Junior Merchandiser View", shared:true, state:{ columnView:"merchant", hidden:null, statusFilter:"All", ownerFilter:"All", archiveView:"active", savedView:"", search:"", searchCol:"auto", activityFilter:null, colFilters:{}, sort:{ col:null, dir:1 }, freezeN:1 } },
+  { name:"Buyer Approval View", shared:true, state:{ columnView:"buyer", hidden:null, statusFilter:"All", ownerFilter:"Buyer", archiveView:"active", savedView:"buyerPending", search:"", searchCol:"auto", activityFilter:null, colFilters:{}, sort:{ col:"delivery", dir:1 }, freezeN:1 } },
+  { name:"Production Follow-up View", shared:true, state:{ columnView:"store", hidden:null, statusFilter:"At Risk", ownerFilter:"All", archiveView:"active", savedView:"fabricPending", search:"", searchCol:"auto", activityFilter:null, colFilters:{}, sort:{ col:"fabricCD", dir:1 }, freezeN:1 } },
+  { name:"My To-Do View", shared:true, state:{ columnView:"custom", hidden:null, statusFilter:"At Risk", ownerFilter:"All", archiveView:"active", savedView:"dueThisWeek", search:"", searchCol:"auto", activityFilter:null, colFilters:{}, sort:{ col:"delivery", dir:1 }, freezeN:1 } },
+];
+const normalizeTrackerViews=(views)=>{ const arr=Array.isArray(views)?views:[]; const byName=new Map(); DEFAULT_NAMED_TRACKER_VIEWS.forEach(v=>byName.set(v.name,v)); arr.forEach(v=>{ if(v&&v.name) byName.set(v.name,{...v, state:{...(v.state||{})}}); }); return [...byName.values()]; };
 const appendOneSheet=(wb,label,data)=>{
   const rows=Array.isArray(data)?data:[];
   const sheetRows=rows.length?rows:[{"No data":""}];
@@ -378,6 +387,8 @@ function MerchTracker({ me, onSignOut }){
   const [ownerFilter,setOwnerFilter]=useState(PF.ownerFilter||"All");
   const [savedView,setSavedView]=useState(PF.savedView||"");
   const [columnView,setColumnView]=useState(()=>{ try{ return localStorage.getItem("mt_column_view")||"custom"; }catch(e){ return "custom"; } });
+  const [sharedViews,setSharedViews]=useState(DEFAULT_NAMED_TRACKER_VIEWS);
+  const [activeNamedView,setActiveNamedView]=useState("");
   const [archiveView,setArchiveView]=useState(PF.archiveView||"active");
   const [activityFilter,setActivityFilter]=useState(PF.activityFilter||null);
   const [followFilter,setFollowFilter]=useState(PF.followFilter||false);
@@ -452,6 +463,7 @@ function MerchTracker({ me, onSignOut }){
     cmData.forEach(r=>{ if(r.fill||r.note) SR.meta[r.style_id+":"+r.col]=JSON.stringify({ style_id:r.style_id, col:r.col, fill:r.fill||null, note:r.note||null }); });
     savedRef.current=SR;
     try{ const cfgRes=await supabase.from("app_settings").select("data").eq("id","global").maybeSingle(); if(cfgRes&&cfgRes.data&&cfgRes.data.data){ const d=cfgRes.data.data; setCfg({ ...DEFAULT_CFG, ...d, leads:{...DEFAULT_CFG.leads,...(d.leads||{})}, stageOwners:{...DEFAULT_CFG.stageOwners,...(d.stageOwners||{})}, rework:{...DEFAULT_CFG.rework,...(d.rework||{})}, upcoming:{...DEFAULT_CFG.upcoming,...(d.upcoming||{})}, labels:{...(d.labels||{})} }); } }catch(e){ /* settings table optional */ }
+    try{ const tvRes=await supabase.from("app_settings").select("data").eq("id",TRACKER_VIEW_SETTING_ID).maybeSingle(); const views=normalizeTrackerViews(tvRes&&tvRes.data&&tvRes.data.data&&tvRes.data.data.views); setSharedViews(views); }catch(e){ setSharedViews(DEFAULT_NAMED_TRACKER_VIEWS); }
     const f={}, n={}; cmData.forEach(r=>{ if(r.fill) f[`${r.style_id}:${r.col}`]=r.fill; if(r.note) n[`${r.style_id}:${r.col}`]=r.note; });
     setFills(f); setNotes(n); try{ const [cmR,prR]=await Promise.all([ supabase.from("comments").select("*").order("created_at"), supabase.from("profiles").select("id,name,role,email") ]); const cg={}; (cmR.data||[]).forEach(r=>{ const ck=r.style_id+":"+r.col; (cg[ck]=cg[ck]||[]).push(r); }); setComments(cg); setTeam(prR.data||[]); const nR=await supabase.from("notifications").select("*").eq("user_id",me.id).order("created_at",{ascending:false}).limit(100); setInbox(nR.data||[]); const fR=await supabase.from("style_follows").select("style_id").eq("user_id",me.id); setFollows(new Set((fR.data||[]).map(r=>r.style_id))); }catch(e){} loadedRef.current=true; flash();
   }catch(e){ logAppError("load failed",e); } };
@@ -569,7 +581,7 @@ function MerchTracker({ me, onSignOut }){
   const chaseLabel=(owner)=>String(owner||"—");
   const SAVED_VIEWS=[ ["","Saved view: none"], ["overdue","Overdue"], ["dueThisWeek","Due this week"], ["buyerPending","Buyer approval pending"], ["fabricPending","Fabric pending"], ["ppPending","PP pending"], ["deliveryRisk","Delivery risk"], ["following","Followed styles"], ["rework","Rejected / rework"], ["released","Released"] ];
   const anyFilter = statusFilter!=="All"||ownerFilter!=="All"||!!search||Object.keys(colFilters).length>0||!!activityFilter||followFilter||!!savedView;
-  const resetFilters=()=>{ setStatusFilter("All"); setOwnerFilter("All"); setSearch(""); setColFilters({}); setActivityFilter(null); setSavedView(""); };
+  const resetFilters=()=>{ setStatusFilter("All"); setOwnerFilter("All"); setSearch(""); setColFilters({}); setActivityFilter(null); setSavedView(""); setActiveNamedView(""); };
   const snapCurrent=()=>setViewSnap({ statusFilter, ownerFilter, search, colFilters, activityFilter, savedView });
   const clearAllFilters=()=>{ resetFilters(); setViewSnap(null); };
   const restoreView=()=>{ if(!viewSnap) return; setStatusFilter(viewSnap.statusFilter); setOwnerFilter(viewSnap.ownerFilter); setSearch(viewSnap.search); setColFilters(viewSnap.colFilters); setActivityFilter(viewSnap.activityFilter); setSavedView(viewSnap.savedView||""); setViewSnap(null); };
@@ -598,6 +610,29 @@ function MerchTracker({ me, onSignOut }){
     buyer:{ label:"Buyer follow-up view", show:["orderNo","family","colour","brand","buyer","delivery","overall","fitAppr","artAppr","soAppr","labAppr","ppAppr","proj","chase","remarks"] }
   };
   const applyColumnView=(view)=>{ setColumnView(view); setColsOpen(false); if(view==="custom") return; const all=[...INFO_COLS.map(c=>c.key),...STAGE_KEYS,"remarks"]; const spec=ROLE_VIEW_PRESETS[view]; if(!spec||!spec.show){ setHidden(new Set(["extra1","extra2"])); return; } const keep=new Set(spec.show); setHidden(new Set(all.filter(k=>!keep.has(k)))); setFreezeN(1); };
+
+  const currentViewState=()=>({
+    search, searchCol, statusFilter, ownerFilter, archiveView, activityFilter, colFilters, savedView, columnView,
+    hidden:[...hidden], sort, freezeN
+  });
+  const applyTrackerViewState=(state, name="")=>{
+    const st=state||{};
+    setSearch(st.search||""); setSearchCol(st.searchCol||"auto"); setStatusFilter(st.statusFilter||"All"); setOwnerFilter(st.ownerFilter||"All");
+    setArchiveView(st.archiveView||"active"); setActivityFilter(st.activityFilter||null); setColFilters(st.colFilters||{}); setSavedView(st.savedView||"");
+    if(st.columnView){ setColumnView(st.columnView); }
+    if(Array.isArray(st.hidden)) setHidden(new Set(st.hidden)); else if(st.columnView && st.columnView!=="custom") applyColumnView(st.columnView);
+    setSort(st.sort&&st.sort.col?st.sort:{ col:null, dir:1 }); setFreezeN(Number(st.freezeN)||1); setActiveNamedView(name||""); setViewSnap(null);
+  };
+  const saveSharedTrackerView=async()=>{
+    if(!canAdmin(role)){ alert("Only Management / Sr Merchant can save or overwrite shared default views. Your current filters are still temporary for you only."); return; }
+    const name=(window.prompt("Save current filters/columns as default shared view:", activeNamedView||"Management View")||"").trim();
+    if(!name) return;
+    const next=normalizeTrackerViews(sharedViews.filter(v=>v.name!==name).concat([{ name, shared:true, updatedAt:new Date().toISOString(), updatedBy:me?.name||me?.email||"", state:currentViewState() }]));
+    setSharedViews(next); setActiveNamedView(name);
+    try{ const { error }=await supabase.from("app_settings").upsert({ id:TRACKER_VIEW_SETTING_ID, data:{ views:next } }); if(error) throw error; flash(); }
+    catch(e){ logAppError("save shared view failed",e); alert("View saved locally in this browser, but shared save failed: "+(e.message||e)); }
+  };
+  const resetTemporaryView=()=>{ clearAllFilters(); setSort({ col:null, dir:1 }); setActiveNamedView(""); };
 
   // ---- freeze: cumulative left offsets for frozen leading columns ----
   // IMPORTANT: every frozen cell must use the same explicit width and left offset.
@@ -777,7 +812,7 @@ function MerchTracker({ me, onSignOut }){
       </div>
 
       <div style={{ display:"flex", gap:0, padding:"0 22px", background:"var(--ink)", borderBottom:"1px solid #3a362e" }}>
-        {[["tracker","Tracker"],["dashboard","Dashboard"],["management","Management"],["todo","To-Do"],["entrylog","Entry Log"],["settings","Settings"],["help","Help"]].map(([k,lab])=>(<button key={k} onClick={(e)=>{ e.stopPropagation(); setTab(k); if(k==="entrylog") loadAuditRows(); }} style={{ fontFamily:"'Archivo',sans-serif", fontWeight:700, fontSize:12, letterSpacing:0.3, padding:"9px 16px", cursor:"pointer", border:"none", borderBottom:tab===k?"3px solid var(--accent)":"3px solid transparent", background:"transparent", color:tab===k?"var(--bg)":"#9a958c" }}>{lab}{k==="todo"&&todoItems.length?` · ${todoItems.length}`:k==="entrylog"&&errorLog.length?` · ${errorLog.length}`:""}</button>))}
+        {[["tracker","Tracker"],["dashboard","Dashboard"],["management","Management"],["timeline","Timeline"],["todo","To-Do"],["entrylog","Entry Log"],["settings","Settings"],["help","Help"]].map(([k,lab])=>(<button key={k} onClick={(e)=>{ e.stopPropagation(); setTab(k); if(k==="entrylog") loadAuditRows(); }} style={{ fontFamily:"'Archivo',sans-serif", fontWeight:700, fontSize:12, letterSpacing:0.3, padding:"9px 16px", cursor:"pointer", border:"none", borderBottom:tab===k?"3px solid var(--accent)":"3px solid transparent", background:"transparent", color:tab===k?"var(--bg)":"#9a958c" }}>{lab}{k==="todo"&&todoItems.length?` · ${todoItems.length}`:k==="entrylog"&&errorLog.length?` · ${errorLog.length}`:""}</button>))}
       </div>
 
       {tab==="help" && (<div style={{ padding:"18px 22px 36px" }}>
@@ -805,7 +840,7 @@ function MerchTracker({ me, onSignOut }){
 
           <div style={{ padding:18, fontSize:12, lineHeight:1.6 }}>
             {helpTab==="guide" && <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))", gap:12 }}>
-              <div style={{ border:"1px solid var(--line-2)", borderRadius:12, padding:14, background:"#fffdf8" }}><h3 style={{ margin:"0 0 8px", fontFamily:"'Archivo',sans-serif" }}>What each tab is for</h3><ul style={{ margin:"0 0 0 18px", padding:0 }}><li><b>Tracker:</b> live working sheet.</li><li><b>Dashboard:</b> daily operational risk and bottlenecks.</li><li><b>Management:</b> management analytics and actual performance.</li><li><b>To-Do:</b> overdue and upcoming actions.</li><li><b>Settings:</b> lead days, views and chase labels.</li><li><b>Help:</b> this guide.</li></ul></div>
+              <div style={{ border:"1px solid var(--line-2)", borderRadius:12, padding:14, background:"#fffdf8" }}><h3 style={{ margin:"0 0 8px", fontFamily:"'Archivo',sans-serif" }}>What each tab is for</h3><ul style={{ margin:"0 0 0 18px", padding:0 }}><li><b>Tracker:</b> live working sheet.</li><li><b>Dashboard:</b> daily operational risk and bottlenecks.</li><li><b>Management:</b> management analytics and actual performance.</li><li><b>Timeline:</b> visual plan / revised / actual Gantt by style.</li><li><b>To-Do:</b> overdue and upcoming actions.</li><li><b>Settings:</b> lead days, views and chase labels.</li><li><b>Help:</b> this guide.</li></ul></div>
               <div style={{ border:"1px solid var(--line-2)", borderRadius:12, padding:14, background:"#fffdf8" }}><h3 style={{ margin:"0 0 8px", fontFamily:"'Archivo',sans-serif" }}>Daily use flow</h3><ol style={{ margin:"0 0 0 18px", padding:0 }}><li>Open a saved view such as My Overdue or Buyer Approval Pending.</li><li>Check Overall / Chase / To-Do.</li><li>Double-click the correct cell and update the date.</li><li>Add comments or remarks where a delay needs explanation.</li><li>Use Review to audit changes and comments.</li></ol></div>
               <div style={{ border:"1px solid var(--line-2)", borderRadius:12, padding:14, background:"#fffdf8" }}><h3 style={{ margin:"0 0 8px", fontFamily:"'Archivo',sans-serif" }}>Safe habits</h3><ul style={{ margin:"0 0 0 18px", padding:0 }}><li>Use staging before replacing live app files.</li><li>Do not bulk upload without checking the preview.</li><li>Use revised dates instead of changing actual dates when plans move.</li><li>Use comments for buyer remarks and delay reasons.</li></ul></div>
             </div>}
@@ -922,6 +957,9 @@ function MerchTracker({ me, onSignOut }){
         <div style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap", background:"var(--toolbar-bg)", border:"1px solid var(--toolbar-line)", borderRadius:6, padding:"5px 7px", boxShadow:"0 1px 0 rgba(0,0,0,0.03)" }}>
           <span style={{ fontSize:9, fontWeight:800, color:"var(--muted-2)", textTransform:"uppercase", letterSpacing:0.4, marginRight:2 }}>View</span>
         <select value={columnView} onChange={e=>applyColumnView(e.target.value)} onClick={e=>e.stopPropagation()} title="role-based column views" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 8px", cursor:"pointer", border:"1px solid var(--ink)", background:columnView==="custom"?"var(--surface)":"#eef6ff", fontWeight:columnView==="custom"?400:700 }}><option value="custom">View: Custom</option>{Object.entries(ROLE_VIEW_PRESETS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select>
+        <select value={activeNamedView} onChange={e=>{ const name=e.target.value; const v=(sharedViews||[]).find(x=>x.name===name); if(v) applyTrackerViewState(v.state,name); else setActiveNamedView(""); }} onClick={e=>e.stopPropagation()} title="shared default views saved in app_settings; loading does not affect other users" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 8px", cursor:"pointer", border:"1px solid "+(activeNamedView?"var(--accent)":"var(--ink)"), background:activeNamedView?"var(--accent-tint)":"var(--surface)", fontWeight:activeNamedView?800:400 }}><option value="">Default view: choose</option>{(sharedViews||[]).map(v=><option key={v.name} value={v.name}>{v.name}</option>)}</select>
+        <button onClick={(e)=>{ e.stopPropagation(); saveSharedTrackerView(); }} title="save current filters/sort/columns as shared default view for everyone (Management/Senior only)" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 10px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)", fontWeight:700 }}>Save default</button>
+        <button onClick={(e)=>{ e.stopPropagation(); resetTemporaryView(); }} title="clear your temporary filters/sort only; this does not change shared data or other users" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 10px", cursor:"pointer", border:"1px solid var(--line-2)", background:"var(--surface)", color:"var(--muted-3)", fontWeight:700 }}>Reset temp</button>
         <div style={{ position:"relative" }}><button onClick={(e)=>{ e.stopPropagation(); finishEditing(); setColsOpen(o=>!o); setFillOpen(false); }} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 11px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)", display:"flex", alignItems:"center", gap:6 }}><Columns3 size={13}/> Columns {hidden.size>0?`(${hidden.size} hidden)`:""}</button>
           {colsOpen && (<div onClick={e=>e.stopPropagation()} style={{ position:"absolute", top:"100%", left:0, marginTop:4, zIndex:70, background:"var(--surface)", border:"1px solid var(--ink)", boxShadow:"4px 4px 0 var(--ink)", padding:10, width:230, maxHeight:300, overflowY:"auto" }}><div style={{ fontSize:10, fontWeight:700, marginBottom:6 }}>Show / hide columns</div><button onClick={(e)=>{ e.stopPropagation(); fitAllCols(); }} style={{ ...chip, width:"100%", marginBottom:8 }}>↔ Auto-fit widths to content</button>{[...INFO_COLS,{key:"remarks",label:"Remarks / Delays"},...STAGES].map(col=>(<label key={col.key} style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, padding:"2px 0", cursor:"pointer" }}><input type="checkbox" checked={!hidden.has(col.key)} onChange={()=>setHidden(p=>{ const n=new Set(p); n.has(col.key)?n.delete(col.key):n.add(col.key); return n; })}/><span style={{ flex:1 }}>{colLabel(col)}</span>{(col.key==="extra1"||col.key==="extra2") && canAdmin(role) && <button onClick={(e)=>{ e.stopPropagation(); e.preventDefault(); const nv=window.prompt("Rename this column header:", colLabel(col)); if(nv!=null){ const t=nv.trim(); setCfg(p=>({ ...p, labels:{ ...(p.labels||{}), [col.key]: t||undefined } })); } }} title="rename header (Management / Senior)" style={{ fontSize:9, padding:"1px 5px", cursor:"pointer", border:"1px solid var(--line-2)", background:"var(--surface)" }}>rename</button>}</label>))}<div style={{ fontSize:8, color:"var(--muted-1)", marginTop:8, lineHeight:1.4 }}>Your column view is saved on this device.</div>{hidden.size>0 && <button onClick={()=>setHidden(new Set())} style={{ ...chip, marginTop:6, width:"100%" }}>Reset to default (show all)</button>}</div>)}
         </div>
@@ -985,6 +1023,7 @@ function MerchTracker({ me, onSignOut }){
         if(activityFilter) chip("ac","activity: "+((STAGES.find(x=>x.key===activityFilter)||{}).label||activityFilter), ()=>setActivityFilter(null));
         if(followFilter) chip("fo","following only", ()=>setFollowFilter(false));
         if(savedView) chip("sv","saved: "+((SAVED_VIEWS.find(x=>x[0]===savedView)||[])[1]||savedView), ()=>setSavedView(""));
+        if(activeNamedView) chip("nv","default view: "+activeNamedView, ()=>setActiveNamedView(""));
         if(archiveView!=="active") chip("ar","view: "+archiveView, ()=>setArchiveView("active"));
         Object.keys(colFilters||{}).forEach(col=>{ const lab=(INFO_COLS.find(c=>c.key===col)||{}).label||(STAGES.find(x=>x.key===col)||{}).label||col; chip("c-"+col, lab+": "+((colFilters[col]||[]).length)+" sel", ()=>setColFilters(f=>{ const n={...f}; delete n[col]; return n; })); });
         if(!chips.length) return null;
@@ -1120,11 +1159,63 @@ function MerchTracker({ me, onSignOut }){
 
       {tab==="dashboard" && <OperationalDashboardView computed={computed} todoItems={todoItems} applyDrill={applyDrill} drillTodo={(obj)=>{ setTodoFilter(obj); setTab("todo"); }}/>}
       {tab==="management" && <ManagementDashboardView computed={computed} todoItems={todoItems} applyDrill={applyDrill} drillTodo={(obj)=>{ setTodoFilter(obj); setTab("todo"); }}/>}
+      {tab==="timeline" && <TimelineGanttView computed={computed} applyDrill={applyDrill} />}
       {tab==="todo" && <TodoView items={todoItems} filter={todoFilter} setFilter={setTodoFilter} onJump={(id,key)=>{ snapCurrent(); resetFilters(); setTab("tracker"); requestAnimationFrame(()=>setTimeout(()=>jumpToEnter(id,key),60)); }}/>}
       {tab==="entrylog" && <EntryLogView auditRows={auditRows} auditBusy={auditBusy} loadAuditRows={loadAuditRows} errorLog={errorLog} clearErrorLog={()=>setErrorLog([])} colLabelOf={colLabelOf} onJump={(id,col)=>{ setTab("tracker"); setTimeout(()=>{ setSel({id:Number(id),col}); setFocus(null); scrollToCell(Number(id),col); },60); }}/>}
       {tab==="settings" && <SettingsView cfg={cfg} setCfg={setCfg} canEdit={canAdmin(role)}/>}
     </div>
   );
+}
+
+
+function TimelineGanttView({ computed, applyDrill }){
+  const [q,setQ]=useState("");
+  const [owner,setOwner]=useState("All");
+  const [tone,setTone]=useState("All");
+  const [mode,setMode]=useState("plan");
+  const fmtD=(d)=> d?d.toLocaleDateString("en-GB",{day:"2-digit",month:"short"}):"";
+  const allOwners=["All",...Array.from(new Set((computed||[]).map(({s})=>s.owner).filter(Boolean))).sort()];
+  const rows=(computed||[]).filter(({s,c})=>{
+    const qq=q.toLowerCase();
+    const hit=!qq || [s.styleNo,s.orderNo,s.family,s.colour,s.brand,s.buyer,s.owner].some(v=>String(v||"").toLowerCase().includes(qq));
+    const ow=owner==="All"||s.owner===owner;
+    const tn=tone==="All"||(tone==="At Risk"&&(c.tone==="late"||c.tone==="warn"))||(tone==="Released"&&c.released)||(tone==="Open"&&!c.released);
+    return hit&&ow&&tn;
+  }).slice(0,120);
+  const dates=[]; rows.forEach(({s,c})=>{ const od=parse(s.ordRec), dl=parse(s.delivery); if(od) dates.push(od); if(dl) dates.push(dl); (c.stages||[]).forEach(r=>{ if(r.plan) dates.push(r.plan); if(r.rev) dates.push(r.rev); if(r.actual) dates.push(r.actual); }); });
+  let min=dates.length?new Date(Math.min(...dates.map(d=>d.getTime()))):TODAY; let max=dates.length?new Date(Math.max(...dates.map(d=>d.getTime()))):addWorkdays(TODAY,30);
+  min=addWorkdays(min,-3); max=addWorkdays(max,3); const span=Math.max(1,netWorkdays(min,max)||1);
+  const x=(d)=>{ if(!d) return 0; const n=Math.max(0,Math.min(span,netWorkdays(min,d)||0)); return (n/span)*100; };
+  const toneBg=(t)=>t==="late"?"var(--tint-late)":t==="warn"?"var(--tint-warn)":t==="done"?"#efefea":"var(--tint-ok)";
+  const toneFg=(t)=>t==="late"?"var(--fg-late)":t==="warn"?"var(--fg-warn)":t==="done"?"var(--muted-4)":"var(--fg-ok)";
+  const exportRows=rows.map(({s,c})=>({"Order No":s.orderNo,"Style No":s.styleNo,"Family":s.family,"Colour":s.colour,"Junior":s.owner,"Delivery":s.delivery,"Status":c.status,"Projected Release":c.projRelease?fmtD(c.projRelease):"","Next Pending":c.nextPending?c.nextPending.label:"","Management Reading":c.released?"Released":(c.tone==="late"?"Timeline shows current delivery risk / overdue stage.":"Timeline is within current plan or watch zone.")}));
+  const doExport=()=>{ const wb=XLSX.utils.book_new(); appendOneSheet(wb,"Timeline",exportRows); XLSX.writeFile(wb,"timeline_gantt_"+iso(TODAY)+".xlsx"); };
+  return (<div style={{ padding:"16px 22px 36px", maxWidth:1360 }}>
+    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:16, flexWrap:"wrap", marginBottom:12 }}>
+      <div><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:23 }}>Timeline / Gantt View</div><div style={{ fontSize:11.5, color:"var(--muted-2)", marginTop:4, maxWidth:760, lineHeight:1.45 }}>Visual style-wise plan, revised commitment and actual completion. Limited to first 120 filtered styles for speed; use search/owner/status to narrow.</div></div>
+      <button onClick={doExport} style={{ fontFamily:"inherit", fontSize:11, fontWeight:800, padding:"7px 11px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)" }}>⬇ Export Timeline</button>
+    </div>
+    <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center", marginBottom:12, background:"var(--toolbar-bg)", border:"1px solid var(--toolbar-line)", borderRadius:10, padding:10 }}>
+      <input value={q} onChange={e=>setQ(e.target.value)} placeholder="search style / order / colour…" style={{ fontFamily:"inherit", fontSize:12, padding:"7px 9px", border:"1px solid var(--ink)", minWidth:220 }}/>
+      <select value={owner} onChange={e=>setOwner(e.target.value)} style={{ fontFamily:"inherit", fontSize:11, padding:"7px 9px", border:"1px solid var(--ink)", background:"var(--surface)" }}>{allOwners.map(o=><option key={o} value={o}>Owner: {o}</option>)}</select>
+      <select value={tone} onChange={e=>setTone(e.target.value)} style={{ fontFamily:"inherit", fontSize:11, padding:"7px 9px", border:"1px solid var(--ink)", background:"var(--surface)" }}>{["All","At Risk","Open","Released"].map(o=><option key={o} value={o}>Status: {o}</option>)}</select>
+      <div style={{ display:"flex", border:"1px solid var(--ink)" }}>{[["plan","Plan bars"],["actual","Actual dots"]].map(([k,l])=><button key={k} onClick={()=>setMode(k)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"7px 10px", border:"none", borderRight:k==="plan"?"1px solid var(--ink)":"none", background:mode===k?"var(--ink)":"var(--surface)", color:mode===k?"var(--bg)":"var(--ink)", cursor:"pointer" }}>{l}</button>)}</div>
+      <span style={{ marginLeft:"auto", fontSize:10, color:"var(--muted-2)" }}>{rows.length} style(s) shown · {fmtD(min)} to {fmtD(max)}</span>
+    </div>
+    <div style={{ border:"1px solid var(--line-2)", borderRadius:14, overflow:"hidden", background:"var(--surface)" }}>
+      <div style={{ display:"grid", gridTemplateColumns:"250px 1fr 96px", gap:0, background:"var(--ink)", color:"var(--bg)", fontSize:10, fontWeight:800, textTransform:"uppercase", letterSpacing:0.4 }}><div style={{ padding:9 }}>Style</div><div style={{ padding:9, position:"relative" }}><span>{fmtD(min)}</span><span style={{ position:"absolute", left:"50%", transform:"translateX(-50%)" }}>{fmtD(addWorkdays(min,Math.round(span/2)))}</span><span style={{ float:"right" }}>{fmtD(max)}</span></div><div style={{ padding:9, textAlign:"right" }}>Status</div></div>
+      <div style={{ maxHeight:"calc(100vh - 270px)", overflow:"auto" }}>{rows.map(({s,c})=>{ const od=parse(s.ordRec), dl=parse(s.delivery); const barL=x(od), barR=x(c.projRelease||dl); const late=c.tone==="late"||String(c.status).toLowerCase().includes("risk"); return <button key={s.id} onClick={()=>applyDrill({ search:s.styleNo, status:"All" })} style={{ width:"100%", display:"grid", gridTemplateColumns:"250px 1fr 96px", border:"none", borderBottom:"1px solid var(--line-3)", background:"transparent", cursor:"pointer", padding:0, fontFamily:"inherit", textAlign:"left" }}>
+        <div style={{ padding:"8px 10px", minWidth:0 }}><div style={{ fontWeight:900, fontSize:11, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{s.styleNo}</div><div style={{ fontSize:9, color:"var(--muted-2)", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{s.orderNo} · {s.family} · {s.colour}</div></div>
+        <div style={{ position:"relative", height:44, margin:"0 10px" }}>
+          <span style={{ position:"absolute", left:`${barL}%`, right:`${Math.max(0,100-barR)}%`, top:17, height:10, borderRadius:999, background:late?"var(--tint-late)":"var(--tint-ok)", border:"1px solid rgba(31,31,29,0.08)" }}/>
+          {(c.stages||[]).filter(r=>r.plan||r.rev||r.actual).map(r=>{ const d=mode==="actual"?(r.actual||r.rev||r.plan):(r.rev||r.plan||r.actual); const done=!!r.actual; const xp=x(d); return <span key={r.key} title={`${r.label}: ${done?"actual ":(r.rev?"revised ":"plan ")}${fmtD(d)}`} style={{ position:"absolute", left:`calc(${xp}% - 4px)`, top:done?12:20, width:8, height:8, borderRadius:8, background:done?"var(--success)":(r.rev?"var(--revised)":"var(--muted-6)"), border:"1px solid var(--surface)" }}/>; })}
+          {dl&&<span title={`Delivery ${fmtD(dl)}`} style={{ position:"absolute", left:`calc(${x(dl)}% - 1px)`, top:8, bottom:8, width:2, background:"var(--danger)" }}/>}        
+        </div>
+        <div style={{ padding:"8px 10px", textAlign:"right" }}><span style={{ display:"inline-block", maxWidth:86, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", borderRadius:999, padding:"4px 7px", fontSize:9, fontWeight:900, background:toneBg(c.tone), color:toneFg(c.tone) }}>{c.status}</span><div style={{ fontSize:8.5, color:"var(--muted-2)", marginTop:3 }}>{c.nextPending?c.nextPending.label:"released"}</div></div>
+      </button>; })}{!rows.length&&<div style={{ padding:22, color:"var(--muted-2)", fontSize:12 }}>No styles match this timeline filter.</div>}</div>
+    </div>
+    <div style={{ marginTop:8, fontSize:10, color:"var(--muted-2)" }}>Legend: green dots = actual done, purple dots = revised dates, grey dots = auto plan, red vertical line = delivery date.</div>
+  </div>);
 }
 
 
@@ -1451,30 +1542,34 @@ function ManagementDashboardView({ computed, todoItems, applyDrill, drillTodo })
   const brandData=brandRows.map(r=>({"Buyer / Brand":r.label,"Completed Entries":r.n,"Late Count":r.lateN,"Avg Delay Days":r1(avg(r.delaySum,r.n)),"Avg Actual Time Days":r1(avg(r.durSum,r.durN)),"Worst Delay Days":r1(r.maxDelay)}));
   const delayData=worstDelays.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Department":r.dept,"Delay Days":r1(r.delay),"Duration Days":r.duration==null?"":r1(r.duration),"Due":fmt(r.due),"Actual":fmt(r.actual)}));
   const calcBreakup=delayRecords.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Stage Key":r.stageKey,"Department":r.dept,"Auto Plan Date":r.plan?fmt(r.plan):"","Revised Date":r.revised?fmt(r.revised):"","Due Date Used":fmt(r.due),"Actual Date":fmt(r.actual),"Start Date Used":r.start?fmt(r.start):"","Delay vs Due Days":r1(r.delay),"Delay vs Auto Plan Days":r.delayPlan==null?"":r1(r.delayPlan),"Actual vs Revised Days":r.delayRevised==null?"":r1(r.delayRevised),"Duration Days":r.duration==null?"":r1(r.duration),"Included in Avg Delay":"YES","Included in Avg Actual Time":r.duration==null?"NO - start date missing":"YES","Included in Revised Accuracy":r.delayRevised==null?"NO - no revised+actual":"YES"}));
-  const explainDelay=(r)=>{ const d=r1(r.delay); const dueKind=r.revised?"revised date":"auto plan date"; if(d>0) return `Actual was ${fmtDays(d)} late versus the ${dueKind}.`; if(d<0) return `Actual was ${fmtDays(Math.abs(d))} early versus the ${dueKind}.`; return `Actual matched the ${dueKind}.`; };
-  const actionFor=(r)=>{ const d=r1(r.delay); if(d>0) return "Review this style/stage with the responsible owner; use comments/history for reason."; if(r.delayRevised!=null && r.delayRevised>0) return "Revised date was also missed; review planning accuracy."; return "No delay action needed."; };
-  const managementDetailRows=delayRecords.map(r=>({
+  const explainDelay=(r)=>{ const d=r1(r.delay); const dueKind=r.revised?"revised commitment":"auto plan"; if(d>0) return `${r.style||"This style"} missed ${r.stage} by ${fmtDays(d)} versus the ${dueKind}.`; if(d<0) return `${r.stage} closed ${fmtDays(Math.abs(d))} early versus the ${dueKind}.`; return `${r.stage} closed on the ${dueKind}.`; };
+  const actionFor=(r,type="General")=>{ const d=r1(r.delay); if(type==="Buyer Approval") return d>0?"Buyer approval slipped. Follow up with buyer / brand, record reason in comments, and add buffer for repeat buyer delays.":"Buyer approval closed within plan; no escalation required."; if(type==="Stage Performance") return d>0?`Stage owner ${r.dept||"team"} to review lead-time and reason for ${r.stage} delay.`:"Keep current process; stage is closing within plan."; if(type==="Department Performance") return d>0?`Department ${r.dept||"team"} needs daily chase on open/repeat delays and capacity check.`:"No department escalation needed."; if(type==="Owner Delays") return d>0?`Review ${r.owner||"owner"}'s workload and pending styles; escalate if same owner repeats delays.`:"Owner closed this activity within plan."; if(type==="Buyer Brand Delays") return d>0?"Tighten buyer follow-up cadence and add future TNA buffer for this buyer/brand." : "Buyer/brand timing is acceptable for this activity."; if(type==="Worst Performing Styles") return d>0?"Prepare style recovery plan: latest blocker, revised commitment, responsible person, and next chase time." : "No recovery action needed for this stage."; if(type==="Revised vs Actual") return r.delayRevised>0?"Revised commitment was missed; ask for reason before accepting next revised date.":"Revised commitment held; planning accuracy is acceptable."; return d>0?"Review this style/stage with the responsible owner; use comments/history for reason." : "No delay action needed."; };
+  const detailRowsFor=(type,records=delayRecords)=>records.map(r=>({
+    "Report Context":type,
     "Style No":r.style||"", "Order No":r.order||"", "Buyer / Brand":r.buyer||"", "Junior / Owner":r.owner||"",
     "Stage / Activity":r.stage||"", "Department Responsible":r.dept||"",
     "Auto Plan":r.plan?fmt(r.plan):"", "Revised Plan":r.revised?fmt(r.revised):"", "Due Used":r.due?fmt(r.due):"", "Actual Done":r.actual?fmt(r.actual):"", "Start Used":r.start?fmt(r.start):"",
     "Actual Time Taken":r.duration==null?"Start date missing":fmtDays(r.duration),
     "Delay vs Due":fmtDays(r.delay), "Delay vs Original Plan":r.delayPlan==null?"":fmtDays(r.delayPlan), "Actual vs Revised":r.delayRevised==null?"No revised plan":fmtDays(r.delayRevised),
     "Result":r.delay>0?"Late":(r.delay<0?"Early":"On time"),
-    "How this number was calculated":`${r.stage}: due used = ${r.revised?"revised plan":"auto plan"}; delay = actual done - due used, counted in working days excluding Sundays.`,
-    "Management Reading":explainDelay(r),
-    "Suggested Action":actionFor(r)
+    "How this number was calculated":`${type}: ${r.stage} due used = ${r.revised?"revised plan":"auto plan"}. Delay = actual done (${fmt(r.actual)}) minus due used (${fmt(r.due)}), counted in working days excluding Sundays. Actual time = ${r.start?"actual done minus previous/order start date":"not calculated because start date is missing"}.`,
+    "Management Reading": type==="Buyer Approval" ? `${r.buyer||"Buyer"} approval for ${r.stage} on style ${r.style} ${r.delay>0?"is late and needs buyer follow-up":"closed within plan"}.` : type==="Stage Performance" ? `${r.stage} performance for style ${r.style}: ${explainDelay(r)}` : type==="Department Performance" ? `${r.dept||"Department"} handled ${r.stage} for ${r.style}; ${explainDelay(r)}` : type==="Owner Delays" ? `${r.owner||"Owner"} owns style ${r.style}; ${explainDelay(r)}` : type==="Buyer Brand Delays" ? `${r.buyer||"Buyer/Brand"} trend input: ${explainDelay(r)}` : type==="Worst Performing Styles" ? `This row explains one contributor to the style-level delay: ${r.stage} at ${fmtDays(r.delay)}.` : type==="Revised vs Actual" ? (r.delayRevised===0?"Revised plan was met.":(r.delayRevised>0?`Actual missed revised date by ${fmtDays(r.delayRevised)}.`:`Actual beat revised date by ${fmtDays(Math.abs(r.delayRevised))}.`)) : explainDelay(r),
+    "Suggested Action":actionFor(r,type)
   }));
+  const managementDetailRows=detailRowsFor("Management Summary",delayRecords);
   const revisedActualData=delayRecords.filter(r=>r.delayRevised!=null).map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Department":r.dept,"Auto Plan Date":r.plan?fmt(r.plan):"","Revised Date":fmt(r.revised),"Actual Date":fmt(r.actual),"Actual vs Revised Days":r1(r.delayRevised),"Accuracy":r.delayRevised===0?"On revised date":(r.delayRevised>0?"Late vs revised":"Early vs revised"),"Management Reading":r.delayRevised===0?"Revised plan was accurate.":(r.delayRevised>0?`Actual was ${fmtDays(r.delayRevised)} later than revised plan.`:`Actual was ${fmtDays(Math.abs(r.delayRevised))} earlier than revised plan.`)}));
-  const buyerApprovalDetail=managementDetailRows.filter(r=>["Fit Appr","Art Appr","S/O Appr","Lab Dip Appr","PP Appr"].includes(r["Stage / Activity"]));
-  const stageDetailRows=managementDetailRows;
-  const deptDetailRows=managementDetailRows;
-  const ownerDetailRows=managementDetailRows;
-  const brandDetailRows=managementDetailRows;
+  const buyerApprovalRecords=delayRecords.filter(r=>["Fit Appr","Art Appr","S/O Appr","Lab Dip Appr","PP Appr"].includes(r.stage));
+  const buyerApprovalDetail=detailRowsFor("Buyer Approval",buyerApprovalRecords);
+  const stageDetailRows=detailRowsFor("Stage Performance",delayRecords);
+  const deptDetailRows=detailRowsFor("Department Performance",delayRecords);
+  const ownerDetailRows=detailRowsFor("Owner Delays",delayRecords);
+  const brandDetailRows=detailRowsFor("Buyer Brand Delays",delayRecords);
   const styleAgg={};
   delayRecords.forEach(r=>{ const key=(r.order||"")+"|"+(r.style||""); const o=styleAgg[key]=styleAgg[key]||{ order:r.order, style:r.style, buyer:r.buyer, owner:r.owner, completed:0, late:0, delaySum:0, worstDelay:-999, worstStage:"", stages:[] }; o.completed++; if(r.delay>0) o.late++; o.delaySum+=r.delay; if(r.delay>o.worstDelay){ o.worstDelay=r.delay; o.worstStage=r.stage; } o.stages.push(r.stage+" "+fmtDays(r.delay)); });
   const worstStyleData=Object.values(styleAgg).sort((a,b)=>b.delaySum-a.delaySum).slice(0,25).map(o=>({"Style No":o.style,"Order No":o.order,"Buyer / Brand":o.buyer,"Junior / Owner":o.owner,"Completed Stage Count":o.completed,"Late Stage Count":o.late,"Total Delay Days":fmtDays(o.delaySum),"Worst Stage":o.worstStage,"Worst Stage Delay":fmtDays(o.worstDelay),"Management Reading":`${o.style} has ${o.late} late completed stage(s), total delay ${fmtDays(o.delaySum)} across completed stages.`}));
-  const worstStyleDetail=managementDetailRows.filter(r=>{ const key=(r["Order No"]||"")+"|"+(r["Style No"]||""); return Object.values(styleAgg).sort((a,b)=>b.delaySum-a.delaySum).slice(0,25).some(o=>(o.order||"")+"|"+(o.style||"")===key); });
-  const lateDetailRows=managementDetailRows.filter(r=>String(r["Result"])==="Late");
+  const worstKeys=new Set(Object.values(styleAgg).sort((a,b)=>b.delaySum-a.delaySum).slice(0,25).map(o=>(o.order||"")+"|"+(o.style||"")));
+  const worstStyleDetail=detailRowsFor("Worst Performing Styles",delayRecords.filter(r=>worstKeys.has((r.order||"")+"|"+(r.style||""))));
+  const lateDetailRows=detailRowsFor("Worst Delays",delayRecords.filter(r=>r.delay>0));
   const analyticsSheets=[
       { label:"Summary", data:mgmtSummary, detailData:managementDetailRows, modes:["summary","detailed"] },
       { label:"Calculation Checks", data:checks, modes:["summary","detailed"] },
@@ -1487,7 +1582,7 @@ function ManagementDashboardView({ computed, todoItems, applyDrill, drillTodo })
       { label:"Worst Delays", data:delayData, detailData:lateDetailRows, modes:["detailed"] },
       { label:"Worst Performing Styles", data:worstStyleData, detailData:worstStyleDetail, modes:["summary","detailed"] },
       { label:"Calculation Breakup", data:managementDetailRows, modes:["detailed"] },
-      { label:"Revised vs Actual", data:revisedActualData, modes:["detailed"] },
+      { label:"Revised vs Actual", data:revisedActualData, detailData:detailRowsFor("Revised vs Actual", delayRecords.filter(r=>r.delayRevised!=null)), modes:["detailed"] },
   ];
 
   const card=(label,val,color,onClick,sub)=>(<button onClick={onClick} disabled={!onClick} style={{ flex:1, minWidth:136, textAlign:"left", background:"var(--surface)", border:"1px solid var(--line-2)", borderRadius:12, padding:"14px 16px", cursor:onClick?"pointer":"default", fontFamily:"inherit" }}><div style={{ fontSize:28, fontWeight:800, fontFamily:"'Archivo',sans-serif", color, lineHeight:1 }}>{val}</div><div style={{ fontSize:10, color:"var(--muted-2)", marginTop:5, letterSpacing:0.5, textTransform:"uppercase" }}>{label}{onClick?" ›":""}</div>{sub&&<div style={{ fontSize:9, color:"var(--muted-1)", marginTop:4 }}>{sub}</div>}</button>);
