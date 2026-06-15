@@ -853,8 +853,10 @@ function MerchTracker({ me, onSignOut }){
   const [calOpen,setCalOpen]=useState(false);
   const [entryVal,setEntryVal]=useState("");
   const [entryTouched,setEntryTouched]=useState(false);
+  const entryCellRef=useRef("");
   const selectedStyle=sel?styles.find(x=>x.id===sel.id):null;
   const selectedColLabel=sel?(sel.col==="__style"?"Style No":(INFO_COLS.find(c=>c.key===sel.col)?.label||STAGES.find(s=>s.key===sel.col)?.label||sel.col)):"";
+  const selectedCellKey=sel?`${sel.id}:${sel.col}`:"";
   const selectedDisplayValue=()=>{ if(!sel||!selectedStyle) return ""; const v=getVal(selectedStyle,sel.col); return isDateCol(sel.col)&&v?fmtTyped(v):String(v??""); };
   const entrySuggestion=useMemo(()=>{
     if(!sel||!entryTouched||!entryVal||isDateCol(sel.col)) return "";
@@ -863,14 +865,22 @@ function MerchTracker({ me, onSignOut }){
     const q=String(entryVal).trim().toLowerCase();
     if(!q) return "";
     const seen=[];
-    for(let r=ri-1;r>=0&&seen.length<40;r--){
-      const row=rows[r]; if(!row||!row.s) continue;
-      const v=String(getVal(row.s,sel.col)||"").trim();
-      if(v&&!seen.some(x=>x.toLowerCase()===v.toLowerCase())) seen.push(v);
-    }
-    return seen.find(v=>v.toLowerCase().startsWith(q) && v!==entryVal)||"";
+    const addVal=(row)=>{ if(!row||!row.s) return; const v=String(getVal(row.s,sel.col)||"").trim(); if(v&&!seen.some(x=>x.toLowerCase()===v.toLowerCase())) seen.push(v); };
+    // Excel-like: prefer values above the active cell, then fall back to other visible rows in the same column.
+    for(let r=ri-1;r>=0&&seen.length<60;r--) addVal(rows[r]);
+    for(let r=0;r<rows.length&&seen.length<80;r++) if(r!==ri) addVal(rows[r]);
+    return seen.find(v=>v.toLowerCase().startsWith(q) && v.toLowerCase()!==String(entryVal).trim().toLowerCase())||"";
   },[sel,entryTouched,entryVal,rows]);
-  useEffect(()=>{ if(editing && sel && editing.id===sel.id && editing.col===sel.col && !entryTouched){ setEntryVal(editVal||""); return; } if(!entryTouched){ setEntryVal(selectedDisplayValue()); } },[sel,styles,editing,editVal,entryTouched]);
+  useEffect(()=>{
+    if(entryCellRef.current!==selectedCellKey){
+      entryCellRef.current=selectedCellKey;
+      setEntryTouched(false);
+      setEntryVal(selectedDisplayValue());
+      return;
+    }
+    if(editing && sel && editing.id===sel.id && editing.col===sel.col && !entryTouched){ setEntryVal(editVal||""); return; }
+    if(!entryTouched){ setEntryVal(selectedDisplayValue()); }
+  },[selectedCellKey,styles,editing,editVal,entryTouched]);
   const commitEntry=()=>{
     if(!sel||!selectedStyle) return;
     if(!isEditableCol(sel.col)||!canEdit(role,sel.col,"actual")) return;
@@ -1312,7 +1322,7 @@ function MerchTracker({ me, onSignOut }){
         <div onMouseDown={(e)=>e.stopPropagation()} onClick={(e)=>e.stopPropagation()} style={{ display:"flex", alignItems:"center", gap:6, flex:"1 1 420px", minWidth:320, background:"var(--toolbar-bg)", border:"1px solid var(--toolbar-line)", borderRadius:6, padding:"5px 7px", boxShadow:"0 1px 0 rgba(0,0,0,0.03)", position:"relative" }}>
           <span style={{ fontSize:9, fontWeight:800, color:"var(--muted-2)", textTransform:"uppercase", letterSpacing:0.4 }}>Entry</span>
           <span style={{ fontSize:10, fontWeight:800, color:"var(--accent)", minWidth:34 }}>{sel?cellRef(sel):"—"}</span>
-          <input disabled={!sel} value={entryVal} onMouseDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} onFocus={()=>{ if(editing) setEditing(null); }} onChange={e=>{ setEntryTouched(true); setEntryVal(sel&&sel.col==="qty"?e.target.value.replace(/[^0-9]/g,""):e.target.value); }} onKeyDown={e=>{ e.stopPropagation(); if(e.key==="Tab"&&entrySuggestion){ e.preventDefault(); setEntryTouched(true); setEntryVal(entrySuggestion); } else if(e.key==="Enter"){ e.preventDefault(); commitEntry(); } else if(e.key==="Escape"){ setEntryVal(selectedDisplayValue()); setEntryTouched(false); if(editing) setEditing(null); } }} placeholder={sel?("type "+selectedColLabel+"…"):"select a cell"} title="Excel-style entry bar. Type here; Tab accepts the suggestion from values above; Enter saves. Entry bar saves directly and will not open an inline cell editor while typing." style={{ flex:1, minWidth:160, fontFamily:"inherit", fontSize:11, padding:"4px 7px", border:"1px solid var(--line-2)", outline:"none", background:sel?"var(--surface)":"var(--line-3)" }}/>
+          <input disabled={!sel} value={entryVal} onMouseDown={e=>e.stopPropagation()} onClick={e=>e.stopPropagation()} onFocus={()=>{ if(editing) setEditing(null); if(!entryTouched) setEntryVal(selectedDisplayValue()); }} onChange={e=>{ setEntryTouched(true); setEntryVal(sel&&sel.col==="qty"?e.target.value.replace(/[^0-9]/g,""):e.target.value); }} onKeyDown={e=>{ e.stopPropagation(); if((e.ctrlKey||e.metaKey)&&(e.key==="z"||e.key==="Z")){ e.preventDefault(); if(e.shiftKey) redo(); else undo(); return; } if((e.ctrlKey||e.metaKey)&&(e.key==="y"||e.key==="Y")){ e.preventDefault(); redo(); return; } if(e.key==="Tab"&&entrySuggestion){ e.preventDefault(); setEntryTouched(true); setEntryVal(entrySuggestion); } else if(e.key==="Enter"){ e.preventDefault(); commitEntry(); } else if(e.key==="Escape"){ setEntryVal(selectedDisplayValue()); setEntryTouched(false); if(editing) setEditing(null); } }} placeholder={sel?("type "+selectedColLabel+"…"):"select a cell"} title="Excel-style entry bar. Shows selected cell value; Tab accepts suggestion from same column; Enter saves; Ctrl/Cmd+Z undo." style={{ flex:1, minWidth:160, fontFamily:"inherit", fontSize:11, padding:"4px 7px", border:"1px solid var(--line-2)", outline:"none", background:sel?"var(--surface)":"var(--line-3)" }}/>
           {entrySuggestion && <button onMouseDown={e=>e.preventDefault()} onClick={()=>{ setEntryTouched(true); setEntryVal(entrySuggestion); }} title="Click or press Tab to accept" style={{ position:"absolute", right:10, top:"100%", marginTop:3, zIndex:390, maxWidth:260, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"4px 8px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--accent-tint)", boxShadow:"3px 3px 0 var(--ink)" }}>Tab ↹ {entrySuggestion}</button>}
           {peerEditingList.length>0 && <span title={peerEditingList.map(p=>(p.name||p.email||"User")+" editing "+p.ref).join("\n")} style={{ fontSize:9, color:"var(--danger)", fontWeight:800, whiteSpace:"nowrap" }}>{peerEditingList.length} editing now</span>}
         </div>
@@ -1475,7 +1485,7 @@ function MerchTracker({ me, onSignOut }){
 
       <div style={{ padding:"10px 22px", display:"flex", gap:16, flexWrap:"wrap", alignItems:"center", fontSize:11, borderTop:"1px solid var(--line-3)" }}>
         {(() => { const rs=rows; const n=rs.length; const rel=rs.filter(r=>r.c.released).length; const risk=rs.filter(r=>r.c.tone==="late"||r.c.tone==="warn").length; const ok=rs.filter(r=>(r.c.tone==="ok")&&!r.c.released).length; const qty=rs.reduce((a,r)=>a+(Number(r.s.qty)||0),0); const avg=n?Math.round(rs.reduce((a,r)=>a+(r.c.pct||0),0)/n):0; return <span style={{ display:"flex", gap:14, flexWrap:"wrap", alignItems:"center" }}><span><b>{n}</b> styles</span><span style={{ color:"var(--danger)" }}><b>{risk}</b> at risk</span><span><b>{ok}</b> on track</span><span><b>{rel}</b> released</span><span>total qty <b>{qty.toLocaleString()}</b></span><span>avg <b>{avg}%</b> done</span><span style={{ color:(perfRef.current.alerts||[]).length?"var(--danger)":"var(--muted-2)" }}>Perf: P95 <b>{perfRef.current.p95Ms||0}ms</b> · compute <b>{perfRef.current.computeMs}ms</b> · filter <b>{perfRef.current.filterMs}ms</b> · sort <b>{perfRef.current.rowMs}ms</b> · rendered <b>{perfRef.current.rendered}/{perfRef.current.rows}</b> · recomputed <b>{perfRef.current.recomputed}</b> · cache <b>{perfRef.current.cacheHits}</b>{perfRef.current.deferred?" · search catching up":""}{(perfRef.current.alerts||[]).length?" · "+perfRef.current.alerts.join(", "):""}</span></span>; })()}
-        <span style={{ marginLeft:"auto", fontSize:9, color:"var(--muted-7)", display:"flex", alignItems:"center", gap:4, flexWrap:"wrap" }}>Ctrl/Cmd C·V copy-paste · Z / Shift+Z undo-redo · F2 edit · Del clears · drag blue corner to fill · <span style={{ width:0,height:0, borderTop:"7px solid var(--danger)", borderLeft:"7px solid transparent", display:"inline-block" }}/> comment · <RotateCcw size={10} color="var(--revised)"/> revised plan · <Snowflake size={10} color="#2563a6"/> freeze cols</span>
+        <span style={{ marginLeft:"auto", fontSize:9, color:"var(--muted-7)", display:"flex", alignItems:"center", gap:4, flexWrap:"wrap" }}>Ctrl/Cmd C·V copy-paste · Ctrl/Cmd Z / Shift+Z undo-redo · F2 edit · Del clears · drag blue corner to fill · <span style={{ width:0,height:0, borderTop:"7px solid var(--danger)", borderLeft:"7px solid transparent", display:"inline-block" }}/> comment · <RotateCcw size={10} color="var(--revised)"/> revised plan · <Snowflake size={10} color="#2563a6"/> freeze cols</span>
       </div>
       </>)}
 
