@@ -83,14 +83,28 @@ const SEND_FOR_APPR=Object.fromEntries(Object.entries(APPR_OF_SEND).map(([send,a
 const stageReviewLabel=(style,r)=>{
   if(!r) return "";
   if(r.rework) return `${r.label} rework / resend`;
-  const sendK=SEND_FOR_APPR[r.key];
-  const sendA=sendK?parse(style&&style.actuals&&style.actuals[sendK]):null;
-  const rejectD=r.reject||parse(style&&style.rejects&&style.rejects[r.key]);
-  if(r.rejected && sendK && sendA && rejectD && sendA>rejectD) return `${r.label} re-approval`;
+  if(r.reapproval) return `${r.label} re-approval`;
   if(r.rejected) return `${r.label} rejected`;
   return r.label;
 };
 const REWORK_DAYS={ fitSend:4, artwork:2, strikeOff:3, labDip:7, ppSample:4 }; // working days added on rejection (redo+resend)
+const resendHistoryKey=(s,k)=>s&&s.id!=null?`${s.id}:${k}`:"";
+const normalizeResendEntry=(x)=> typeof x==="string"?{ source:"legacy", newVal:x }:x;
+const latestTrackedResendDate=(s,k,rejectDate,resendMap)=>{
+  if(!s||!k||!rejectDate) return null;
+  const arr=Array.isArray(resendMap&&resendMap[resendHistoryKey(s,k)])?resendMap[resendHistoryKey(s,k)].map(normalizeResendEntry).filter(Boolean):[];
+  // Important: do not infer a resend only because the visible actual date is after the rejection date.
+  // A valid resend is one explicitly recorded by the resend editor / Fill Date resend path, not the first stored actual.
+  let best=null;
+  arr.forEach((x,i)=>{
+    const src=String((x&&x.source)||"").toLowerCase();
+    const isFirst=src.includes("first send") || (i===0 && arr.length>1);
+    if(isFirst) return;
+    const d=parse(x&&x.newVal);
+    if(d && d>rejectDate && (!best || d>best)) best=d;
+  });
+  return best;
+};
 const isRepeatStyleNoDev=(s)=>!s.fitReq && !s.printReq && !s.labDipReq && !s.ppNeeded;
 const stageApplies=(s,st)=>{
   if(!st) return false;
@@ -104,21 +118,22 @@ const stageApplies=(s,st)=>{
 };
 const applicableStages=(s)=> STAGES.filter(st=> stageApplies(s,st));
 
-function computeStyle(s, cfg){
+function computeStyle(s, cfg, resendMap={}){
   const ordRec=parse(s.ordRec), delivery=parse(s.delivery);
   const leadOf=(st)=>{ const v=cfg&&cfg.leads&&cfg.leads[st.key]; return v==null?st.lead:v; }; const rwOf=(st)=>{ const v=cfg&&cfg.rework&&cfg.rework[st.key]; return v==null?(REWORK_DAYS[st.key]||st.lead):v; }; const ownerOf=(k)=>{ const st=STAGES.find(x=>x.key===k); return (cfg&&cfg.stageOwners&&cfg.stageOwners[k]) || DEFAULT_STAGE_OWNERS[k] || (st&&st.owner) || "Jr Merchant"; }; const CUTD=(cfg&&cfg.fabricCutoff!=null)?cfg.fabricCutoff:FABRIC_CUTOFF_DAYS; const GATED=(cfg&&cfg.relGate!=null)?cfg.relGate:REL_GATE_DAYS;
   const cutoff=addWorkdays(delivery,-CUTD);
   const eff={}, plan={};
   const applies=(k)=>{ const st=STAGES.find(x=>x.key===k); return stageApplies(s,st); };
   const actualOf=(k)=>parse(s.actuals[k]); const revOf=(k)=>parse(s.revs?.[k]); const rejOf=(k)=>parse(s.rejects?.[k]); const skipOf=(k)=>parse(s.skips?.[k]);
+  const validResendActual=(sendK,apprK)=> latestTrackedResendDate(s,sendK,rejOf(apprK),resendMap);
   STAGES.forEach(st=>{
     let p;
     if(st.cutoff){ const base=s.labDipReq?(eff["labAppr"]||eff["labDip"]||ordRec):ordRec; p=s.labDipReq?new Date(Math.max(addWorkdays(base,15)?.getTime()||0, cutoff.getTime())):cutoff; }
     else { let predEff; if(st.key==="prodFile") predEff = (s.ppBypass || !s.ppNeeded) ? eff["fabricIH"] : eff["ppAppr"]; else predEff = st.pred==="__ord"?ordRec:eff[st.pred]; if((st.key==="ppSample"||st.key==="prodFile") && s.fitReq && eff["fitAppr"]) predEff = new Date(Math.max((predEff&&predEff.getTime())||0, eff["fitAppr"].getTime())); p=addWorkdays(predEff||ordRec, leadOf(st)); }
-    const apprK=APPR_OF_SEND[st.key]; const rejAppr = !!(apprK && rejOf(apprK) && !actualOf(apprK));
-    const selfRej = REJECTABLE.includes(st.key) && rejOf(st.key) && !actualOf(st.key);
-    if(rejAppr){ const rjd=rejOf(apprK); const auto=addWorkdays(rjd, rwOf(st)); const a=actualOf(st.key); const rv=revOf(st.key); plan[st.key]=auto;
-      if(a && a>rjd) eff[st.key]=a; else if(rv && rv>=rjd) eff[st.key]=rv; else eff[st.key]=auto; } // redo: re-sent actual wins, else fresh revised, else rejection+rework days
+    const apprK=APPR_OF_SEND[st.key]; const rejAppr = !!(apprK && rejOf(apprK) && !actualOf(apprK) && !skipOf(apprK));
+    const selfRej = REJECTABLE.includes(st.key) && rejOf(st.key) && !actualOf(st.key) && !skipOf(st.key);
+    if(rejAppr){ const rjd=rejOf(apprK); const auto=addWorkdays(rjd, rwOf(st)); const a=validResendActual(st.key,apprK); const rv=revOf(st.key); plan[st.key]=auto;
+      if(a) eff[st.key]=a; else if(rv && rv>=rjd) eff[st.key]=rv; else eff[st.key]=auto; } // redo: explicitly tracked re-send actual wins, else fresh revised, else rejection+rework days
     else if(selfRej){ const rjd=rejOf(st.key); const rv=revOf(st.key); plan[st.key]=p; eff[st.key]=(rv && rv>=rjd)?rv:p; } // rejected approval cascades off redone send
     else { plan[st.key]=p; eff[st.key]=actualOf(st.key)||skipOf(st.key)||revOf(st.key)||p; }
   });
@@ -127,7 +142,7 @@ function computeStyle(s, cfg){
   // If PP bypass is ON, print/strike-off stays actionable because the production file path has no PP approval gate.
   // Fit does NOT close automatically because PP depends on Fit approval.
   const printPreFabricKeys=new Set(["artwork","artAppr","strikeOff","soAppr"]);
-  const stages=applicableStages(s).map(st=>{ const apprK=APPR_OF_SEND[st.key]; const apprRej=apprK?rejOf(apprK):null; const selfRejDate=REJECTABLE.includes(st.key)?rejOf(st.key):null; const rejAppr=!!(apprK&&apprRej&&!actualOf(apprK)); const a=actualOf(st.key); const skp=skipOf(st.key); const isSkip=!!skp; const rjd_=rejAppr?apprRej:null; const resent=rejAppr&&a&&a>rjd_; const rework=rejAppr&&!resent; const rejected=REJECTABLE.includes(st.key)&&!!selfRejDate&&!actualOf(st.key); const autoClosed=!!(fabricIHStamp && !s.ppBypass && printPreFabricKeys.has(st.key) && !a && !skp && !rework && !rejected); const rjd=rework?rjd_:(rejected?selfRejDate:null); let rv=revOf(st.key); if(rjd&&rv&&rv<rjd) rv=null; const histReject = a ? ((apprRej&&a>=apprRej)?apprRej:(selfRejDate||null)) : null; return { ...st, owner:ownerOf(st.key), actual:a, rev:rv, reject:rjd, histReject, skippedWasRework:!!(isSkip&&rejAppr), skippedWasRejected:!!(isSkip&&(rejAppr||selfRejDate)), rework:isSkip?false:rework, rejected:isSkip?false:rejected, skipped:isSkip, autoClosed, skip:skp, plan:plan[st.key], done: autoClosed?true:(isSkip?true:(rework?false:!!a)) }; });
+  const stages=applicableStages(s).map(st=>{ const apprK=APPR_OF_SEND[st.key]; const apprRej=apprK?rejOf(apprK):null; const selfRejDate=REJECTABLE.includes(st.key)?rejOf(st.key):null; const skp=skipOf(st.key); const isSkip=!!skp; const approvalSkipped=apprK?!!skipOf(apprK):false; const rejAppr=!!(apprK&&apprRej&&!actualOf(apprK)&&!approvalSkipped); const trackedResend=rejAppr?validResendActual(st.key,apprK):null; const storedActual=actualOf(st.key); const a=trackedResend||storedActual; const rjd_=rejAppr?apprRej:null; const resent=!!trackedResend; const rework=rejAppr&&!resent; const rejected=REJECTABLE.includes(st.key)&&!!selfRejDate&&!actualOf(st.key)&&!isSkip; const autoClosed=!!(fabricIHStamp && !s.ppBypass && printPreFabricKeys.has(st.key) && !a && !skp && !rework && !rejected); const rjd=rework?rjd_:(rejected?selfRejDate:null); let rv=revOf(st.key); if(rjd&&rv&&rv<rjd) rv=null; const histReject = a ? ((apprRej&&trackedResend)?apprRej:(selfRejDate||null)) : null; const reapproval=!!(rejected && SEND_FOR_APPR[st.key] && validResendActual(SEND_FOR_APPR[st.key],st.key)); return { ...st, owner:ownerOf(st.key), actual:a, storedActual, trackedResend, rev:rv, reject:rjd, histReject, skippedWasRework:!!(isSkip&&rejAppr), skippedWasRejected:!!(isSkip&&(rejAppr||selfRejDate)), rework:isSkip?false:rework, rejected:isSkip?false:rejected, reapproval:isSkip?false:reapproval, skipped:isSkip, autoClosed, skip:skp, plan:plan[st.key], done: autoClosed?true:(isSkip?true:(rework?false:!!a)) }; });
   let nextPending=null, lastActual=null, lastActualKey=null;
   stages.forEach(r=>{ if(r.actual&&(!lastActual||r.actual>lastActual)){ lastActual=r.actual; lastActualKey=r.key; } if(!r.done&&!nextPending) nextPending=r; });
   const released=stages.every(r=>r.done);
@@ -147,7 +162,7 @@ function computeStyle(s, cfg){
   const dueTone=(k)=>{ const r=get(k); const d=r&&(r.rev||r.plan); return d&&TODAY>d?"late":"warn"; };
   const bs=(txt,tn,extra={})=>({txt,tone:tn,...extra});
   const autoClosed=(k)=>{ const r=get(k); return !!(r&&r.autoClosed); };
-  const reSentAfterReject=(sendK,apprK)=>{ const sd=actualOf(sendK), rj=rejOf(apprK), ap=actualOf(apprK); return !!(sd&&rj&&!ap&&sd>rj); };
+  const reSentAfterReject=(sendK,apprK)=>!!validResendActual(sendK,apprK);
   let fitBranch;
   const fitReSent=reSentAfterReject("fitSend","fitAppr");
   if(!s.fitReq) fitBranch=bs("—","na"); else if(done("fitAppr")) fitBranch=bs(isSkipped("fitAppr")?"Fit Skipped":(lateFIH("fitAppr")?"Fit Approved · after Fabric IH":"Fit Approved"), isSkipped("fitAppr")?"ok":(lateFIH("fitAppr")?"warn":"ok")); else if(rejected("fitAppr")&&fitReSent) fitBranch=bs(`Fit re-sent · appr ${dueText("fitAppr")}`,dueTone("fitAppr"),{blocksPP:true}); else if(rejected("fitAppr")) fitBranch=bs("Fit REJECTED · rework","late",{blocksPP:true}); else if(fabricInHouse) fitBranch=bs(done("fitSend")?"Fit approval pending · blocks PP":"Fit pending · blocks PP","late",{blocksPP:true}); else if(done("fitSend")) fitBranch=bs(`Fit appr ${dueText("fitAppr")}`,TODAY>(get("fitAppr")?.plan||TODAY)?"late":"warn"); else fitBranch=bs(`Fit send ${dueText("fitSend")}`,TODAY>(get("fitSend")?.plan||TODAY)?"late":"warn");
@@ -746,8 +761,8 @@ function MerchTracker({ me, onSignOut }){
   // Live recompute guard: dashboards/management/export must never read stale computed TNA.
   // The old cache only checked the style object reference; stage/date edits and realtime patches can leave nested data looking unchanged to a reference check.
   // This signature includes actual/revised/reject/skip dates and style master fields, so Lab Dip Approval etc. refresh every live report immediately.
-  const stylesComputeKey=useMemo(()=>styles.map(styleComputeSignature).join("||"),[styles]);
-  const computed=useMemo(()=>{ const t=perfNow(); const cache=computeCacheRef.current; const liveIds=new Set(); let hits=0, recomputed=0; const out=styles.map(s=>{ liveIds.add(s.id); const sig=styleComputeSignature(s); const old=cache.get(s.id); if(old && old.sig===sig && old.cfgKey===cfgComputeKey){ hits++; return old.out; } const c=computeStyle(s,cfg); const item={s,c,idx:buildSearchIndex(s,c)}; cache.set(s.id,{ sig, cfgKey:cfgComputeKey, out:item }); recomputed++; return item; }); for(const id of cache.keys()){ if(!liveIds.has(id)) cache.delete(id); } const ms=Math.round((perfNow()-t)*10)/10; const hist=pushPerfSample(perfRef.current.samples,ms); perfRef.current.computeMs=ms; perfRef.current.samples=hist.samples; perfRef.current.p95Ms=hist.p95; perfRef.current.styles=styles.length; perfRef.current.cacheHits=hits; perfRef.current.recomputed=recomputed; return out; },[styles,stylesComputeKey,cfg,cfgComputeKey]);
+  const stylesComputeKey=useMemo(()=>styles.map(s=>styleComputeSignature(s)+"::resends="+JSON.stringify(resends&&Object.fromEntries(Object.entries(resends||{}).filter(([k])=>String(k).startsWith(String(s.id)+":"))))).join("||"),[styles,resends]);
+  const computed=useMemo(()=>{ const t=perfNow(); const cache=computeCacheRef.current; const liveIds=new Set(); let hits=0, recomputed=0; const out=styles.map(s=>{ liveIds.add(s.id); const resendSig=JSON.stringify(resends&&Object.fromEntries(Object.entries(resends||{}).filter(([k])=>String(k).startsWith(String(s.id)+":")))); const sig=styleComputeSignature(s)+"::resends="+resendSig; const old=cache.get(s.id); if(old && old.sig===sig && old.cfgKey===cfgComputeKey){ hits++; return old.out; } const c=computeStyle(s,cfg,resends); const item={s,c,idx:buildSearchIndex(s,c)}; cache.set(s.id,{ sig, cfgKey:cfgComputeKey, out:item }); recomputed++; return item; }); for(const id of cache.keys()){ if(!liveIds.has(id)) cache.delete(id); } const ms=Math.round((perfNow()-t)*10)/10; const hist=pushPerfSample(perfRef.current.samples,ms); perfRef.current.computeMs=ms; perfRef.current.samples=hist.samples; perfRef.current.p95Ms=hist.p95; perfRef.current.styles=styles.length; perfRef.current.cacheHits=hits; perfRef.current.recomputed=recomputed; return out; },[styles,stylesComputeKey,cfg,cfgComputeKey]);
   // Live/report source: archived styles stay available in Tracker Archive view, but are excluded from all live reports by default.
   const activeComputed=useMemo(()=>computed.filter(({s})=>!s.archived),[computed]);
   const chaseOwnerOptions=useMemo(()=>["All", ...Array.from(new Set([...STAGES.map(st=>(cfg.stageOwners&&cfg.stageOwners[st.key])||DEFAULT_STAGE_OWNERS[st.key]||st.owner), ...CHASE_LABELS])).filter(Boolean)], [cfg]);
