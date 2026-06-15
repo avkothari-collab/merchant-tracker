@@ -79,6 +79,17 @@ const pushPerfSample=(arr,ms)=>{ const n=Number(ms)||0; const next=(arr||[]).con
 const REJECTABLE=["fitAppr","artAppr","soAppr","labAppr","ppAppr"]; // approval stages that can be rejected
 const SKIPPABLE_STAGES=["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr","labDip","labAppr","ppSample","ppAppr"]; // activities that can be waived/skipped
 const APPR_OF_SEND={ fitSend:"fitAppr", artwork:"artAppr", strikeOff:"soAppr", labDip:"labAppr", ppSample:"ppAppr" }; // send/make stage -> the approval that can reject it
+const SEND_FOR_APPR=Object.fromEntries(Object.entries(APPR_OF_SEND).map(([send,appr])=>[appr,send]));
+const stageReviewLabel=(style,r)=>{
+  if(!r) return "";
+  if(r.rework) return `${r.label} rework / resend`;
+  const sendK=SEND_FOR_APPR[r.key];
+  const sendA=sendK?parse(style&&style.actuals&&style.actuals[sendK]):null;
+  const rejectD=r.reject||parse(style&&style.rejects&&style.rejects[r.key]);
+  if(r.rejected && sendK && sendA && rejectD && sendA>rejectD) return `${r.label} re-approval`;
+  if(r.rejected) return `${r.label} rejected`;
+  return r.label;
+};
 const REWORK_DAYS={ fitSend:4, artwork:2, strikeOff:3, labDip:7, ppSample:4 }; // working days added on rejection (redo+resend)
 const isRepeatStyleNoDev=(s)=>!s.fitReq && !s.printReq && !s.labDipReq && !s.ppNeeded;
 const stageApplies=(s,st)=>{
@@ -706,7 +717,7 @@ function MerchTracker({ me, onSignOut }){
     const actCell=(s,c,k)=>{ const r=(c.stages||[]).find(x=>x.key===k); if(!r) return "n/a"; if(s.actuals&&s.actuals[k]) return fmtY(parse(s.actuals[k])); if(r.skipped) return "WAIVED"; if(r.rejected) return "REJECTED"; if(r.rework) return "REDO"; return ""; };
     const planCell=(s,c,k,withBuf)=>{ const r=(c.stages||[]).find(x=>x.key===k); if(!r) return "n/a"; if(actCell(s,c,k)) return ""; const t=r.rev||r.plan; if(!t) return ""; /* E6: buffer is a single B-day slack on our internal chain. Each approval inherits the shift from its (buffered) internal predecessor and adds NO buffer of its own — net effect is one B applied per stage, never doubled. */ const d=(withBuf&&B)?addWorkdays(t,B):t; return fmtY(d); };
     const pairs=(o,s,c,withBuf,list)=>{ (list||STAGES).forEach(st=>{ o["Actual \u00b7 "+st.label]=actCell(s,c,st.key); o["Plan \u00b7 "+st.label]=planCell(s,c,st.key,withBuf); }); };
-    const blockers=(c)=> (c.frontier?[...c.frontier]:[]).map(k=>{ const r=(c.stages||[]).find(x=>x.key===k); if(!r||r.done) return null; const lbl=r.label; if(r.rework) return lbl+": redo & resend"; if(r.rejected) return lbl+": rejected"; if(REJECTABLE.includes(k)) return lbl+": not approved"; return lbl+": pending"; }).filter(Boolean);
+    const blockers=(c)=> (c.frontier?[...c.frontier]:[]).map(k=>{ const r=(c.stages||[]).find(x=>x.key===k); if(!r||r.done) return null; const lbl=stageReviewLabel(s,r); if(r.rework) return lbl+": redo & resend"; if(r.rejected) return lbl; if(REJECTABLE.includes(k)) return lbl+": not approved"; return lbl+": pending"; }).filter(Boolean);
     if(mode==="buyer"){ data=rows.map(({s,c})=>{ const o={ "Style No":s.styleNo, "Family":s.family, "Colour":s.colour, "Brand":s.brand, "Buyer":s.buyer||"", "Age Group":s.age||"", "Qty":s.qty, "Delivery":fmtIso(s.delivery), "Status":c.status }; pairs(o,s,c,incBuf); o["Proj. Release"]=c.projRelease?fmtY(c.projRelease):""; return o; }); name=incBuf?"buyer_tna_buf"+B+"d":"buyer_tna"; sheet="Buyer"; }
     else if(mode==="release"){ data=rows.map(({s,c})=>{ const open=blockers(c); const o={ "Order No":s.orderNo, "Style No":s.styleNo, "Colour":s.colour, "Qty":s.qty }; if(relMode!=="summary"){ o["FIT"]=s.fitReq?"Y":"-"; o["PRT"]=s.printReq?"Y":"-"; o["S-O"]=s.soReq?"Y":"-"; o["LAB"]=s.labDipReq?"Y":"-"; o["BYP"]=s.ppBypass?"Y":"-"; o["PP"]=s.ppNeeded?"Y":"-"; pairs(o,s,c,false); } else { ["fitAppr","soAppr","fabricIH","ppAppr","prodFile"].forEach(k=>{ const st=STAGES.find(x=>x.key===k); o["Actual \u00b7 "+st.label]=actCell(s,c,k); o["Plan \u00b7 "+st.label]=planCell(s,c,k,false); }); } o["Proj. Release"]=c.projRelease?fmtY(c.projRelease):""; o["Delivery"]=fmtIso(s.delivery); o["Released"]=c.released?"YES":""; o["Pending / blockers"]=c.released?"released":(open.join("; ")||"none"); o["Remarks"]=s.remarks||""; o["Status"]=c.status; return o; }); name=relMode==="summary"?"release_plan_summary":"release_plan_detailed"; sheet="Release Plan"; }
     else if(mode==="detail"){ data=rows.map(({s,c})=>{ const open=blockers(c); const o={ "Order No":s.orderNo, "Style No":s.styleNo, "Sample Fit":s.sampleFit, "Family":s.family, "Colour":s.colour, "Brand":s.brand, "Buyer":s.buyer||"", "Age Group":s.age||"", "Fabric Type":s.fabricType, "Owner":s.owner, "Qty":s.qty, "Order Date":fmtIso(s.ordRec), "Delivery":fmtIso(s.delivery), "FIT":s.fitReq?"Y":"-", "PRT":s.printReq?"Y":"-", "S-O":s.soReq?"Y":"-", "LAB":s.labDipReq?"Y":"-", "BYP":s.ppBypass?"Y":"-", "PP":s.ppNeeded?"Y":"-" }; pairs(o,s,c,false); o["% Done"]=c.pct+"%"; o["Float"]=(c.float!=null?c.float+"d":""); o["Idle"]=(c.idle!=null?c.idle+"d":""); o["Proj. Release"]=c.projRelease?fmtY(c.projRelease):""; o["Released"]=c.released?"YES":""; o["Pending / blockers"]=c.released?"released":(open.join("; ")||"none"); o["Remarks"]=s.remarks||""; o["Status"]=c.status; return o; }); name="detailed_summary"; sheet="Detailed"; }
@@ -764,12 +775,12 @@ function MerchTracker({ me, onSignOut }){
           const cols=String(s.colour||"").split(/[,/]/).map(x=>x.trim()).filter(Boolean);
           (cols.length?cols:["(no colour)"]).forEach(col=>{
             let cur=fabByCol[col];
-            if(!cur){ cur=fabByCol[col]={ colour:col, key, label:r.label, owner:r.owner, branch, exp, du, overdue, anyStyle:s.id, anyOrder:s.orderNo, anyJunior:s.owner, count:0 }; }
+            if(!cur){ cur=fabByCol[col]={ colour:col, key, label:stageReviewLabel(s,r), owner:r.owner, branch, exp, du, overdue, anyStyle:s.id, anyOrder:s.orderNo, anyJunior:s.owner, count:0 }; }
             cur.count++;
             if(exp<cur.exp){ cur.exp=exp; cur.du=du; cur.overdue=overdue; cur.anyStyle=s.id; cur.anyOrder=s.orderNo; cur.anyJunior=s.owner; }
           });
         } else {
-          out.push(enrich({ id:s.id, orderNo:s.orderNo, styleNo:s.styleNo, junior:s.owner, colour:s.colour, key, activity:r.label, branch, owner:r.owner, exp, du, overdue }));
+          out.push(enrich({ id:s.id, orderNo:s.orderNo, styleNo:s.styleNo, junior:s.owner, colour:s.colour, key, activity:stageReviewLabel(s,r), branch, owner:r.owner, exp, du, overdue }));
         }
       });
     });
@@ -1570,7 +1581,7 @@ function EscalationMatrixView({ computed, cfg, applyDrill }){
   const all=(computed||[]).flatMap(({s,c})=>{
     if(c.released) return [];
     const front=c.frontier?[...c.frontier]:[];
-    return front.map(k=>{ const r=(c.stages||[]).find(x=>x.key===k); const due=r&&(r.rev||r.plan); if(!r||!due||r.done) return null; const days=Math.max(0,netWorkdays(due,TODAY)||0); if(days<=0) return null; const esc=escalationFor(cfg,days); return { id:s.id, orderNo:s.orderNo, styleNo:s.styleNo, family:s.family, colour:s.colour, buyer:s.buyer||s.brand||"", junior:s.owner, stageKey:k, stage:r.label, chase:r.owner||"—", due, days, bucket:esc.rangeLabel, status:c.status, risk:c.tone, escalationOwner:esc.owner, escalationLevel:esc.level, escalationAction:esc.action }; }).filter(Boolean);
+    return front.map(k=>{ const r=(c.stages||[]).find(x=>x.key===k); const due=r&&(r.rev||r.plan); if(!r||!due||r.done) return null; const days=Math.max(0,netWorkdays(due,TODAY)||0); if(days<=0) return null; const esc=escalationFor(cfg,days); return { id:s.id, orderNo:s.orderNo, styleNo:s.styleNo, family:s.family, colour:s.colour, buyer:s.buyer||s.brand||"", junior:s.owner, stageKey:k, stage:stageReviewLabel(s,r), chase:r.owner||"—", due, days, bucket:esc.rangeLabel, status:c.status, risk:c.tone, escalationOwner:esc.owner, escalationLevel:esc.level, escalationAction:esc.action }; }).filter(Boolean);
   });
   const escMatchExcept=(r,except)=>{ const qq=q.trim().toLowerCase(); const hit=!qq || [r.styleNo,r.orderNo,r.family,r.colour,r.buyer,r.junior,r.stage,r.chase,r.escalationOwner,r.escalationLevel].some(v=>String(v||"").toLowerCase().includes(qq)); const ow=except==="owner"||owner==="All"||r.chase===owner; const eo=except==="escOwner"||escOwner==="All"||r.escalationOwner===escOwner; const bk=except==="bucket"||bucket==="All"||r.bucket===bucket; return hit&&ow&&eo&&bk; };
   const owners=["All",...Array.from(new Set(all.filter(r=>escMatchExcept(r,"owner")).map(x=>x.chase))).filter(Boolean).sort()];
@@ -1920,7 +1931,7 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
   const delRisk=fc.filter(({c})=>String(c.status).startsWith("Delivery risk")).length;
   // owner load + activity load from the spliced set
   const ownerLoad={}; const actAgg={};
-  fc.forEach(({c})=>{ if(c.released) return; (c.chaseOwners||[]).forEach(o=>{ ownerLoad[o.owner]=(ownerLoad[o.owner]||0)+1; }); (c.frontier?[...c.frontier]:[]).forEach(k=>{ const r=(c.stages||[]).find(x=>x.key===k); if(!r||r.done) return; const a=actAgg[r.label]=actAgg[r.label]||{n:0,over:0,key:k}; a.n++; if((r.rev||r.plan)&&TODAY>(r.rev||r.plan)) a.over++; }); });
+  fc.forEach(({s,c})=>{ if(c.released) return; (c.chaseOwners||[]).forEach(o=>{ ownerLoad[o.owner]=(ownerLoad[o.owner]||0)+1; }); (c.frontier?[...c.frontier]:[]).forEach(k=>{ const r=(c.stages||[]).find(x=>x.key===k); if(!r||r.done) return; const lbl=stageReviewLabel(s,r); const a=actAgg[lbl]=actAgg[lbl]||{n:0,over:0,key:k}; a.n++; if((r.rev||r.plan)&&TODAY>(r.rev||r.plan)) a.over++; }); });
   const owners=Object.entries(ownerLoad).sort((a,b)=>b[1]-a[1]); const maxOwner=Math.max(1,...owners.map(o=>o[1]));
   const acts=Object.entries(actAgg).sort((a,b)=>b[1].n-a[1].n); const maxAct=Math.max(1,...acts.map(e=>e[1].n));
   const overdueAct=acts.reduce((s,[,v])=>s+v.over,0);
@@ -1949,7 +1960,7 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
     </button>); });
   const dashboardSummary=[{ "Report Type":"Current Dashboard", "Slice Styles":total, "On Track":onTrack, "At Risk":atRisk, "Delivery Risk":delRisk, "Released":released, "Overdue Activities":overdueAct }];
   const dashboardStyleRows=fc.map(({s,c})=>({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Sample Fit":s.sampleFit||"", "Family":s.family||"", "Colour":s.colour||"", "Brand":s.brand||"", "Buyer":s.buyer||"", "Junior":s.owner||"", "Qty":s.qty||0, "Delivery":s.delivery||"", "Status":c.status||"", "Tone":c.tone||"", "Released":c.released?"YES":"", "% Done":c.pct, "Chase":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Next Pending":c.nextPending?c.nextPending.label:"", "Projected Release":c.projRelease?fmt(c.projRelease):"" }));
-  const dashboardBreakup=fc.map(({s,c})=>{ const nx=c.nextPending||null; const nxDue=nx?(nx.rev||nx.plan):null; const frontier=(c.frontier?[...c.frontier]:[]).map(k=>{ const r=(c.stages||[]).find(x=>x.key===k); return r?r.label:k; }).join(", "); return { "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Colour":s.colour||"", "Buyer / Brand":s.buyer||s.brand||"", "Junior":s.owner||"", "Delivery":s.delivery||"", "Overall Status":c.status||"", "Overall Tone":c.tone||"", "Released":c.released?"YES":"NO", "% Done":c.pct, "Next Pending Stage":nx?nx.label:"", "Next Pending Chase":nx?nx.owner:"", "Next Pending Due":nxDue?fmt(nxDue):"", "Next Pending Overdue?":(nxDue&&TODAY>nxDue)?"YES":"NO", "Actionable Frontier":frontier, "Chase Breakdown":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Fit Branch":c.fitBranch?c.fitBranch.txt:"", "Print Branch":c.printBranch?c.printBranch.txt:"", "Fabric Branch":c.fabricBranch?c.fabricBranch.txt:"", "PP Branch":c.ppBranch?c.ppBranch.txt:"", "Prod File Branch":c.prodFileBranch?c.prodFileBranch.txt:"", "Fabric IH Countdown":c.fabricCountdown?c.fabricCountdown.txt:"", "Projected Release":c.projRelease?fmt(c.projRelease):"", "Release Gate":c.releaseGate?fmt(c.releaseGate):"", "Float Days":c.float==null?"":c.float, "Idle Days":c.idle==null?"":c.idle }; });
+  const dashboardBreakup=fc.map(({s,c})=>{ const nx=c.nextPending||null; const nxDue=nx?(nx.rev||nx.plan):null; const frontier=(c.frontier?[...c.frontier]:[]).map(k=>{ const r=(c.stages||[]).find(x=>x.key===k); return r?stageReviewLabel(s,r):k; }).join(", "); return { "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Colour":s.colour||"", "Buyer / Brand":s.buyer||s.brand||"", "Junior":s.owner||"", "Delivery":s.delivery||"", "Overall Status":c.status||"", "Overall Tone":c.tone||"", "Released":c.released?"YES":"NO", "% Done":c.pct, "Next Pending Stage":nx?stageReviewLabel(s,nx):"", "Next Pending Chase":nx?nx.owner:"", "Next Pending Due":nxDue?fmt(nxDue):"", "Next Pending Overdue?":(nxDue&&TODAY>nxDue)?"YES":"NO", "Actionable Frontier":frontier, "Chase Breakdown":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Fit Branch":c.fitBranch?c.fitBranch.txt:"", "Print Branch":c.printBranch?c.printBranch.txt:"", "Fabric Branch":c.fabricBranch?c.fabricBranch.txt:"", "PP Branch":c.ppBranch?c.ppBranch.txt:"", "Prod File Branch":c.prodFileBranch?c.prodFileBranch.txt:"", "Fabric IH Countdown":c.fabricCountdown?c.fabricCountdown.txt:"", "Projected Release":c.projRelease?fmt(c.projRelease):"", "Release Gate":c.releaseGate?fmt(c.releaseGate):"", "Float Days":c.float==null?"":c.float, "Idle Days":c.idle==null?"":c.idle }; });
   const stageStartFor=(s,c,r)=>{ const st=STAGES.find(x=>x.key===r.key)||{}; const byKey={}; (c.stages||[]).forEach(x=>{ byKey[x.key]=x; }); if(r.key==="fabricIH") return (s.labDipReq && byKey.labAppr && byKey.labAppr.actual) ? byKey.labAppr.actual : parse(s.ordRec); if(st.pred==="__ord") return parse(s.ordRec); return byKey[st.pred] ? byKey[st.pred].actual : null; };
   const stageState=(r)=> r.skipped?"Waived / skipped":(r.rejected?"Rejected":(r.rework?"Rework / resend":(r.actual?"Done":(r.rev?"Revised plan":"Pending"))));
   const dashboardStageDetail=[];
@@ -2092,7 +2103,7 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const completionPct=total?Math.round((released/total)*100):0;
 
   const ownerLoad={}; const actAgg={};
-  fc.forEach(({c})=>{ if(c.released) return; (c.chaseOwners||[]).forEach(o=>{ ownerLoad[o.owner]=(ownerLoad[o.owner]||0)+1; }); (c.frontier?[...c.frontier]:[]).forEach(k=>{ const r=(c.stages||[]).find(x=>x.key===k); if(!r||r.done) return; const a=actAgg[r.label]=actAgg[r.label]||{n:0,over:0,key:k}; a.n++; if((r.rev||r.plan)&&TODAY>(r.rev||r.plan)) a.over++; }); });
+  fc.forEach(({s,c})=>{ if(c.released) return; (c.chaseOwners||[]).forEach(o=>{ ownerLoad[o.owner]=(ownerLoad[o.owner]||0)+1; }); (c.frontier?[...c.frontier]:[]).forEach(k=>{ const r=(c.stages||[]).find(x=>x.key===k); if(!r||r.done) return; const lbl=stageReviewLabel(s,r); const a=actAgg[lbl]=actAgg[lbl]||{n:0,over:0,key:k}; a.n++; if((r.rev||r.plan)&&TODAY>(r.rev||r.plan)) a.over++; }); });
   const owners=Object.entries(ownerLoad).sort((a,b)=>b[1]-a[1]); const maxOwner=Math.max(1,...owners.map(o=>o[1]));
   const acts=Object.entries(actAgg).sort((a,b)=>b[1].n-a[1].n); const maxAct=Math.max(1,...acts.map(e=>e[1].n));
   const overdueAct=acts.reduce((s,[,v])=>s+v.over,0);
