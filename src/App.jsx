@@ -2178,7 +2178,17 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
   const owners=Object.entries(ownerLoad).sort((a,b)=>b[1]-a[1]); const maxOwner=Math.max(1,...owners.map(o=>o[1]));
   const acts=Object.entries(actAgg).sort((a,b)=>b[1].n-a[1].n); const maxAct=Math.max(1,...acts.map(e=>e[1].n));
   const overdueAct=acts.reduce((s,[,v])=>s+v.over,0);
-  const escalationTodo=(todoItems||[]).filter(t=>t.overdue&&t.escalationOwner);
+  const styleByTodoId=new Map(fc.map(({s})=>[Number(s.id),s]));
+  const todoMatchesSlice=(t)=>{
+    const st=styleByTodoId.get(Number(t.id));
+    if(!st) return false;
+    const orderVals=(Array.isArray(t.orderNos)&&t.orderNos.length?t.orderNos:[t.orderNo,st.orderNo]).filter(Boolean);
+    const juniorVals=(Array.isArray(t.juniors)&&t.juniors.length?t.juniors:[t.junior,st.owner]).filter(Boolean);
+    const colourVals=String(t.colour||st.colour||"").split(/[,;|/+]+/).map(x=>x.trim()).filter(Boolean);
+    const matchArray=(key,vals)=>{ const a=arrOf(df[key]); return !a.length || vals.some(v=>a.includes(v)); };
+    return matchArray("order",orderVals) && matchArray("junior",juniorVals) && hasSel("fit",st.sampleFit) && hasSel("family",st.family) && hasSel("brand",st.brand) && hasSel("fabric",st.fabricType) && (!arrOf(df.colour).length || arrOf(df.colour).some(v=>colourVals.includes(v)));
+  };
+  const escalationTodo=(todoItems||[]).filter(t=>todoMatchesSlice(t)&&t.overdue&&t.escalationOwner);
   const escLoad=escalationTodo.reduce((m,t)=>{ const k=t.escalationOwner||"(blank)"; m[k]=(m[k]||0)+1; return m; },{});
   const escRows=Object.entries(escLoad).sort((a,b)=>b[1]-a[1]); const maxEsc=Math.max(1,...escRows.map(x=>x[1]));
   const phase={ "Pre-Fit":0,"Fit / Print":0,"Lab Dip":0,"Fabric IH":0,"PP / Prod":0 };
@@ -2356,7 +2366,17 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const owners=Object.entries(ownerLoad).sort((a,b)=>b[1]-a[1]); const maxOwner=Math.max(1,...owners.map(o=>o[1]));
   const acts=Object.entries(actAgg).sort((a,b)=>b[1].n-a[1].n); const maxAct=Math.max(1,...acts.map(e=>e[1].n));
   const overdueAct=acts.reduce((s,[,v])=>s+v.over,0);
-  const escalationTodo=(todoItems||[]).filter(t=>t.overdue&&t.escalationOwner);
+  const styleByTodoId=new Map(fc.map(({s})=>[Number(s.id),s]));
+  const todoMatchesSlice=(t)=>{
+    const st=styleByTodoId.get(Number(t.id));
+    if(!st) return false;
+    const orderVals=(Array.isArray(t.orderNos)&&t.orderNos.length?t.orderNos:[t.orderNo,st.orderNo]).filter(Boolean);
+    const juniorVals=(Array.isArray(t.juniors)&&t.juniors.length?t.juniors:[t.junior,st.owner]).filter(Boolean);
+    const colourVals=String(t.colour||st.colour||"").split(/[,;|/+]+/).map(x=>x.trim()).filter(Boolean);
+    const matchArray=(key,vals)=>{ const a=arrOf(df[key]); return !a.length || vals.some(v=>a.includes(v)); };
+    return matchArray("order",orderVals) && matchArray("junior",juniorVals) && hasSel("fit",st.sampleFit) && hasSel("family",st.family) && hasSel("brand",st.brand) && hasSel("fabric",st.fabricType) && (!arrOf(df.colour).length || arrOf(df.colour).some(v=>colourVals.includes(v)));
+  };
+  const escalationTodo=(todoItems||[]).filter(t=>todoMatchesSlice(t)&&t.overdue&&t.escalationOwner);
   const escLoad=escalationTodo.reduce((m,t)=>{ const k=t.escalationOwner||"(blank)"; m[k]=(m[k]||0)+1; return m; },{});
   const escRows=Object.entries(escLoad).sort((a,b)=>b[1]-a[1]); const maxEsc=Math.max(1,...escRows.map(x=>x[1]));
 
@@ -2609,7 +2629,7 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
       { label:"Buyer Approval Delay", data:exportBuyerDelayData, detailData:buyerApprovalDetail, modes:["summary","detailed"] },
       { label:"Chase Delay Ranking", data:exportChaseDelayData, detailData:chaseDetailRows, modes:["summary","detailed"] },
       { label:"Buyer Brand Delays", data:exportBrandDelayData, detailData:brandDetailRows, modes:["summary","detailed"] },
-      { label:"Escalation Owner Load", data:escRows.map(([owner,count])=>({"Escalation Owner":owner,"Overdue Items":count})), detailData:(todoItems||[]).filter(t=>t.overdue&&t.escalationOwner).map(t=>({"Order No":t.orderNo||"","Style No":t.styleNo||"","Activity":t.activity||"","Chase Label":t.owner||"","Escalation Owner":t.escalationOwner||"","Escalation Level":t.escalationLevel||"","Days Overdue":t.daysLate||"","Action":t.escalationAction||""})), modes:["summary","detailed"] },
+      { label:"Escalation Owner Load", data:escRows.map(([owner,count])=>({"Escalation Owner":owner,"Overdue Items":count})), detailData:escalationTodo.map(t=>({"Order No":t.orderNo||"","Style No":t.styleNo||"","Activity":t.activity||"","Chase Label":t.owner||"","Escalation Owner":t.escalationOwner||"","Escalation Level":t.escalationLevel||"","Days Overdue":t.daysLate||"","Action":t.escalationAction||""})), modes:["summary","detailed"] },
       { label:"Current Slice Styles", data:currentStyles, detailData:currentSliceStageDetail, modes:["detailed"] },
       { label:"Plan Accuracy Summary", data:planAccuracyData, modes:["summary","detailed"] },
       { label:"Actual vs Original Plan", data:planActualData, detailData:detailRowsFor("Actual vs Original Plan", planActualRecords), modes:["summary","detailed"] },
