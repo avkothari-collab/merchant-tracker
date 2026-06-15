@@ -281,14 +281,28 @@ const pickReportSheets=(reportName,sheets,mode)=>{
   t.split(/[,\s]+/).forEach(part=>{ const idx=Number(part)-1; if(idx>=0&&idx<available.length&&!seen.has(idx)){ seen.add(idx); selected.push(available[idx]); } });
   return selected.length?selected:null;
 };
-const appendReportSheets=(wb,selected)=>{
-  (selected||[]).forEach(sh=>{
-    const data=Array.isArray(sh.data)?sh.data:[];
-    const safe=String(sh.label||"Sheet").slice(0,31).replace(/[\\/?*\[\]:]/g," ");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(data.length?data:[{"No data":""}]), safe);
+const safeSheetName=(name)=>String(name||"Sheet").slice(0,31).replace(/[\\/?*\[\]:]/g," ");
+const safeFilePart=(name)=>String(name||"report").toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"").slice(0,60)||"report";
+const appendOneSheet=(wb,label,data)=>{
+  const rows=Array.isArray(data)?data:[];
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.length?rows:[{"No data":""}]), safeSheetName(label));
+};
+const appendReportSheets=(wb,selected,mode="summary")=>{
+  (selected||[]).forEach((sh,idx)=>{
+    const base=String(sh.label||("Table "+(idx+1)));
+    if(mode==="detailed" && Array.isArray(sh.detailData)){
+      appendOneSheet(wb, base+" Summary", sh.data);
+      appendOneSheet(wb, base+" Detail", sh.detailData);
+    } else {
+      appendOneSheet(wb, base, sh.data);
+    }
   });
 };
-
+const reportFileName=(prefix,mode,selected)=>{
+  const arr=selected||[];
+  const tablePart = arr.length===1 ? safeFilePart(arr[0].label) : "multiple_tables";
+  return `${safeFilePart(prefix)}_${mode}_${tablePart}_${iso(TODAY)}.xlsx`;
+};
 
 function ReportExportMenu({ title, prefix, sheets, defaultMode="detailed" }){
   const [open,setOpen]=useState(false);
@@ -306,8 +320,8 @@ function ReportExportMenu({ title, prefix, sheets, defaultMode="detailed" }){
     const selected=available.filter(x=>active.has(x.label));
     if(!selected.length){ alert("Select at least one table/sheet to export."); return; }
     const wb=XLSX.utils.book_new();
-    appendReportSheets(wb,selected);
-    XLSX.writeFile(wb,`${prefix}_${mode}_report_${iso(TODAY)}.xlsx`);
+    appendReportSheets(wb,selected,mode);
+    XLSX.writeFile(wb,reportFileName(prefix,mode,selected));
     setOpen(false);
   };
   return (<span style={{ position:"relative", display:"inline-flex" }}>
@@ -319,7 +333,7 @@ function ReportExportMenu({ title, prefix, sheets, defaultMode="detailed" }){
       </div>
       <div style={{ fontSize:9, color:"var(--muted-2)", marginBottom:5 }}>Choose tables/sheets:</div>
       <div style={{ maxHeight:190, overflowY:"auto", border:"1px solid var(--line-2)", padding:6, marginBottom:8 }}>
-        {available.map((sh,i)=><label key={sh.label} style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, padding:"4px 2px", cursor:"pointer", borderBottom:i===available.length-1?"none":"1px solid var(--line-3)" }}><input type="checkbox" checked={active.has(sh.label)} onChange={()=>toggle(sh.label)}/><span style={{ flex:1 }}>{sh.label}</span><span style={{ color:"var(--muted-1)", fontSize:9 }}>{Array.isArray(sh.data)?sh.data.length:0} rows</span></label>)}
+        {available.map((sh,i)=><label key={sh.label} style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, padding:"4px 2px", cursor:"pointer", borderBottom:i===available.length-1?"none":"1px solid var(--line-3)" }}><input type="checkbox" checked={active.has(sh.label)} onChange={()=>toggle(sh.label)}/><span style={{ flex:1 }}>{sh.label}</span><span style={{ color:"var(--muted-1)", fontSize:9 }}>{Array.isArray(sh.data)?sh.data.length:0}{mode==="detailed"&&Array.isArray(sh.detailData)?" + "+sh.detailData.length:""} rows</span></label>)}
       </div>
       <div style={{ display:"flex", gap:6, marginBottom:8 }}><button onClick={selectAll} style={{ ...chip, flex:1 }}>All</button><button onClick={selectNone} style={{ ...chip, flex:1 }}>None</button></div>
       <div style={{ display:"flex", gap:8 }}><button onClick={doExport} style={{ flex:1, fontFamily:"inherit", fontSize:11, fontWeight:800, padding:7, cursor:"pointer", border:"1px solid var(--ink)", background:"var(--accent)" }}>⬇ Export .xlsx</button><button onClick={()=>setOpen(false)} style={{ fontFamily:"inherit", fontSize:11, padding:"7px 10px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--bg)" }}><X size={12}/></button></div>
@@ -1269,11 +1283,11 @@ function OperationalDashboardView({ computed, todoItems, applyDrill, drillTodo }
   const activityRows=acts.map(([activity,v])=>({ "Activity":activity, "Open Count":v.n, "Overdue Count":v.over, "Stage Key":v.key }));
   const phaseRows=Object.entries(phase).map(([phaseName,count])=>({ "Phase":phaseName, "Styles":count }));
   const dashboardSheets=[
-      { label:"Summary", data:dashboardSummary, modes:["summary","detailed"] },
-      { label:"Who to Chase", data:ownerRows, modes:["summary","detailed"] },
-      { label:"Open Activities", data:activityRows, modes:["summary","detailed"] },
-      { label:"Stuck Phases", data:phaseRows, modes:["summary","detailed"] },
-      { label:"Styles in Slice", data:dashboardStyleRows, modes:["detailed"] },
+      { label:"Summary", data:dashboardSummary, detailData:dashboardBreakup, modes:["summary","detailed"] },
+      { label:"Who to Chase", data:ownerRows, detailData:dashboardBreakup.filter(r=>String(r["Chase Breakdown"]||"").trim()), modes:["summary","detailed"] },
+      { label:"Open Activities", data:activityRows, detailData:dashboardStageDetail.filter(r=>r["Actionable Frontier?"]==="YES"), modes:["summary","detailed"] },
+      { label:"Stuck Phases", data:phaseRows, detailData:dashboardBreakup, modes:["summary","detailed"] },
+      { label:"Styles in Slice", data:dashboardStyleRows, detailData:dashboardStageDetail, modes:["detailed"] },
       { label:"Dashboard Breakup", data:dashboardBreakup, modes:["detailed"] },
       { label:"Style Stage Detail", data:dashboardStageDetail, modes:["detailed"] },
       { label:"Revised vs Actual", data:dashboardRevisedVsActual, modes:["detailed"] },
@@ -1429,16 +1443,17 @@ function ManagementDashboardView({ computed, todoItems, applyDrill, drillTodo })
   const delayData=worstDelays.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Department":r.dept,"Delay Days":r1(r.delay),"Duration Days":r.duration==null?"":r1(r.duration),"Due":fmt(r.due),"Actual":fmt(r.actual)}));
   const calcBreakup=delayRecords.map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Stage Key":r.stageKey,"Department":r.dept,"Auto Plan Date":r.plan?fmt(r.plan):"","Revised Date":r.revised?fmt(r.revised):"","Due Date Used":fmt(r.due),"Actual Date":fmt(r.actual),"Start Date Used":r.start?fmt(r.start):"","Delay vs Due Days":r1(r.delay),"Delay vs Auto Plan Days":r.delayPlan==null?"":r1(r.delayPlan),"Actual vs Revised Days":r.delayRevised==null?"":r1(r.delayRevised),"Duration Days":r.duration==null?"":r1(r.duration),"Included in Avg Delay":"YES","Included in Avg Actual Time":r.duration==null?"NO - start date missing":"YES","Included in Revised Accuracy":r.delayRevised==null?"NO - no revised+actual":"YES"}));
   const revisedActualData=delayRecords.filter(r=>r.delayRevised!=null).map(r=>({"Order":r.order,"Style":r.style,"Buyer":r.buyer,"Owner":r.owner,"Stage":r.stage,"Department":r.dept,"Auto Plan Date":r.plan?fmt(r.plan):"","Revised Date":fmt(r.revised),"Actual Date":fmt(r.actual),"Actual vs Revised Days":r1(r.delayRevised),"Accuracy":r.delayRevised===0?"On revised date":(r.delayRevised>0?"Late vs revised":"Early vs revised")}));
+  const buyerApprovalDetail=calcBreakup.filter(r=>["fitAppr","artAppr","soAppr","labAppr","ppAppr"].includes(r["Stage Key"]));
   const analyticsSheets=[
-      { label:"Summary", data:mgmtSummary, modes:["summary","detailed"] },
+      { label:"Summary", data:mgmtSummary, detailData:calcBreakup, modes:["summary","detailed"] },
       { label:"Calculation Checks", data:checks, modes:["summary","detailed"] },
-      { label:"Stage Performance", data:stageData, modes:["summary","detailed"] },
-      { label:"Department Performance", data:dept, modes:["summary","detailed"] },
-      { label:"Buyer Approval", data:buyerData, modes:["summary","detailed"] },
-      { label:"Owner Delays", data:ownerData, modes:["summary","detailed"] },
-      { label:"Buyer Brand Delays", data:brandData, modes:["summary","detailed"] },
-      { label:"Current Slice", data:currentStyles, modes:["detailed"] },
-      { label:"Worst Delays", data:delayData, modes:["detailed"] },
+      { label:"Stage Performance", data:stageData, detailData:calcBreakup, modes:["summary","detailed"] },
+      { label:"Department Performance", data:dept, detailData:calcBreakup, modes:["summary","detailed"] },
+      { label:"Buyer Approval", data:buyerData, detailData:buyerApprovalDetail, modes:["summary","detailed"] },
+      { label:"Owner Delays", data:ownerData, detailData:calcBreakup, modes:["summary","detailed"] },
+      { label:"Buyer Brand Delays", data:brandData, detailData:calcBreakup, modes:["summary","detailed"] },
+      { label:"Current Slice", data:currentStyles, detailData:calcBreakup, modes:["detailed"] },
+      { label:"Worst Delays", data:delayData, detailData:calcBreakup.filter(r=>Number(r["Delay vs Due Days"]||0)>0), modes:["detailed"] },
       { label:"Calculation Breakup", data:calcBreakup, modes:["detailed"] },
       { label:"Revised vs Actual", data:revisedActualData, modes:["detailed"] },
   ];
@@ -1522,24 +1537,18 @@ function TodoView({ items, filter, setFilter, onJump }){
     <span style={{ width:COLW.date, fontSize:9, fontWeight:700, textTransform:"uppercase", color:"#8a857a" }}>Plan Date</span>
     <span style={{ flex:1, fontSize:9, fontWeight:700, textTransform:"uppercase", color:"#8a857a" }}>Days Late / Left</span>
   </div>);
+  const data=shown.map(t=>({ "Priority":t.overdue?"Overdue":"Upcoming", "Order No":t.orderNo||"", "Style / Colour":t.isColour?String(t.colour||""):t.styleNo, "Grouped Fabric Count":t.isColour?(t.count||0):"", "Junior":t.junior||"", "Activity":t.activity||"", "Branch":t.branch||"", "Owner / Chase":t.owner||"", "Plan Date":t.exp?fmt(t.exp):"", "Days Late / Left":t.overdue?Math.abs(t.du):t.du, "Style ID":t.id, "Stage Key":t.key }));
+  const summary=[{ "Report Type":"To-Do", "Shown Items":shown.length, "Total Items":items.length, "Overdue":overdue.length, "Upcoming":upcoming.length }];
+  const byOwner={}; const byActivity={};
+  shown.forEach(t=>{ byOwner[t.owner||"(blank)"]=(byOwner[t.owner||"(blank)"]||0)+1; byActivity[t.activity||"(blank)"]=(byActivity[t.activity||"(blank)"]||0)+1; });
+  const ownerRows=Object.entries(byOwner).map(([k,v])=>({"Owner / Chase":k,"Items":v}));
+  const activityRows=Object.entries(byActivity).map(([k,v])=>({"Activity":k,"Items":v}));
   const todoSheets=[
-      { label:"Summary", data:summary, modes:["summary","detailed"] },
-      { label:"By Owner", data:ownerRows, modes:["summary","detailed"] },
-      { label:"By Activity", data:activityRows, modes:["summary","detailed"] },
+      { label:"Summary", data:summary, detailData:data, modes:["summary","detailed"] },
+      { label:"By Owner", data:ownerRows, detailData:data, modes:["summary","detailed"] },
+      { label:"By Activity", data:activityRows, detailData:data, modes:["summary","detailed"] },
       { label:"To-Do Items", data:data, modes:["detailed"] },
   ];
-  const exportTodoReport=(mode="detailed")=>{
-    const data=shown.map(t=>({ "Priority":t.overdue?"Overdue":"Upcoming", "Order No":t.orderNo||"", "Style / Colour":t.isColour?String(t.colour||""):t.styleNo, "Grouped Fabric Count":t.isColour?(t.count||0):"", "Junior":t.junior||"", "Activity":t.activity||"", "Branch":t.branch||"", "Owner / Chase":t.owner||"", "Plan Date":t.exp?fmt(t.exp):"", "Days Late / Left":t.overdue?Math.abs(t.du):t.du, "Style ID":t.id, "Stage Key":t.key }));
-    if(!shown.length){ alert("No To-Do rows to export."); return; }
-    const summary=[{ "Report Type":mode==="summary"?"Summary":"Detailed", "Shown Items":shown.length, "Total Items":items.length, "Overdue":overdue.length, "Upcoming":upcoming.length }];
-    const byOwner={}; const byActivity={};
-    shown.forEach(t=>{ byOwner[t.owner||"(blank)"]=(byOwner[t.owner||"(blank)"]||0)+1; byActivity[t.activity||"(blank)"]=(byActivity[t.activity||"(blank)"]||0)+1; });
-    const ownerRows=Object.entries(byOwner).map(([k,v])=>({"Owner / Chase":k,"Items":v}));
-    const activityRows=Object.entries(byActivity).map(([k,v])=>({"Activity":k,"Items":v}));
-    const selected=todoSheets.filter(x=>!x.modes || x.modes.includes(mode));
-    const wb=XLSX.utils.book_new(); appendReportSheets(wb,selected);
-    XLSX.writeFile(wb,"todo_"+mode+"_report_"+iso(TODAY)+".xlsx");
-  };
   const row=(t)=>(<button key={(t.isColour?"col-":"")+t.id+t.key} onClick={()=>onJump(t.id,t.key)} style={{ display:"flex", alignItems:"center", gap:10, width:"100%", textAlign:"left", borderLeft:`4px solid ${t.overdue?"var(--danger)":"var(--accent)"}`, borderBottom:"1px solid #eee7da", background:t.isColour?"#fbf8f1":"var(--surface)", cursor:"pointer", fontFamily:"inherit", padding:"7px 12px" }}>
     <span style={{ width:COLW.pri, fontSize:10, fontWeight:700, display:"flex", alignItems:"center", gap:6, color:t.overdue?"var(--danger)":"#7a560f" }}><span style={{ width:8, height:8, borderRadius:"50%", background:t.overdue?"var(--danger)":"var(--accent)" }}/>{t.overdue?"Overdue":"Upcoming"}</span>
     <span style={{ width:COLW.ord, fontSize:10, color:"var(--muted-4)" }}>{t.orderNo||"—"}</span>
