@@ -463,14 +463,17 @@ const pickReportSheets=(reportName,sheets,mode)=>{
 const safeSheetName=(name)=>String(name||"Sheet").slice(0,31).replace(/[\\/?*\[\]:]/g," ");
 const safeFilePart=(name)=>String(name||"report").toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"").slice(0,60)||"report";
 const TRACKER_VIEW_SETTING_ID="tracker_views";
+const SYSTEM_DEFAULT_TRACKER_VIEW_NAME="System Default — All Columns";
+const SYSTEM_DEFAULT_TRACKER_VIEW={ name:SYSTEM_DEFAULT_TRACKER_VIEW_NAME, system:true, shared:true, locked:true, state:{ columnView:"custom", hidden:[], statusFilter:"All", ownerFilter:"All", archiveView:"active", savedView:"", search:"", searchCol:"auto", activityFilter:null, colFilters:{}, sort:{ col:null, dir:1 }, freezeN:1 } };
 const DEFAULT_NAMED_TRACKER_VIEWS=[
+  SYSTEM_DEFAULT_TRACKER_VIEW,
   { name:"Management View", shared:true, state:{ columnView:"management", hidden:null, statusFilter:"All", ownerFilter:"All", archiveView:"active", savedView:"", search:"", searchCol:"auto", activityFilter:null, colFilters:{}, sort:{ col:null, dir:1 }, freezeN:1 } },
   { name:"Junior Merchandiser View", shared:true, state:{ columnView:"merchant", hidden:null, statusFilter:"All", ownerFilter:"All", archiveView:"active", savedView:"", search:"", searchCol:"auto", activityFilter:null, colFilters:{}, sort:{ col:null, dir:1 }, freezeN:1 } },
   { name:"Buyer Approval View", shared:true, state:{ columnView:"buyer", hidden:null, statusFilter:"All", ownerFilter:"Buyer", archiveView:"active", savedView:"buyerPending", search:"", searchCol:"auto", activityFilter:null, colFilters:{}, sort:{ col:"delivery", dir:1 }, freezeN:1 } },
   { name:"Production Follow-up View", shared:true, state:{ columnView:"store", hidden:null, statusFilter:"At Risk", ownerFilter:"All", archiveView:"active", savedView:"fabricPending", search:"", searchCol:"auto", activityFilter:null, colFilters:{}, sort:{ col:"fabricCD", dir:1 }, freezeN:1 } },
   { name:"My To-Do View", shared:true, state:{ columnView:"custom", hidden:null, statusFilter:"At Risk", ownerFilter:"All", archiveView:"active", savedView:"dueThisWeek", search:"", searchCol:"auto", activityFilter:null, colFilters:{}, sort:{ col:"delivery", dir:1 }, freezeN:1 } },
 ];
-const normalizeTrackerViews=(views)=>{ const arr=Array.isArray(views)?views:[]; const byName=new Map(); DEFAULT_NAMED_TRACKER_VIEWS.forEach(v=>byName.set(v.name,v)); arr.forEach(v=>{ if(v&&v.name) byName.set(v.name,{...v, state:{...(v.state||{})}}); }); return [...byName.values()]; };
+const normalizeTrackerViews=(views)=>{ const arr=Array.isArray(views)?views:[]; const byName=new Map(); DEFAULT_NAMED_TRACKER_VIEWS.forEach(v=>byName.set(v.name,v)); arr.forEach(v=>{ if(!v||!v.name||v.name===SYSTEM_DEFAULT_TRACKER_VIEW_NAME) return; byName.set(v.name,{...v, state:{...(v.state||{})}}); }); byName.set(SYSTEM_DEFAULT_TRACKER_VIEW_NAME,SYSTEM_DEFAULT_TRACKER_VIEW); return [...byName.values()]; };
 const appendOneSheet=(wb,label,data)=>{
   const rows=Array.isArray(data)?data:(typeof data==="function"?(data()||[]):[]);
   const sheetRows=rows.length?rows:[{"No data":""}];
@@ -599,7 +602,7 @@ function MerchTracker({ me, onSignOut }){
   const [expOpen,setExpOpen]=useState(false); const [expMode,setExpMode]=useState(()=>{ try{ return localStorage.getItem("mt_exp_mode")||"full"; }catch(e){ return "full"; } }); const [expBuf,setExpBuf]=useState(()=>{ try{ const v=parseInt(localStorage.getItem("mt_exp_buf"),10); return (isFinite(v)&&v>=0&&v<=30)?v:2; }catch(e){ return 2; } }); const [expIncBuf,setExpIncBuf]=useState(()=>{ try{ return localStorage.getItem("mt_exp_incbuf")==="1"; }catch(e){ return false; } }); const [expRelMode,setExpRelMode]=useState(()=>{ try{ return localStorage.getItem("mt_exp_relmode")||"detailed"; }catch(e){ return "detailed"; } });
   const [frOpen,setFrOpen]=useState(false); const [frFind,setFrFind]=useState(""); const [frRepl,setFrRepl]=useState(""); const [frScope,setFrScope]=useState(()=>{ try{ const v=localStorage.getItem("mt_fr_scope"); return (v==="selected"||v==="filtered")?v:"filtered"; }catch(e){ return "filtered"; } }); const [frCase,setFrCase]=useState(()=>{ try{ return localStorage.getItem("mt_fr_case")==="1"; }catch(e){ return false; } });
   useEffect(()=>{ try{ localStorage.setItem("mt_exp_mode",expMode); localStorage.setItem("mt_exp_buf",String(expBuf)); localStorage.setItem("mt_exp_incbuf",expIncBuf?"1":"0"); localStorage.setItem("mt_exp_relmode",expRelMode); localStorage.setItem("mt_fr_scope",frScope); localStorage.setItem("mt_fr_case",frCase?"1":"0"); }catch(e){} },[expMode,expBuf,expIncBuf,expRelMode,frScope,frCase]);
-  const [freezeN,setFreezeN]=useState(1);  // # leading columns frozen (incl style)
+  const [freezeN,setFreezeN]=useState(()=>{ try{ const v=parseInt(localStorage.getItem("mt_freeze_n"),10); return (Number.isFinite(v)&&v>=1&&v<=12)?v:1; }catch(e){ return 1; } });  // # leading columns frozen (incl style), user/browser persisted
   const [hiddenRows,setHiddenRows]=useState(()=>{ try{ return new Set(JSON.parse(localStorage.getItem("mt_hidden_rows")||"[]")); }catch(e){ return new Set(); } });
   useEffect(()=>{ try{ localStorage.setItem("mt_hidden_rows", JSON.stringify([...hiddenRows])); }catch(e){} },[hiddenRows]);
   const [rowH,setRowH]=useState(()=>{ try{ const h=Number(localStorage.getItem("mt_row_h")||34)||34; return h>56?34:h; }catch(e){ return 34; } });
@@ -961,6 +964,7 @@ function MerchTracker({ me, onSignOut }){
   const [todoFilter,setTodoFilter]=useState(PF.todoFilter||{});
   useEffect(()=>{ try{ localStorage.setItem("mt_trackfilters", JSON.stringify({ search, searchCol, statusFilter, ownerFilter, archiveView, activityFilter, colFilters, tab, todoFilter, followFilter, savedView })); }catch(e){} },[search,searchCol,statusFilter,ownerFilter,archiveView,activityFilter,colFilters,tab,todoFilter,followFilter,savedView]);
   useEffect(()=>{ try{ localStorage.setItem("mt_column_view",columnView); }catch(e){} },[columnView]);
+  useEffect(()=>{ try{ localStorage.setItem("mt_freeze_n",String(freezeN)); }catch(e){} },[freezeN]);
   const valueFor=(s,cc,col)=>{
     if(col==="__style") return s.styleNo||"";
     if(["orderNo","sampleFit","family","colour","brand","fabricType","owner","setId","setRole","remarks"].includes(col)) return s[col]||"(Blanks)";
@@ -981,7 +985,7 @@ function MerchTracker({ me, onSignOut }){
   const chaseLabel=(owner)=>String(owner||"—");
   const SAVED_VIEWS=[ ["","Saved view: none"], ["overdue","Overdue"], ["dueThisWeek","Due this week"], ["buyerPending","Buyer approval pending"], ["fabricPending","Fabric pending"], ["ppPending","PP pending"], ["deliveryRisk","Delivery risk"], ["following","Followed styles"], ["rework","Rejected / rework"], ["released","Released"] ];
   const anyFilter = statusFilter!=="All"||ownerFilter!=="All"||!!search||Object.keys(colFilters).length>0||!!activityFilter||followFilter||!!savedView;
-  const resetFilters=()=>{ setStatusFilter("All"); setOwnerFilter("All"); setSearch(""); setColFilters({}); setActivityFilter(null); setSavedView(""); setActiveNamedView(""); };
+  const resetFilters=()=>{ setStatusFilter("All"); setOwnerFilter("All"); setSearch(""); setSearchCol("auto"); setColFilters({}); setActivityFilter(null); setSavedView(""); setFollowFilter(false); setArchiveView("active"); setActiveNamedView(""); };
   const snapCurrent=()=>setViewSnap({ statusFilter, ownerFilter, search, colFilters, activityFilter, savedView });
   const clearAllFilters=()=>{ resetFilters(); setViewSnap(null); };
   const restoreView=()=>{ if(!viewSnap) return; setStatusFilter(viewSnap.statusFilter); setOwnerFilter(viewSnap.ownerFilter); setSearch(viewSnap.search); setColFilters(viewSnap.colFilters); setActivityFilter(viewSnap.activityFilter); setSavedView(viewSnap.savedView||""); setViewSnap(null); };
@@ -1099,7 +1103,7 @@ function MerchTracker({ me, onSignOut }){
     store:{ label:"Store / Fabric view", show:["orderNo","family","colour","brand","fabricType","owner","delivery","overall","fabric","labDip","labAppr","fabricIH","fabricCD","chase","remarks"] },
     buyer:{ label:"Buyer follow-up view", show:["orderNo","family","colour","brand","buyer","delivery","overall","fitAppr","artAppr","soAppr","labAppr","ppAppr","proj","chase","remarks"] }
   };
-  const applyColumnView=(view)=>{ setColumnView(view); setColsOpen(false); if(view==="custom") return; const all=[...INFO_COLS.map(c=>c.key),...STAGE_KEYS,"remarks"]; const spec=ROLE_VIEW_PRESETS[view]; if(!spec||!spec.show){ setHidden(new Set(["extra1","extra2"])); return; } const keep=new Set(spec.show); setHidden(new Set(all.filter(k=>!keep.has(k)))); setFreezeN(1); };
+  const applyColumnView=(view)=>{ setColumnView(view); setColsOpen(false); if(view==="custom"){ setHidden(new Set()); return; } const all=[...INFO_COLS.map(c=>c.key),...STAGE_KEYS,"remarks"]; const spec=ROLE_VIEW_PRESETS[view]; if(!spec||!spec.show){ setHidden(new Set()); return; } const keep=new Set(spec.show); setHidden(new Set(all.filter(k=>!keep.has(k)))); setFreezeN(1); };
 
   const currentViewState=()=>({
     search, searchCol, statusFilter, ownerFilter, archiveView, activityFilter, colFilters, savedView, columnView,
@@ -1115,14 +1119,15 @@ function MerchTracker({ me, onSignOut }){
   };
   const saveSharedTrackerView=async()=>{
     if(!canAdmin(role)){ alert("Only Management / Sr Merchant can save or overwrite shared default views. Your current filters are still temporary for you only."); return; }
-    const name=(window.prompt("Save current filters/columns as default shared view:", activeNamedView||"Management View")||"").trim();
+    const name=(window.prompt("Save current filters/columns as default shared view:", (activeNamedView&&activeNamedView!==SYSTEM_DEFAULT_TRACKER_VIEW_NAME)?activeNamedView:"Management View")||"").trim();
     if(!name) return;
+    if(name===SYSTEM_DEFAULT_TRACKER_VIEW_NAME){ alert("System Default — All Columns is locked and cannot be overwritten by any user. Save a new named view instead."); return; }
     const next=normalizeTrackerViews(sharedViews.filter(v=>v.name!==name).concat([{ name, shared:true, updatedAt:new Date().toISOString(), updatedBy:me?.name||me?.email||"", state:currentViewState() }]));
     setSharedViews(next); setActiveNamedView(name);
     try{ const { error }=await supabase.from("app_settings").upsert({ id:TRACKER_VIEW_SETTING_ID, data:{ views:next } }); if(error) throw error; flash(); }
     catch(e){ logAppError("save shared view failed",e); alert("View saved locally in this browser, but shared save failed: "+(e.message||e)); }
   };
-  const resetTemporaryView=()=>{ clearAllFilters(); setSort({ col:null, dir:1 }); setActiveNamedView(""); };
+  const resetTemporaryView=()=>{ clearAllFilters(); setSort({ col:null, dir:1 }); setColumnView("custom"); setHidden(new Set()); setFreezeN(1); setActiveNamedView(""); setFilterPinnedIds(new Set()); const w=scrollWrapRef.current; if(w){ w.scrollLeft=0; w.scrollTop=0; } };
 
   // ---- freeze: cumulative left offsets for frozen leading columns ----
   // IMPORTANT: every frozen cell must use the same explicit width and left offset.
@@ -1590,10 +1595,10 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
       <div style={{ display:"flex", gap:8, alignItems:"center", padding:"0 22px 6px", flexWrap:"wrap" }}>
         <div className="mt-toolbar-group" style={{ display:"flex", alignItems:"center", gap:6, flexWrap:"wrap", background:"var(--toolbar-bg)", border:"1px solid var(--toolbar-line)", borderRadius:6, padding:"5px 7px", boxShadow:"0 1px 0 rgba(0,0,0,0.03)" }}>
           <span style={{ fontSize:9, fontWeight:800, color:"var(--muted-2)", textTransform:"uppercase", letterSpacing:0.4, marginRight:2 }}>View</span>
-        <select value={columnView} onChange={e=>applyColumnView(e.target.value)} onClick={e=>e.stopPropagation()} title="role-based column views" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 8px", cursor:"pointer", border:"1px solid var(--ink)", background:columnView==="custom"?"var(--surface)":"#eef6ff", fontWeight:columnView==="custom"?400:700 }}><option value="custom">View: Custom</option>{Object.entries(ROLE_VIEW_PRESETS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select>
-        <select value={activeNamedView} onChange={e=>{ const name=e.target.value; const v=(sharedViews||[]).find(x=>x.name===name); if(v) applyTrackerViewState(v.state,name); else setActiveNamedView(""); }} onClick={e=>e.stopPropagation()} title="shared default views saved in app_settings; loading does not affect other users" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 8px", cursor:"pointer", border:"1px solid "+(activeNamedView?"var(--accent)":"var(--ink)"), background:activeNamedView?"var(--accent-tint)":"var(--surface)", fontWeight:activeNamedView?800:400 }}><option value="">Default view: choose</option>{(sharedViews||[]).map(v=><option key={v.name} value={v.name}>{v.name}</option>)}</select>
-        <button onClick={(e)=>{ e.stopPropagation(); saveSharedTrackerView(); }} title="save current filters/sort/columns as shared default view for everyone (Management/Senior only)" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 10px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)", fontWeight:700 }}>Save default</button>
-        <button onClick={(e)=>{ e.stopPropagation(); resetTemporaryView(); }} title="clear your temporary filters/sort only; this does not change shared data or other users" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 10px", cursor:"pointer", border:"1px solid var(--line-2)", background:"var(--surface)", color:"var(--muted-3)", fontWeight:700 }}>Reset temp</button><button onClick={(e)=>{ e.stopPropagation(); setActiveNamedView(""); resetTemporaryView(); }} title="return from CAD/Buyer/other saved view to full custom default" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 10px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)", color:"var(--ink)", fontWeight:700 }}>Full view</button>
+        <select value={columnView} onChange={e=>applyColumnView(e.target.value)} onClick={e=>e.stopPropagation()} title="role-based column views" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 8px", cursor:"pointer", border:"1px solid var(--ink)", background:columnView==="custom"?"var(--surface)":"#eef6ff", fontWeight:columnView==="custom"?400:700 }}><option value="custom">View: All columns / Custom</option>{Object.entries(ROLE_VIEW_PRESETS).map(([k,v])=><option key={k} value={k}>{v.label}</option>)}</select>
+        <select value={activeNamedView} onChange={e=>{ const name=e.target.value; const v=(sharedViews||[]).find(x=>x.name===name); if(v) applyTrackerViewState(v.state,name); else setActiveNamedView(""); }} onClick={e=>e.stopPropagation()} title="View presets. System Default shows all columns and cannot be overwritten by any user." style={{ fontFamily:"inherit", fontSize:11, padding:"6px 8px", cursor:"pointer", border:"1px solid "+(activeNamedView?"var(--accent)":"var(--ink)"), background:activeNamedView?"var(--accent-tint)":"var(--surface)", fontWeight:activeNamedView?800:400 }}><option value="">Default view: choose</option>{(sharedViews||[]).map(v=><option key={v.name} value={v.name}>{v.locked?"🔒 ":""}{v.name}</option>)}</select>
+        <button onClick={(e)=>{ e.stopPropagation(); saveSharedTrackerView(); }} title={activeNamedView===SYSTEM_DEFAULT_TRACKER_VIEW_NAME?"System Default is locked; save a new named view instead":"save current filters/sort/columns as shared default view for everyone (Management/Senior only)"} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 10px", cursor:activeNamedView===SYSTEM_DEFAULT_TRACKER_VIEW_NAME?"not-allowed":"pointer", border:"1px solid var(--ink)", background:activeNamedView===SYSTEM_DEFAULT_TRACKER_VIEW_NAME?"var(--toolbar-subtle)":"var(--surface)", opacity:activeNamedView===SYSTEM_DEFAULT_TRACKER_VIEW_NAME?0.7:1, fontWeight:700 }}>Save default</button>
+        <button onClick={(e)=>{ e.stopPropagation(); resetTemporaryView(); }} title="clear temporary filters/sort; keeps current column layout" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 10px", cursor:"pointer", border:"1px solid var(--line-2)", background:"var(--surface)", color:"var(--muted-3)", fontWeight:700 }}>Reset temp</button><button onClick={(e)=>{ e.stopPropagation(); setActiveNamedView(""); resetTemporaryView(); }} title="reset to all columns, active styles, no filters, no sort, and freeze only Style No" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 10px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)", color:"var(--ink)", fontWeight:700 }}>Full view</button>
         <div style={{ position:"relative" }}><button onClick={(e)=>{ e.stopPropagation(); finishEditing(); setColsOpen(o=>!o); setFillOpen(false); }} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 11px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)", display:"flex", alignItems:"center", gap:6 }}><Columns3 size={13}/> Columns {hidden.size>0?`(${hidden.size} hidden)`:""}</button>
           {colsOpen && (<div onClick={e=>e.stopPropagation()} style={{ position:"absolute", top:"100%", left:0, marginTop:4, zIndex:370, background:"var(--surface)", border:"1px solid var(--ink)", boxShadow:"4px 4px 0 var(--ink)", padding:10, width:230, maxHeight:300, overflowY:"auto" }}><div style={{ fontSize:10, fontWeight:700, marginBottom:6 }}>Show / hide columns</div><button onClick={(e)=>{ e.stopPropagation(); fitAllCols(); }} style={{ ...chip, width:"100%", marginBottom:8 }}>↔ Auto-fit widths to content</button>{[...INFO_COLS,{key:"remarks",label:"Remarks / Delays"},...STAGES].map(col=>(<label key={col.key} style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, padding:"2px 0", cursor:"pointer" }}><input type="checkbox" checked={!hidden.has(col.key)} onChange={()=>setHidden(p=>{ const n=new Set(p); n.has(col.key)?n.delete(col.key):n.add(col.key); return n; })}/><span style={{ flex:1 }}>{colLabel(col)}</span>{(col.key==="extra1"||col.key==="extra2") && canAdmin(role) && <button onClick={(e)=>{ e.stopPropagation(); e.preventDefault(); const nv=window.prompt("Rename this column header:", colLabel(col)); if(nv!=null){ const t=nv.trim(); setCfg(p=>({ ...p, labels:{ ...(p.labels||{}), [col.key]: t||undefined } })); } }} title="rename header (Management / Senior)" style={{ fontSize:9, padding:"1px 5px", cursor:"pointer", border:"1px solid var(--line-2)", background:"var(--surface)" }}>rename</button>}</label>))}<div style={{ fontSize:8, color:"var(--muted-1)", marginTop:8, lineHeight:1.4 }}>Your column view is saved on this device.</div>{hidden.size>0 && <button onClick={()=>setHidden(new Set())} style={{ ...chip, marginTop:6, width:"100%" }}>Reset to default (show all)</button>}</div>)}
         </div>
@@ -2336,12 +2341,15 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   useEffect(()=>{ try{ localStorage.setItem("mt_mgmt_open", JSON.stringify(mgmtOpen)); }catch(e){} },[mgmtOpen]);
   const [perfView,setPerfView]=useState(()=>{ try{ return localStorage.getItem("mt_mgmt_perf_view")||"chase"; }catch(e){ return "chase"; } }); // chase | stage
   const [perfMode,setPerfMode]=useState(()=>{ try{ return localStorage.getItem("mt_mgmt_perf_mode")||"summary"; }catch(e){ return "summary"; } }); // summary | revised | noRevised
+  const [perfScope,setPerfScope]=useState(()=>{ try{ return localStorage.getItem("mt_mgmt_perf_scope")||"all"; }catch(e){ return "all"; } }); // all | late
   const validPerfMode=["summary","revised","noRevised"].includes(perfMode)?perfMode:"summary";
-  useEffect(()=>{ if(validPerfMode!==perfMode) setPerfMode(validPerfMode); },[validPerfMode,perfMode]);
-  useEffect(()=>{ try{ localStorage.setItem("mt_mgmt_perf_view",perfView); localStorage.setItem("mt_mgmt_perf_mode",validPerfMode); }catch(e){} },[perfView,validPerfMode]);
+  const validPerfScope=["all","late"].includes(perfScope)?perfScope:"all";
+  useEffect(()=>{ if(validPerfMode!==perfMode) setPerfMode(validPerfMode); if(validPerfScope!==perfScope) setPerfScope(validPerfScope); },[validPerfMode,perfMode,validPerfScope,perfScope]);
+  useEffect(()=>{ try{ localStorage.setItem("mt_mgmt_perf_view",perfView); localStorage.setItem("mt_mgmt_perf_mode",validPerfMode); localStorage.setItem("mt_mgmt_perf_scope",validPerfScope); }catch(e){} },[perfView,validPerfMode,validPerfScope]);
   const perfRowsCacheRef=useRef(new Map());
   const switchPerfView=(v)=>startPerfTransition(()=>setPerfView(v));
   const switchPerfMode=(v)=>startPerfTransition(()=>setPerfMode(v));
+  const switchPerfScope=(v)=>startPerfTransition(()=>setPerfScope(v));
   const isMgmtOpen=(key)=> mgmtOpen[key]!==false;
   const toggleMgmt=(key)=>setMgmtOpen(o=>({ ...o, [key]: !isMgmtOpen(key) }));
 
@@ -2573,13 +2581,14 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const stageDelayData=compactAgg(lateRecords,r=>r.stage,"Stage").map(o=>{ const def=STAGES.find(s=>s.label===o.Stage)||{}; return { "TNA Order":stageOrderOf(def.key||o.Stage), "Section":stageSectionOf(def.key||o.Stage), ...o, "Chase Label":def.owner||"" }; }).sort((a,b)=>(Number(a["TNA Order"])||999)-(Number(b["TNA Order"])||999));
   const problemStylesFor=(records,metric="delay")=>records.filter(r=>Number(r[metric]||0)>0).sort((a,b)=>Number(b[metric]||0)-Number(a[metric]||0)).slice(0,3).map(r=>`${r.style||r.order||"Style"} +${fmtNum(r[metric])}d`).join(", ");
   const makePerfAggFromRecords=(records,keyFn,labelFn,ownerFn,mode)=>{ const m={}; records.forEach(r=>{ const k=keyFn(r)||"(blank)"; const label=labelFn?labelFn(r,k):k; const o=m[k]=m[k]||{ key:k, label, records:[], n:0, lateN:0, delaySum:0, durSum:0, durN:0, planN:0, planSum:0, revN:0, revSum:0, maxDelay:0, owner:ownerFn?ownerFn(r,k):"" }; o.records.push(r); o.n++; const activeDelay=Number(r.delay||0); const planDelay=Number(r.delayPlan||0); const revisedDelay=Number(r.delayRevised||0); const lateMetric=mode==="revised"?revisedDelay:mode==="noRevised"?planDelay:activeDelay; if(lateMetric>0) o.lateN++; if(mode==="revised") o.delaySum+=revisedDelay; else if(mode==="noRevised") o.delaySum+=planDelay; else o.delaySum+=activeDelay; o.maxDelay=Math.max(o.maxDelay,lateMetric); if(r.duration!=null){ o.durSum+=r.duration; o.durN++; } if(r.delayPlan!=null){ o.planN++; o.planSum+=r.delayPlan; } if(r.delayRevised!=null){ o.revN++; o.revSum+=r.delayRevised; } }); return Object.values(m); };
-  const buildPerformanceRows=(mode,view)=>{ const source=recordsForPerformanceMode(mode); const rows=view==="stage"?makePerfAggFromRecords(source,r=>r.stageKey||r.stage,r=>r.stage,r=>r.dept,mode):makePerfAggFromRecords(source,r=>r.dept||"(No chase label)",r=>r.dept||"(No chase label)",()=>"",mode); return rows.map(r=>{ const metric=mode==="revised"?"delayRevised":mode==="noRevised"?"delayPlan":"delay"; const def=view==="stage"?(STAGES.find(s=>s.key===r.key)||STAGES.find(s=>s.label===r.label)||{}):{}; const avgDelay=avg(r.delaySum,r.n); return { ...r, displayLabel:r.label, stageOrder:view==="stage"?stageOrderOf(def.key||r.key||r.label):null, stageSection:view==="stage"?stageSectionOf(def.key||r.key||r.label):null, count:r.n, late:r.lateN, avgDuration:mode==="summary"?avg(r.durSum,r.durN):null, avgDelay, planNet:avg(r.planSum,r.planN), revNet:avg(r.revSum,r.revN), worst:r.maxDelay, problemStyles:problemStylesFor(r.records,metric), owner:r.owner||def.owner||"" }; }).sort((a,b)=>view==="stage"?(a.stageOrder-b.stageOrder):((b.late-a.late)||(b.avgDelay-a.avgDelay)||String(a.displayLabel).localeCompare(String(b.displayLabel)))); };
+  const buildPerformanceRows=(mode,view,scope=validPerfScope)=>{ const source=recordsForPerformanceMode(mode,scope); const rows=view==="stage"?makePerfAggFromRecords(source,r=>r.stageKey||r.stage,r=>r.stage,r=>r.dept,mode):makePerfAggFromRecords(source,r=>r.dept||"(No chase label)",r=>r.dept||"(No chase label)",()=>"",mode); return rows.map(r=>{ const metric=mode==="revised"?"delayRevised":mode==="noRevised"?"delayPlan":"delay"; const def=view==="stage"?(STAGES.find(s=>s.key===r.key)||STAGES.find(s=>s.label===r.label)||{}):{}; const avgDelay=avg(r.delaySum,r.n); return { ...r, displayLabel:r.label, stageOrder:view==="stage"?stageOrderOf(def.key||r.key||r.label):null, stageSection:view==="stage"?stageSectionOf(def.key||r.key||r.label):null, count:r.n, late:r.lateN, avgDuration:mode==="summary"?avg(r.durSum,r.durN):null, avgDelay, planNet:avg(r.planSum,r.planN), revNet:avg(r.revSum,r.revN), worst:r.maxDelay, problemStyles:problemStylesFor(r.records,metric), owner:r.owner||def.owner||"" }; }).sort((a,b)=>view==="stage"?(a.stageOrder-b.stageOrder):((b.late-a.late)||(b.avgDelay-a.avgDelay)||String(a.displayLabel).localeCompare(String(b.displayLabel)))); };
   const perfDataKey=`${fc.length}|${delayRecords.length}|${lateRecords.length}|${planActualRecords.length}|${revisedActualRecords.length}|${delayRecords.reduce((sum,r)=>sum+Number(r.delay||0)+Number(r.delayPlan||0)+Number(r.delayRevised||0),0)}`;
-  const getPerformanceRows=(mode,view)=>{ const key=perfDataKey+"|"+mode+"|"+view; const cache=perfRowsCacheRef.current; if(cache.has(key)) return cache.get(key); if(cache.size>18) cache.clear(); const rows=buildPerformanceRows(mode,view); cache.set(key,rows); return rows; };
-  const recordsForPerformanceMode=(mode)=> mode==="revised" ? delayRecords.filter(r=>r.delayRevised!=null) : mode==="noRevised" ? delayRecords.filter(r=>r.delayRevised==null) : delayRecords;
-  const performanceModeLabel=validPerfMode==="revised"?"Revised Commitments":validPerfMode==="noRevised"?"No Revised Plan":"Summary";
-  const buildPerformanceExport=(mode,view)=>{
-    const rows=getPerformanceRows(mode,view);
+  const isLatePerformanceRecord=(r,mode)=> mode==="revised" ? Number(r.delayRevised||0)>0 : mode==="noRevised" ? Number(r.delayPlan||0)>0 : Number(r.delay||0)>0;
+  const getPerformanceRows=(mode,view,scope=validPerfScope)=>{ const key=perfDataKey+"|"+mode+"|"+view+"|"+scope; const cache=perfRowsCacheRef.current; if(cache.has(key)) return cache.get(key); if(cache.size>24) cache.clear(); const rows=buildPerformanceRows(mode,view,scope); cache.set(key,rows); return rows; };
+  const recordsForPerformanceMode=(mode,scope=validPerfScope)=>{ const base = mode==="revised" ? delayRecords.filter(r=>r.delayRevised!=null) : mode==="noRevised" ? delayRecords.filter(r=>r.delayRevised==null) : delayRecords; return scope==="late" ? base.filter(r=>isLatePerformanceRecord(r,mode)) : base; };
+  const performanceModeLabel=(validPerfScope==="late"?"Late Activities · ":"")+(validPerfMode==="revised"?"Revised Commitments":validPerfMode==="noRevised"?"No Revised Plan":"Summary");
+  const buildPerformanceExport=(mode,view,scope=validPerfScope)=>{
+    const rows=getPerformanceRows(mode,view,scope);
     if(mode==="revised") return rows.map(r=>({
       [view==="stage"?"Stage":"Chase Label"]:r.displayLabel,
       ...(view==="stage"?{"TNA Order":r.stageOrder,"Section":r.stageSection,"Owner":r.owner||""}:{}),
@@ -2615,12 +2624,12 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
       "Problem Styles":r.problemStyles||""
     }));
   };
-  const performanceAnalysisData = buildPerformanceExport(validPerfMode,perfView);
-  const performanceAnalysisDetail = ()=>detailRowsFor(`Performance Analysis - ${performanceModeLabel}`, recordsForPerformanceMode(validPerfMode), { problemOnly: validPerfMode!=="summary" }).filter(r=>{
+  const performanceAnalysisData = buildPerformanceExport(validPerfMode,perfView,validPerfScope);
+  const performanceAnalysisDetail = ()=>detailRowsFor(`Performance Analysis - ${performanceModeLabel}`, recordsForPerformanceMode(validPerfMode,validPerfScope), { problemOnly: validPerfScope==="late" || validPerfMode!=="summary" }).filter(r=>{
     if(perfView!=="stage") return true;
     return !!r["Stage / Activity"];
   });
-  const performanceAnalysisMeta=[{ "View By":perfView==="stage"?"Stage":"Chase Label", "Data View":performanceModeLabel, "Rows":performanceAnalysisData.length, "Detail Rows":"computed on export", "Rule":validPerfMode==="revised"?"Only completed records with revised plan dates":"noRevised"===validPerfMode?"Only completed records with no revised plan date":"All completed actual date rows; active due = revised if present else original" }];
+  const performanceAnalysisMeta=[{ "View By":perfView==="stage"?"Stage":"Chase Label", "Data View":performanceModeLabel, "Activity Scope":validPerfScope==="late"?"Late activities only":"All completed activities", "Rows":performanceAnalysisData.length, "Detail Rows":"computed on export", "Rule":validPerfMode==="revised"?"Only completed records with revised plan dates":"noRevised"===validPerfMode?"Only completed records with no revised plan date":"All completed actual date rows; active due = revised if present else original" }];
   const analyticsSheets=[
       { label:"Summary", data:mgmtSummary, detailData:managementDetailRows, modes:["summary","detailed"] },
       { label:"Calculation Checks", data:checks, modes:["summary","detailed"] },
@@ -2645,12 +2654,12 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const rowBtn=(key,label,right,color,onClick,sub)=>(<button key={key} onClick={onClick} disabled={!onClick} style={{ width:"100%", display:"grid", gridTemplateColumns:"minmax(120px,1fr) 96px", alignItems:"center", gap:10, border:"none", borderBottom:"1px solid var(--line-3)", background:"transparent", cursor:onClick?"pointer":"default", fontFamily:"inherit", padding:"8px 0", textAlign:"left" }}><span style={{ minWidth:0 }}><span style={{ display:"block", fontSize:11, fontWeight:800, color:color||"var(--ink)", overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{label}</span>{sub&&<span style={{ display:"block", fontSize:9, color:"var(--muted-2)", marginTop:2, overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{sub}</span>}</span><span style={{ fontSize:11, fontWeight:800, color:color||"var(--ink)", whiteSpace:"nowrap", textAlign:"right" }}>{right}</span></button>);
   const barLine=(key,label,n,max,color,onClick,right)=>(<button key={key} onClick={onClick} disabled={!onClick} style={{ display:"flex", alignItems:"center", gap:8, width:"100%", border:"none", background:"transparent", cursor:onClick?"pointer":"default", fontFamily:"inherit", padding:"5px 0" }}><span style={{ width:90, fontSize:10, fontWeight:800, color:"var(--muted-4)", textAlign:"left", overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{label}</span><span style={{ flex:1, height:14, background:"#f0ece3", borderRadius:999, overflow:"hidden" }}><span style={{ display:"block", height:"100%", width:`${(n/Math.max(1,max))*100}%`, background:color, borderRadius:999 }}/></span><span style={{ width:58, textAlign:"right", fontSize:10, fontWeight:800 }}>{right||n}</span></button>);
   const toggleBtn=(active,label,onClick)=><button onClick={onClick} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"5px 9px", cursor:"pointer", border:"1px solid var(--line-2)", borderRadius:8, background:active?"var(--ink)":"var(--surface)", color:active?"var(--bg)":"var(--ink)" }}>{label}</button>;
-  const performanceRows = getPerformanceRows(validPerfMode,perfView);
+  const performanceRows = getPerformanceRows(validPerfMode,perfView,validPerfScope);
   const performanceHeaders = validPerfMode==="revised"
-    ? [perfView==="stage"?"Stage":"Chase Label","Revised Items","Missed Revised","Revised Miss %","Avg Missed Revised","Still Off Original TNA","Worst Revised Miss","Problem Styles"]
+    ? [perfView==="stage"?"Stage":"Chase Label",validPerfScope==="late"?"Late Revised Items":"Revised Items","Missed Revised","Revised Miss %","Avg Missed Revised","Still Off Original TNA","Worst Revised Miss","Problem Styles"]
     : validPerfMode==="noRevised"
-      ? [perfView==="stage"?"Stage":"Chase Label","No-Revision Items","Missed Original","Original Miss %","Avg Off Original TNA","Worst Original Miss","Problem Styles"]
-      : [perfView==="stage"?"Stage":"Chase Label","Work Done","Missed Due","Miss Rate %","Real Time Taken","Off Original TNA","Missed Active Due","Worst Delay","Data Confidence","Problem Styles"];
+      ? [perfView==="stage"?"Stage":"Chase Label",validPerfScope==="late"?"Late No-Revision Items":"No-Revision Items","Missed Original","Original Miss %","Avg Off Original TNA","Worst Original Miss","Problem Styles"]
+      : [perfView==="stage"?"Stage":"Chase Label",validPerfScope==="late"?"Late Items":"Work Done","Missed Due","Miss Rate %","Real Time Taken","Off Original TNA","Missed Active Due","Worst Delay","Data Confidence","Problem Styles"];
   const perfCell=(v)=>fmtDays(Number.isFinite(Number(v))?Number(v):0);
   const avgActualBreakup = [...deptRows]
     .filter(r=>r && r.durN)
@@ -2677,7 +2686,7 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   );
   const performanceCellValue=(r,h)=>{
     const pct=(r.count||0)?Math.round(((r.late||0)/(r.count||1))*100):0;
-    if(h==="Revised Items"||h==="No-Revision Items"||h==="Work Done") return r.count||0;
+    if(h==="Revised Items"||h==="Late Revised Items"||h==="No-Revision Items"||h==="Late No-Revision Items"||h==="Work Done"||h==="Late Items") return r.count||0;
     if(h==="Missed Revised"||h==="Missed Original"||h==="Missed Due") return r.late||0;
     if(h==="Revised Miss %"||h==="Original Miss %"||h==="Miss Rate %") return `${pct}%`;
     if(h==="Real Time Taken") return r.avgDuration==null?"—":perfCell(r.avgDuration);
@@ -2697,9 +2706,9 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
           {performanceHeaders.slice(1).map(h=>{ const val=performanceCellValue(r,h); const danger=(String(val).startsWith("+")||(["Missed Revised","Missed Original","Missed Due","Revised Miss %","Original Miss %","Miss Rate %"].includes(h)&&parseFloat(val)>0)); return <td key={h} title={h==="Data Confidence"?"O = original target data, R = revised commitment data, D = real-time duration data.":(h==="Problem Styles"?String(val):"")} style={{ padding:"7px 8px", textAlign:"right", color:danger?"var(--danger)":(h==="Data Confidence"?"var(--muted-2)":"var(--ink)"), fontWeight:danger?800:700, whiteSpace:"nowrap", maxWidth:h==="Problem Styles"?220:undefined, overflow:h==="Problem Styles"?"hidden":undefined, textOverflow:h==="Problem Styles"?"ellipsis":undefined }}>{val}</td>; })}
         </tr></React.Fragment>; })}</tbody>
       </table>
-      <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8, lineHeight:1.45 }}>{validPerfMode==="revised"?"Revised Commitments shows only completed records with revised plan dates. Use it to check whether meeting/revised commitments were still missed.":validPerfMode==="noRevised"?"No Revised Plan shows completed records without revised dates. Use it to catch original TNA misses where no new commitment was captured.":"Summary uses active due: revised date if entered, otherwise original auto/system plan. Off Original TNA shows drift from the original target."}{perfView==="stage"?" Stage view follows fixed TNA flow order, not alphabetical or delay ranking.":""}</div>
+      <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8, lineHeight:1.45 }}>{validPerfScope==="late"?"Late Activities limits this table to completed records that actually missed the selected due basis. ":"All Completed includes early, on-time, and late completed actuals. "}{validPerfMode==="revised"?"Revised Commitments shows only completed records with revised plan dates. Use it to check whether meeting/revised commitments were still missed.":validPerfMode==="noRevised"?"No Revised Plan shows completed records without revised dates. Use it to catch original TNA misses where no new commitment was captured.":"Summary uses active due: revised date if entered, otherwise original auto/system plan. Off Original TNA shows drift from the original target."}{perfView==="stage"?" Stage view follows fixed TNA flow order, not alphabetical or delay ranking.":""}</div>
     </div>
-  ):<div style={{ fontSize:11, color:"var(--muted-1)" }}>{validPerfMode==="revised"?"No completed revised-plan records in this slice.":validPerfMode==="noRevised"?"No completed no-revised records in this slice.":"No completed stage dates yet."}</div>;
+  ):<div style={{ fontSize:11, color:"var(--muted-1)" }}>{validPerfScope==="late"?"No late completed records in this slice for the selected Performance view.":(validPerfMode==="revised"?"No completed revised-plan records in this slice.":validPerfMode==="noRevised"?"No completed no-revised records in this slice.":"No completed stage dates yet.")}</div>;
 
   return (<div style={{ padding:"16px 22px", maxWidth:1280 }}>
     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:16, marginBottom:14, flexWrap:"wrap" }}>
@@ -2745,6 +2754,10 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
           <span style={{ fontSize:10, fontWeight:800, color:"var(--muted-2)", textTransform:"uppercase" }}>View by:</span>
           {toggleBtn(perfView==="chase","Chase Label",()=>switchPerfView("chase"))}
           {toggleBtn(perfView==="stage","Stage",()=>switchPerfView("stage"))}
+          <span style={{ width:10 }}/>
+          <span style={{ fontSize:10, fontWeight:800, color:"var(--muted-2)", textTransform:"uppercase" }}>Activity scope:</span>
+          {toggleBtn(validPerfScope==="all","All Completed",()=>switchPerfScope("all"))}
+          {toggleBtn(validPerfScope==="late","Late Activities",()=>switchPerfScope("late"))}
           <span style={{ width:10 }}/>
           <span style={{ fontSize:10, fontWeight:800, color:"var(--muted-2)", textTransform:"uppercase" }}>Data view:</span>
           {toggleBtn(validPerfMode==="summary","Summary",()=>switchPerfMode("summary"))}
