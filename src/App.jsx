@@ -3335,13 +3335,33 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   const displayItems=rawDisplayItems.filter(t=> todoMode==="all" || itemGroup(t)===todoMode);
   const phaseOf=(t)=>{ const k=t.key||""; if(k==="techpack") return "Pre-Fit"; if(["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"].includes(k)) return "Fit / Print"; if(["labDip","labAppr"].includes(k)) return "Lab Dip"; if(k==="fabricIH") return "Fabric IH"; return "PP / Prod"; };
   const stageLabelOf=(key)=>((STAGES.find(st=>st.key===key)||{}).label)||key||"";
+  const canonToken=(v)=>String(v||"").replace(/^Escalate:\s*/i,"").replace(/[^a-z0-9]+/gi,"").trim().toLowerCase();
   const norm=(v)=>String(v||"").replace(/^Escalate:\s*/i,"").replace(/\s+/g," ").trim().toLowerCase();
+  const stageKeyFromAny=(v)=>{
+    const c=canonToken(v);
+    if(!c) return "";
+    const st=(STAGES||[]).find(x=> canonToken(x.key)===c || canonToken(x.label)===c);
+    return st?st.key:"";
+  };
   const activityCanonical=(t)=>{
     const base=t.originalActivity || t.activity || stageLabelOf(t.key) || t.key || "";
     return String(base).replace(/^Escalate:\s*/i,"").replace(/\s+/g," ").trim();
   };
+  const activityKeyOf=(t)=>{
+    const direct=stageKeyFromAny(t&&t.key);
+    if(direct) return direct;
+    return stageKeyFromAny(activityCanonical(t));
+  };
   const selectedFor=(field)=>arrVal(tf[field]).map(norm).filter(Boolean);
+  const selectedActivityKeys=()=>arrVal(tf.activity).map(v=>stageKeyFromAny(v)||canonToken(v)).filter(Boolean);
+  const activityPass=(t)=>{
+    const selected=selectedActivityKeys();
+    if(!selected.length) return true;
+    const rowKeys=[activityKeyOf(t), stageKeyFromAny(activityCanonical(t)), canonToken(activityCanonical(t)), canonToken(t&&t.originalActivity), canonToken(t&&t.activity), canonToken(stageLabelOf(t&&t.key)), canonToken(t&&t.key)].filter(Boolean);
+    return rowKeys.some(k=>selected.includes(k));
+  };
   const matchesAny=(field,candidates)=>{
+    if(field==="activity") return activityPass(candidates&&candidates.__todoRow?candidates.__todoRow:candidates);
     const selected=selectedFor(field);
     if(!selected.length) return true;
     const pool=arrVal(candidates).map(norm).filter(Boolean);
@@ -3355,16 +3375,20 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
     if(field==="key") return [t.key, stageLabelOf(t.key)];
     if(field==="orderNo") return (t.orderNos&&t.orderNos.length)?t.orderNos:t.orderNo;
     if(field==="junior") return (t.juniors&&t.juniors.length)?t.juniors:t.junior;
-    if(field==="activity") return [activityCanonical(t), t.key, stageLabelOf(t.key)].filter(Boolean);
+    if(field==="activity") return { __todoRow:t };
     if(field==="style") return [t.styleNo, t.colour, ...(Array.isArray(t.styleNos)?t.styleNos:[])].filter(Boolean);
     return t[field];
   };
   const filterFields=["phase","priority","risk","todoType","key","orderNo","junior","activity","branch","owner","escalationOwner","style"];
-  const passExcept=(t,except)=> filterFields.every(field=>field===except || matchesAny(field,candidatesFor(t,field)));
+  const passExcept=(t,except)=> filterFields.every(field=>field===except || (field==="activity"?activityPass(t):matchesAny(field,candidatesFor(t,field))));
   const pass=(t)=>passExcept(t,null);
   const distinct=(field)=>{ const vals=new Set(); displayItems.forEach(t=>{ if(!passExcept(t,field)) return; if(field==="priority") vals.add(t.overdue?"Overdue":"Upcoming"); else if(field==="phase") vals.add(phaseOf(t)); else if(field==="key") vals.add(stageLabelOf(t.key)); else if(field==="activity") { const av=activityCanonical(t); if(av) vals.add(av); } else if(field==="style") { if(t.isColour && t.colour) vals.add(t.colour); else if(t.styleNo) vals.add(t.styleNo); } else if(field==="orderNo" && Array.isArray(t.orderNos)&&t.orderNos.length) t.orderNos.forEach(v=>v&&vals.add(v)); else if(field==="junior" && Array.isArray(t.juniors)&&t.juniors.length) t.juniors.forEach(v=>v&&vals.add(v)); else { const v=t[field]; if(v) vals.add(v); } }); return [...vals].sort((a,b)=>String(a).localeCompare(String(b),undefined,{numeric:true,sensitivity:"base"})); };
   const orders=distinct("orderNo"), juniors=distinct("junior"), activities=distinct("activity"), branches=distinct("branch"), owners=distinct("owner"), escOwners=distinct("escalationOwner"), types=distinct("todoType"), priorities=distinct("priority"), risks=distinct("risk"), phases=["Pre-Fit","Fit / Print","Lab Dip","Fabric IH","PP / Prod"], stylesList=distinct("style");
-  const shown=displayItems.filter(pass);
+  const shownPre=displayItems.filter(pass);
+  // Root safeguard: the final rendered rows are also checked by the canonical activity key.
+  // This prevents display labels, escalation labels, grouped colour rows, or stale filter state from leaking wrong activities into To-Do.
+  const shown=shownPre.filter(activityPass);
+  const filterViolations=shown.filter(t=>!pass(t));
   const overdue=shown.filter(t=>t.overdue), upcoming=shown.filter(t=>!t.overdue), critical=shown.filter(t=>t.overdue && (Number(t.daysLate)||0)>5);
   const activityCount=rawDisplayItems.filter(t=>itemGroup(t)==="activity").length;
   const fabricLabCount=rawDisplayItems.filter(t=>itemGroup(t)==="fabricLab").length;
@@ -3406,7 +3430,8 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   const activityRows=Object.entries(byActivity).map(([k,v])=>({"Activity":k,"Items":v}));
   const riskRows=Object.entries(shown.reduce((m,t)=>{ const k=t.priorityBucket||"Daily Chase"; const x=m[k]=m[k]||{n:0,maxScore:0,drift:0}; x.n++; x.maxScore=Math.max(x.maxScore,Number(t.priorityScore)||0); x.drift+=Number(t.driftOriginal)||0; return m; },{})).map(([k,v])=>({"Risk Bucket":k,"Items":v.n,"Max Priority Score":v.maxScore,"Total Drift Days":v.drift}));
   const todoLogicChecks=[
-      { Check:"Display count", Rule:"Shown rows equal filtered display rows", Value:shown.length, Expected:displayItems.filter(pass).length, Result:shown.length===displayItems.filter(pass).length?"OK":"CHECK" },
+      { Check:"Display count", Rule:"Shown rows equal final canonical filtered rows", Value:shown.length, Expected:shownPre.length, Result:filterViolations.length===0?"OK":"CHECK" },
+      { Check:"Filter violations", Rule:"Rendered rows must pass canonical filter engine", Value:filterViolations.length, Expected:"0", Result:filterViolations.length===0?"OK":"CHECK" },
       { Check:"Order filter grouping", Rule:"Fabric/Lab colour rows are grouped by order + colour so order filters do not show mixed-order rows", Value:"order+colour grouping", Expected:"no mixed order row", Result:"OK" },
       { Check:"Escalation toggle", Rule:"Escalation rows added only when toggle is ON", Value:includeEsc?escalationRows.length:0, Expected:includeEsc?"overdue rows with escalation owner":"0", Result:(!includeEsc&&escalationRows.length===0)||(includeEsc&&escalationRows.every(t=>t.overdue&&t.escalationOwner))?"OK":"CHECK" },
       { Check:"Base activity rows", Rule:"Base activity rows remain even when escalation rows are ON", Value:baseItems.length, Expected:"unchanged source To-Do items", Result:"OK" },
@@ -3454,7 +3479,7 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
       {anyF && <button onClick={()=>{ setTf({}); setFilter&&setFilter({}); }} style={{ fontFamily:"inherit", fontSize:10, padding:"5px 9px", cursor:"pointer", border:"1px solid var(--danger)", background:"var(--surface)", color:"var(--danger)", fontWeight:700 }}>clear filters</button>}
       <span style={{ marginLeft:"auto" }}><ReportExportMenu title="To-Do" prefix="todo" sheets={todoSheets} defaultMode="detailed" /></span>
     </div>
-    <div style={{ display:"flex", alignItems:"baseline", gap:12, margin:"4px 0 8px" }}><span style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13 }}>TO-DO · {shown.length}</span>{overdue.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"var(--danger)" }}>{overdue.length} overdue</span>}{upcoming.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"#7a560f" }}>{upcoming.length} upcoming</span>}{critical.length>0 && <span style={{ fontSize:11, fontWeight:900, color:"var(--danger)" }}>{critical.length} critical &gt;5d</span>}</div>
+    <div style={{ display:"flex", alignItems:"baseline", gap:12, margin:"4px 0 8px", flexWrap:"wrap" }}><span style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13 }}>TO-DO · {shown.length}</span>{overdue.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"var(--danger)" }}>{overdue.length} overdue</span>}{upcoming.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"#7a560f" }}>{upcoming.length} upcoming</span>}{critical.length>0 && <span style={{ fontSize:11, fontWeight:900, color:"var(--danger)" }}>{critical.length} critical &gt;5d</span>}{arrVal(tf.activity).length>0 && <span style={{ fontSize:10, fontWeight:900, color:filterViolations.length?"var(--danger)":"var(--success)", border:"1px solid "+(filterViolations.length?"var(--danger)":"var(--success)"), padding:"3px 7px", borderRadius:999 }}>Filter check: Activity = {arrVal(tf.activity).join(", ")} · wrong rows {filterViolations.length}</span>}</div>
     <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:10 }}>{card("Shown",shown.length,"current filter total")}{card("Upcoming",upcoming.length,"within watch window","#7a560f")}{card("Overdue",overdue.length,"missed plan/revised","var(--danger)")}{card("Critical",critical.length,">5 working days late","var(--danger)")}</div>
     <div style={{ border:"1px solid var(--line-2)", borderRadius:12, background:"var(--surface)", boxShadow:"var(--card-shadow)", padding:12, marginBottom:10 }}><div style={{ fontSize:11, fontWeight:950, color:"var(--muted-3)", textTransform:"uppercase", marginBottom:8, letterSpacing:.35 }}>Activity summary</div><div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(230px,1fr))", gap:9 }}>{activitySummary.map(a=><button key={a.activity} onClick={()=>set("activity",[a.activity])} style={{ border:"1px solid var(--line-3)", background:"var(--bg)", textAlign:"left", padding:"10px 11px", cursor:"pointer", fontFamily:"inherit", borderRadius:10 }}><div style={{ fontSize:12, fontWeight:950, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", marginBottom:7 }}>{a.activity}</div><div style={{ display:"flex", gap:7, flexWrap:"wrap" }}><span style={{ display:"inline-flex", alignItems:"center", gap:4, background:"#fff4d8", color:"#8a5200", border:"1px solid #d58a13", borderRadius:999, padding:"3px 7px", fontSize:11, fontWeight:950 }}>U <b style={{ fontSize:15 }}>{a.upcoming}</b></span><span style={{ display:"inline-flex", alignItems:"center", gap:4, background:"#ffe4dc", color:"#b82117", border:"1px solid #c5251a", borderRadius:999, padding:"3px 7px", fontSize:11, fontWeight:950 }}>O <b style={{ fontSize:15 }}>{a.overdue}</b></span><span style={{ display:"inline-flex", alignItems:"center", gap:4, background:"#ffd4cc", color:"#9f1712", border:"1px solid #9f1712", borderRadius:999, padding:"3px 7px", fontSize:11, fontWeight:950 }}>Critical <b style={{ fontSize:15 }}>{a.critical}</b></span></div></button>)}</div></div>
     <div style={{ overflowX:"auto", border:"1px solid var(--line-3)", borderRadius:10, background:"var(--surface)" }}>
