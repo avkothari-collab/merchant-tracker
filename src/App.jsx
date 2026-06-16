@@ -101,6 +101,7 @@ const stageSectionOf=(keyOrLabel)=>{
 
 // Canonical filter helpers used by Tracker, To-Do, Dashboard drilldowns, Management drilldowns and exports.
 // Display labels are never trusted as filter keys; every activity filter is resolved to a stage key.
+const FILTER_NONE="__MT_FILTER_NONE__"; // explicit column-filter state: user selected zero values, so show zero matching rows
 const filterToken=(v)=>String(v==null?"":v).replace(/^Escalate:\s*/i,"").replace(/[^a-z0-9]+/gi,"").trim().toLowerCase();
 const stageKeyFromAnyGlobal=(v)=>{
   const tok=filterToken(v);
@@ -1378,6 +1379,7 @@ function MerchTracker({ me, onSignOut }){
   const filterNorm=(v)=>String(v==null?"":v).replace(/\s+/g," ").trim().toLowerCase();
   const passCol=(s,c,col,allowed)=>{
     const allowedList=(Array.isArray(allowed)?allowed:[allowed]).filter(v=>v!=null && String(v).trim()!=="");
+    if(allowedList.some(v=>String(v)===FILTER_NONE)) return false;
     if(!allowedList.length) return true;
     const allowedSet=new Set(allowedList.map(filterNorm));
     if(col==="chase"){
@@ -1389,12 +1391,20 @@ function MerchTracker({ me, onSignOut }){
   };
   const chaseLabel=(owner)=>String(owner||"—");
   const SAVED_VIEWS=[ ["","Saved view: none"], ["overdue","Overdue"], ["dueThisWeek","Due this week"], ["buyerPending","Buyer approval pending"], ["fabricPending","Fabric pending"], ["ppPending","PP pending"], ["deliveryRisk","Delivery risk"], ["following","Followed styles"], ["rework","Rejected / rework"], ["released","Released"] ];
-  const anyFilter = statusFilter!=="All"||ownerFilter!=="All"||!!search||Object.keys(colFilters).length>0||!!activityFilter||followFilter||!!savedView;
-  const resetFilters=()=>{ setStatusFilter("All"); setOwnerFilter("All"); setSearch(""); setSearchCol("auto"); setColFilters({}); setActivityFilter(null); setSavedView(""); setFollowFilter(false); setArchiveView("active"); setActiveNamedView(""); };
-  const snapCurrent=()=>setViewSnap({ statusFilter, ownerFilter, search, colFilters, activityFilter, savedView });
+  const hasColFilters=()=>Object.values(colFilters||{}).some(v=>Array.isArray(v));
+  const anyFilter = statusFilter!=="All"||ownerFilter!=="All"||!!search||hasColFilters()||!!activityFilter||followFilter||!!savedView||archiveView!=="active";
+  const resetFilters=()=>{
+    // Hard reset: table filters, search, saved/drill filters, sort, hidden stale dropdown state.
+    // This is deliberately not merged with old filter state; it replaces it.
+    setStatusFilter("All"); setOwnerFilter("All"); setSearch(""); setSearchCol("auto"); setColFilters({});
+    setActivityFilter(null); setSavedView(""); setFollowFilter(false); setArchiveView("active"); setActiveNamedView("");
+    setSort({col:null,dir:1}); setFilterCol(null); setFindIdx(-1); setFrMatches([]); setSel(null); setFocus(null);
+    try{ localStorage.setItem("mt_trackfilters", JSON.stringify({ search:"", searchCol:"auto", statusFilter:"All", ownerFilter:"All", archiveView:"active", activityFilter:null, colFilters:{}, tab, todoFilter, followFilter:false, savedView:"" })); }catch(e){}
+  };
+  const snapCurrent=()=>setViewSnap({ statusFilter, ownerFilter, search, searchCol, colFilters, activityFilter, savedView, archiveView, followFilter, sort });
   const clearAllFilters=()=>{ resetFilters(); setViewSnap(null); };
-  const restoreView=()=>{ if(!viewSnap) return; setStatusFilter(viewSnap.statusFilter); setOwnerFilter(viewSnap.ownerFilter); setSearch(viewSnap.search); setColFilters(viewSnap.colFilters); setActivityFilter(viewSnap.activityFilter); setSavedView(viewSnap.savedView||""); setViewSnap(null); };
-  const applyDrill=(spec)=>{ snapCurrent(); setStatusFilter(spec.status||"All"); setOwnerFilter(spec.owner||"All"); setSearch(spec.search||""); setColFilters(spec.colFilters||{}); setActivityFilter(spec.activity||null); setSavedView(""); setTab("tracker"); };
+  const restoreView=()=>{ if(!viewSnap) return; setStatusFilter(viewSnap.statusFilter||"All"); setOwnerFilter(viewSnap.ownerFilter||"All"); setSearch(viewSnap.search||""); setSearchCol(viewSnap.searchCol||"auto"); setColFilters(viewSnap.colFilters||{}); setActivityFilter(viewSnap.activityFilter||null); setSavedView(viewSnap.savedView||""); setArchiveView(viewSnap.archiveView||"active"); setFollowFilter(!!viewSnap.followFilter); setSort(viewSnap.sort||{col:null,dir:1}); setViewSnap(null); };
+  const applyDrill=(spec)=>{ snapCurrent(); setStatusFilter(spec.status||"All"); setOwnerFilter(spec.owner||"All"); setSearch(spec.search||""); setSearchCol("auto"); setColFilters(spec.colFilters||{}); setActivityFilter(spec.activity||null); setSavedView(""); setFilterCol(null); setSort({col:null,dir:1}); setTab("tracker"); };
   const presetPass=(s,c)=>{ if(!savedView) return true; const front=c.frontier?[...c.frontier]:[]; const has=(keys)=>front.some(k=>keys.includes(k)); const dueSoon=front.some(k=>{ const r=(c.stages||[]).find(x=>x.key===k); const d=r&&(r.rev||r.plan); const n=d?netWorkdays(TODAY,d):999; return d && n>=0 && n<=6; }); const anyRework=(c.stages||[]).some(r=>r.rework||r.rejected); if(savedView==="overdue") return (c.tone==="late"||c.status.startsWith("Overdue")); if(savedView==="dueThisWeek") return !c.released && dueSoon; if(savedView==="buyerPending") return !c.released && front.some(k=>((STAGES.find(x=>x.key===k)||{}).owner)==="Buyer"); if(savedView==="fabricPending") return !c.released && has(["labDip","labAppr","fabricIH"]); if(savedView==="ppPending") return !c.released && has(["ppSample","ppAppr","prodFile"]); if(savedView==="deliveryRisk") return c.tone==="late"||String(c.status).toLowerCase().includes("risk"); if(savedView==="following") return follows.has(s.id); if(savedView==="rework") return anyRework; if(savedView==="released") return c.released; return true; };
   const deferredSearch=useDeferredValue(search);
   const filterKey=useMemo(()=>JSON.stringify({ search:deferredSearch, searchCol, statusFilter, ownerFilter, archiveView, activityFilter, colFilters, followFilter, savedView, follows:[...follows].sort() }),[deferredSearch,searchCol,statusFilter,ownerFilter,archiveView,activityFilter,colFilters,followFilter,savedView,follows]);
@@ -1402,7 +1412,7 @@ function MerchTracker({ me, onSignOut }){
   const filtered=useMemo(()=>{
     const t=perfNow();
     const q=String(deferredSearch||"").trim().toLowerCase();
-    const cfEntries=Object.entries(colFilters||{}).map(([col,allowed])=>[col,(Array.isArray(allowed)?allowed:[allowed]).filter(v=>v!=null && String(v).trim()!=="")]).filter(([,allowed])=>allowed.length);
+    const cfEntries=Object.entries(colFilters||{}).map(([col,allowed])=>[col,(Array.isArray(allowed)?allowed:[allowed]).filter(v=>v!=null && String(v).trim()!=="")]).filter(([,allowed])=>Array.isArray(allowed));
     const out=computed.filter((row)=>{
       const {s,c,idx}=row;
       const matchQ = !q ? true : (searchCol==="auto" ? (idx&&idx.auto?idx.auto:"").includes(q) : ((idx&&idx.byCol&&idx.byCol[searchCol])!=null?idx.byCol[searchCol]:lc(s[searchCol])).includes(q));
@@ -1863,10 +1873,24 @@ function MerchTracker({ me, onSignOut }){
     return matchQ&&matchS&&matchF&&matchO&&matchA&&matchArch&&matchFollow&&presetPass(s,c);
   };
   const distinctFor=(col)=>{ const set=new Set(); computed.forEach((row)=>{ if(!passForFilterOptions(row,col)) return; const {s,c}=row; if(col==="chase"){ const owners=(c.chaseOwners||[]).map(o=>o.owner); if(owners.length===0) set.add("(Blanks)"); else owners.forEach(o=>set.add(o)); } else set.add(valueFor(s,c,col)); }); return [...set].sort((a,b)=> a==="(Blanks)"?1:b==="(Blanks)"?-1:(a>b?1:a<b?-1:0)); };
-  const filterProps=(col)=>({ filterActive: !!colFilters[col], filterOpen: filterCol===col, filterValues: filterCol===col?distinctFor(col):null, filterAllowed: colFilters[col]||null,
+  const filterProps=(col)=>({
+    filterActive: Array.isArray(colFilters[col]),
+    filterOpen: filterCol===col,
+    filterValues: filterCol===col?distinctFor(col):null,
+    filterAllowed: Array.isArray(colFilters[col])?colFilters[col]:null,
     onToggleFilter:()=>{ finishEditing(); setFilterCol(p=>p===col?null:col); },
-    onSetFilter:(arr)=>setColFilters(f=>{ const n={...f}; const clean=(Array.isArray(arr)?arr:[arr]).filter(v=>v!=null && String(v).trim()!=="").map(v=>String(v).replace(/\s+/g," ").trim()); if(!clean.length) delete n[col]; else n[col]=clean; return {...n}; }),
-    onCloseFilter:()=>setFilterCol(null) });
+    onSetFilter:(arr)=>setColFilters(f=>{
+      const n={...(f||{})};
+      if(arr==null || arr==="__ALL__"){ delete n[col]; return n; }
+      const raw=Array.isArray(arr)?arr:[arr];
+      const clean=[...new Set(raw.filter(v=>v!=null && String(v).trim()!=="").map(v=>String(v).replace(/\s+/g," ").trim()))];
+      // Empty selection is NOT the same as clear filter. Empty means show zero rows for this column.
+      // Clear filter / All removes the key. This is what was breaking Select all / clear-selected behavior.
+      n[col]=clean.length?clean:[FILTER_NONE];
+      return n;
+    }),
+    onCloseFilter:()=>setFilterCol(null)
+  });
   const funnel=useMemo(()=>{ const b={ "Pre-Fit":0,"Fit/Print":0,"Lab Dip":0,"Fabric IH":0,"PP":0,"Released":0 }; activeComputed.forEach(({c})=>{ if(c.released) b["Released"]++; else { const k=c.nextPending.key; if(k==="techpack") b["Pre-Fit"]++; else if(["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"].includes(k)) b["Fit/Print"]++; else if(["labDip","labAppr"].includes(k)) b["Lab Dip"]++; else if(k==="fabricIH") b["Fabric IH"]++; else b["PP"]++; } }); return b; },[activeComputed]);
 
   const requiredMissing=()=>{ const m=[]; if(!newRow.styleNo.trim()) m.push("Style No"); if(!newRow.orderNo.trim()) m.push("Order No"); if(!newRow.ordRec) m.push("Order Date"); if(!newRow.delivery) m.push("Delivery Date"); return m; };
@@ -2223,7 +2247,7 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
         if(savedView) chip("sv","saved: "+((SAVED_VIEWS.find(x=>x[0]===savedView)||[])[1]||savedView), ()=>setSavedView(""));
         if(activeNamedView) chip("nv","default view: "+activeNamedView, ()=>setActiveNamedView(""));
         if(archiveView!=="active") chip("ar","view: "+archiveView, ()=>setArchiveView("active"));
-        Object.keys(colFilters||{}).forEach(col=>{ const lab=(INFO_COLS.find(c=>c.key===col)||{}).label||(STAGES.find(x=>x.key===col)||{}).label||col; chip("c-"+col, lab+": "+((colFilters[col]||[]).length)+" sel", ()=>setColFilters(f=>{ const n={...f}; delete n[col]; return n; })); });
+        Object.keys(colFilters||{}).forEach(col=>{ const lab=(INFO_COLS.find(c=>c.key===col)||{}).label||(STAGES.find(x=>x.key===col)||{}).label||col; chip("c-"+col, lab+": "+(((colFilters[col]||[])[0]===FILTER_NONE)?0:(colFilters[col]||[]).length)+" sel", ()=>setColFilters(f=>{ const n={...f}; delete n[col]; return n; })); });
         if(!chips.length) return null;
         return <div style={{ display:"flex", alignItems:"center", gap:7, flexWrap:"wrap", padding:"7px 22px 0" }}><span style={{ fontSize:10, fontWeight:700, color:"var(--muted-2)" }}>Active filters:</span>{chips}<button onClick={clearAllFilters} style={{ fontSize:10, fontWeight:700, border:"1px solid var(--ink)", background:"var(--surface)", cursor:"pointer", padding:"2px 8px", marginLeft:2 }}>Clear all</button></div>;
       })()}
@@ -2619,25 +2643,58 @@ function Th({ col, label, sort, onSort, sticky, left, z, width, onResize, onAuto
 }
 function FilterMenu({ values, allowed, onSet, onClose }){
   const [q,setQ]=useState("");
-  const masterRef=useRef(null); const anchorRef=useRef(null); const [pos,setPos]=useState(null);
-  const isOn=(v)=> !allowed || allowed.includes(v);
-  const allOn = !allowed;                       // no filter = every value shown
-  const noneOn = allowed && allowed.length===0; // nothing selected = grid empty
-  const shown=values.filter(v=> v.toLowerCase().includes(q.toLowerCase()));
-  const toggle=(v)=>{ const cur = allowed? new Set(allowed): new Set(values); if(cur.has(v)) cur.delete(v); else cur.add(v); const arr=[...cur]; onSet(arr.length===values.length? null : arr); };
-  const toggleAll=()=> onSet(allOn? [] : null);
-  const selectResults=()=> onSet(shown.length===values.length? null : shown);
-  useEffect(()=>{ if(masterRef.current) masterRef.current.indeterminate = !allOn && !noneOn; },[allOn,noneOn]);
-  useEffect(()=>{ const a=anchorRef.current; if(!a) return; const r=a.getBoundingClientRect(); const W=212,H=300; let left=r.left-180; if(left+W>window.innerWidth-8) left=window.innerWidth-8-W; if(left<8) left=8; let top=r.bottom+2; if(top+H>window.innerHeight-8) top=Math.max(8,window.innerHeight-8-H); setPos({top,left}); },[]);
+  const anchorRef=useRef(null); const [pos,setPos]=useState(null);
+  const norm=(v)=>String(v==null?"":v).replace(/\s+/g," ").trim();
+  const allValues=useMemo(()=>[...new Set((values||[]).map(norm).filter(Boolean))].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true,sensitivity:"base"})),[values]);
+  const rawAllowed=Array.isArray(allowed)?allowed:null;
+  const isNoneSelected=Array.isArray(rawAllowed) && rawAllowed.some(v=>String(v)===FILTER_NONE);
+  const allowedArr=Array.isArray(rawAllowed)?rawAllowed.map(norm).filter(v=>v && v!==FILTER_NONE):null;
+  const selectedSet=new Set(isNoneSelected?[]:(allowedArr||allValues).map(norm));
+  const shown=allValues.filter(v=>filterNorm(v).includes(filterNorm(q)));
+  const filterIsActive=Array.isArray(rawAllowed);
+  const allShownSelected=shown.length>0 && shown.every(v=>selectedSet.has(v));
+  const selectedCount=filterIsActive?selectedSet.size:allValues.length;
+  const setSelection=(arr)=>{
+    const clean=[...new Set((arr||[]).map(norm).filter(Boolean))];
+    // zero selected must remain an active filter that returns zero rows; it is not "clear filter".
+    // selecting all values is the only case equivalent to clearing this column filter.
+    if(clean.length===allValues.length){ onSet(null); return; }
+    onSet(clean);
+  };
+  const toggle=(v)=>{
+    const cur=new Set(filterIsActive?selectedSet:allValues);
+    if(cur.has(v)) cur.delete(v); else cur.add(v);
+    setSelection([...cur]);
+  };
+  const selectShown=()=>{
+    const cur=new Set(filterIsActive?selectedSet:[]);
+    shown.forEach(v=>cur.add(v));
+    setSelection([...cur]);
+  };
+  const clearShown=()=>{
+    const cur=new Set(filterIsActive?selectedSet:allValues);
+    shown.forEach(v=>cur.delete(v));
+    setSelection([...cur]);
+  };
+  useEffect(()=>{ const a=anchorRef.current; if(!a) return; const r=a.getBoundingClientRect(); const W=236,H=326; let left=r.left-200; if(left+W>window.innerWidth-8) left=window.innerWidth-8-W; if(left<8) left=8; let top=r.bottom+2; if(top+H>window.innerHeight-8) top=Math.max(8,window.innerHeight-8-H); setPos({top,left}); },[]);
   const menu=(
-    <div onClick={e=>e.stopPropagation()} style={{ position:"fixed", top:pos?pos.top:-9999, left:pos?pos.left:-9999, zIndex:360, background:"var(--surface)", color:"var(--ink)", border:"1px solid var(--ink)", boxShadow:"4px 4px 0 var(--ink)", padding:8, width:210, textTransform:"none", letterSpacing:0, fontWeight:400, maxHeight:"80vh", overflowY:"auto" }}>
-      <input autoFocus value={q} onClick={e=>e.stopPropagation()} onKeyDown={e=>e.stopPropagation()} onChange={e=>setQ(e.target.value)} placeholder="search values…" style={{ width:"100%", fontFamily:"inherit", fontSize:11, padding:"4px 6px", border:"1px solid var(--line-2)", outline:"none", marginBottom:6 }}/>
-      <label style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, fontWeight:700, padding:"3px 0", cursor:"pointer", borderBottom:"1px solid var(--line-3)", marginBottom:4 }}><input ref={masterRef} type="checkbox" checked={allOn} onChange={q?selectResults:toggleAll}/>{q?"(Select matches)":"(Select All)"}</label>
-      <div style={{ maxHeight:180, overflowY:"auto" }}>
-        {shown.map(v=>(<div key={v} style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, padding:"2px 0" }}><input type="checkbox" checked={isOn(v)} onChange={()=>toggle(v)} style={{ cursor:"pointer" }}/><span onClick={()=>toggle(v)} style={{ flex:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", cursor:"pointer" }}>{v}</span><button onClick={(e)=>{ e.stopPropagation(); onSet([v]); }} title="show only this" style={{ fontSize:8, border:"1px solid var(--line-2)", background:"var(--bg)", cursor:"pointer", padding:"1px 5px", color:"var(--muted-3)" }}>only</button></div>))}
-        {shown.length===0 && <div style={{ fontSize:10, color:"var(--muted-1)", padding:"4px 0" }}>no matches</div>}
+    <div onClick={e=>e.stopPropagation()} style={{ position:"fixed", top:pos?pos.top:-9999, left:pos?pos.left:-9999, zIndex:360, background:"var(--surface)", color:"var(--ink)", border:"1px solid var(--ink)", boxShadow:"4px 4px 0 var(--ink)", padding:8, width:234, textTransform:"none", letterSpacing:0, fontWeight:400, maxHeight:"82vh", overflowY:"auto" }}>
+      <input autoFocus value={q} onClick={e=>e.stopPropagation()} onKeyDown={e=>e.stopPropagation()} onChange={e=>setQ(e.target.value)} placeholder="search values…" style={{ width:"100%", fontFamily:"inherit", fontSize:11, padding:"4px 6px", border:"1px solid var(--line-2)", outline:"none", marginBottom:6, boxSizing:"border-box" }}/>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginBottom:6 }}>
+        <button onClick={()=>onSet(null)} title="remove this column filter" style={{ ...chip, fontSize:9, background:!filterIsActive?"var(--ink)":"var(--surface)", color:!filterIsActive?"var(--bg)":"var(--ink)" }}>All / clear filter</button>
+        <button onClick={()=>setSelection(allValues)} disabled={!allValues.length} style={{ ...chip, fontSize:9, opacity:allValues.length?1:.5 }}>Select all</button>
+        <button onClick={selectShown} disabled={!shown.length} style={{ ...chip, fontSize:9, opacity:shown.length?1:.5 }}>Select matches</button>
+        <button onClick={clearShown} disabled={!shown.length} style={{ ...chip, fontSize:9, opacity:shown.length?1:.5 }}>Uncheck matches</button>
       </div>
-      {noneOn && <div style={{ fontSize:9, color:"var(--danger)", marginTop:4 }}>Nothing selected — no rows shown.</div>}
+      <div style={{ fontSize:9, color:"var(--muted-2)", marginBottom:5 }}>{filterIsActive?`${selectedCount} of ${allValues.length} selected`:`All ${allValues.length} values visible`}{q?` · ${shown.length} match search`:""}</div>
+      <div style={{ maxHeight:188, overflowY:"auto", borderTop:"1px solid var(--line-3)" }}>
+        {shown.map(v=>(<label key={v} style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, padding:"3px 0", borderBottom:"1px solid var(--line-3)", cursor:"pointer" }}>
+          <input type="checkbox" checked={selectedSet.has(v)} onChange={()=>toggle(v)} style={{ cursor:"pointer" }}/>
+          <span style={{ flex:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{v}</span>
+          <button onClick={(e)=>{ e.preventDefault(); e.stopPropagation(); setSelection([v]); }} title="show only this" style={{ fontSize:8, border:"1px solid var(--line-2)", background:"var(--bg)", cursor:"pointer", padding:"1px 5px", color:"var(--muted-3)" }}>only</button>
+        </label>))}
+        {shown.length===0 && <div style={{ fontSize:10, color:"var(--muted-1)", padding:"6px 0" }}>No matching values.</div>}
+      </div>
       <div style={{ display:"flex", gap:6, marginTop:6 }}>
         <button onClick={()=>onSet(null)} style={{ ...chip, flex:1, fontSize:9 }}>Clear filter</button>
         <button onClick={onClose} style={{ ...chip, flex:1, fontSize:9, background:"var(--ink)", color:"var(--bg)" }}>Done</button>
@@ -3365,17 +3422,22 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   const norm=(v)=>String(v||"").replace(/^Escalate:\s*/i,"").replace(/\s+/g," ").trim().toLowerCase();
   const stageKeyFromAny=(v)=>stageKeyFromAnyGlobal(v);
   const activityCanonical=(t)=>String(t&&((t.originalActivity||t.activityLabel||t.activity)||stageLabelOf(t.key)||t.key)||"").replace(/^Escalate:\s*/i,"").replace(/\s+/g," ").trim();
-  const activityKeyOf=(t)=>stageKeyFromAny(t&&t.activityKey)||stageKeyFromAny(t&&t.key)||stageKeyFromAny(activityCanonical(t));
+  const activityKeyOf=(t)=>stageKeyFromAny(t&&t.key)||stageKeyFromAny(t&&t.activityKey)||stageKeyFromAny(activityCanonical(t));
   const selectedFor=(field)=>arrVal(tf[field]).map(norm).filter(Boolean);
-  const selectedActivityKeys=()=>[...arrVal(tf.activityKey), ...arrVal(tf.key), ...arrVal(tf.activity)].map(v=>stageKeyFromAny(v)||filterToken(v)).filter(Boolean);
-  const activityPass=(t)=>{
-    const selected=selectedActivityKeys();
-    if(!selected.length) return true;
-    const key=activityKeyOf(t);
-    return !!key && selected.includes(key);
-  };
+
+  // HARD activity gate for To-Do. This is intentionally strict:
+  // when Activity/Stage is selected, a row may pass only if its canonical stage key matches.
+  // Display labels such as "Escalate: Strike-off", "Fit Send rework / resend", grouped lab rows, etc.
+  // are ignored for matching. This prevents Lab Dip / Artwork / Fit Send rows leaking into Strike-off.
+  const selectedActivityKeySet=(()=>{
+    const vals=[...arrVal(tf.activityKey), ...arrVal(tf.key), ...arrVal(tf.activity)].filter(v=>v!=null&&String(v).trim()!=="");
+    const keys=vals.map(v=>stageKeyFromAny(v)).filter(Boolean);
+    return new Set(keys);
+  })();
+  const hasActivityGate=selectedActivityKeySet.size>0;
+  const activityPass=(t)=> !hasActivityGate || selectedActivityKeySet.has(activityKeyOf(t));
+
   const matchesAny=(field,candidates)=>{
-    if(field==="activity") return activityPass(candidates&&candidates.__todoRow?candidates.__todoRow:candidates);
     const selected=selectedFor(field);
     if(!selected.length) return true;
     const pool=arrVal(candidates).map(norm).filter(Boolean);
@@ -3386,10 +3448,8 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
     if(field==="priority") return t.overdue?"Overdue":"Upcoming";
     if(field==="todoType") return t.todoType;
     if(field==="risk") return t.priorityBucket;
-    if(field==="key") return [t.key, stageLabelOf(t.key)];
     if(field==="orderNo") return (t.orderNos&&t.orderNos.length)?t.orderNos:t.orderNo;
     if(field==="junior") return (t.juniors&&t.juniors.length)?t.juniors:t.junior;
-    if(field==="activity") return { __todoRow:t };
     if(field==="style") return [t.styleNo, t.colour, ...(Array.isArray(t.styleNos)?t.styleNos:[])].filter(Boolean);
     if(field==="colour") return [t.colour, ...(Array.isArray(t.colours)?t.colours:[])].filter(Boolean);
     if(field==="fit") return [t.fit, ...(Array.isArray(t.fits)?t.fits:[])].filter(Boolean);
@@ -3399,8 +3459,9 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
     if(field==="buyer") return [t.buyer, ...(Array.isArray(t.buyers)?t.buyers:[])].filter(Boolean);
     return t[field];
   };
-  const filterFields=["phase","priority","risk","todoType","key","orderNo","junior","activity","activityKey","branch","owner","escalationOwner","style","colour","fit","family","brand","fabric","buyer"];
-  const passExcept=(t,except)=> filterFields.every(field=>field===except || (field==="activity"?activityPass(t):matchesAny(field,candidatesFor(t,field))));
+  // Activity/key/activityKey are handled only by activityPass above. They are excluded from the generic text matcher.
+  const filterFields=["phase","priority","risk","todoType","orderNo","junior","branch","owner","escalationOwner","style","colour","fit","family","brand","fabric","buyer"];
+  const passExcept=(t,except)=> (except==="activity" || activityPass(t)) && filterFields.every(field=>field===except || matchesAny(field,candidatesFor(t,field)));
   const pass=(t)=>passExcept(t,null);
   const distinct=(field)=>{ const vals=new Set(); displayItems.forEach(t=>{ if(!passExcept(t,field)) return; if(field==="priority") vals.add(t.overdue?"Overdue":"Upcoming"); else if(field==="phase") vals.add(phaseOf(t)); else if(field==="key") vals.add(stageLabelOf(t.key)); else if(field==="activity") { const av=stageLabelOf(activityKeyOf(t))||activityCanonical(t); if(av) vals.add(av); } else if(field==="style") { if(t.isColour && t.colour) vals.add(t.colour); else if(t.styleNo) vals.add(t.styleNo); } else if(field==="orderNo" && Array.isArray(t.orderNos)&&t.orderNos.length) t.orderNos.forEach(v=>v&&vals.add(v)); else if(field==="junior" && Array.isArray(t.juniors)&&t.juniors.length) t.juniors.forEach(v=>v&&vals.add(v)); else { const v=t[field]; if(v) vals.add(v); } }); return [...vals].sort((a,b)=>String(a).localeCompare(String(b),undefined,{numeric:true,sensitivity:"base"})); };
   const orders=distinct("orderNo"), juniors=distinct("junior"), activities=distinct("activity"), branches=distinct("branch"), owners=distinct("owner"), escOwners=distinct("escalationOwner"), types=distinct("todoType"), priorities=distinct("priority"), risks=distinct("risk"), phases=["Pre-Fit","Fit / Print","Lab Dip","Fabric IH","PP / Prod"], stylesList=distinct("style");
@@ -3424,9 +3485,22 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
         if(keys.length) next.activityKey=keys; else delete next.activityKey;
         delete next.key;
       }
+      if(k==="activityKey"){
+        const keys=clean.map(x=>stageKeyFromAny(x)||x).filter(Boolean);
+        if(keys.length){ next.activityKey=keys; next.activity=keys.map(stageLabelOf).filter(Boolean); }
+        else { delete next.activityKey; delete next.activity; }
+        delete next.key;
+      }
       return cleanTodoFilter(next); };
     setTf(upd);
     setFilter&&setFilter(upd);
+  };
+  const applyTodoActivity=(label,key)=>{
+    const k=stageKeyFromAny(key)||stageKeyFromAny(label);
+    const next=cleanTodoFilter({ ...(tf||{}), activity:k?[stageLabelOf(k)]:[label], activityKey:k?[k]:[] });
+    delete next.key;
+    setTf(next);
+    setFilter&&setFilter(next);
   };
   const hsel=(k,opts,first)=><MultiSelectDropdown label={first} value={arrVal(tf[k])} options={opts} onChange={v=>set(k,v)} />;
   const modeBtn=(key,label,count)=><button onClick={()=>setTodoMode(key)} style={{ fontFamily:"inherit", fontSize:11, fontWeight:900, padding:"8px 13px", cursor:"pointer", border:"1px solid var(--ink)", borderRadius:999, background:todoMode===key?"var(--ink)":"var(--surface)", color:todoMode===key?"var(--bg)":"var(--ink)" }}>{label} <span style={{ opacity:.75 }}>{count}</span></button>;
@@ -3505,9 +3579,9 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
       {anyF && <button onClick={()=>{ setTf({}); setFilter&&setFilter({}); }} style={{ fontFamily:"inherit", fontSize:10, padding:"5px 9px", cursor:"pointer", border:"1px solid var(--danger)", background:"var(--surface)", color:"var(--danger)", fontWeight:700 }}>clear filters</button>}
       <span style={{ marginLeft:"auto" }}><ReportExportMenu title="To-Do" prefix="todo" sheets={todoSheets} defaultMode="detailed" /></span>
     </div>
-    <div style={{ display:"flex", alignItems:"baseline", gap:12, margin:"4px 0 8px", flexWrap:"wrap" }}><span style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13 }}>TO-DO · {shown.length}</span>{overdue.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"var(--danger)" }}>{overdue.length} overdue</span>}{upcoming.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"#7a560f" }}>{upcoming.length} upcoming</span>}{critical.length>0 && <span style={{ fontSize:11, fontWeight:900, color:"var(--danger)" }}>{critical.length} critical &gt;5d</span>}{arrVal(tf.activity).length>0 && <span style={{ fontSize:10, fontWeight:900, color:filterViolations.length?"var(--danger)":"var(--success)", border:"1px solid "+(filterViolations.length?"var(--danger)":"var(--success)"), padding:"3px 7px", borderRadius:999 }}>Filter check: Activity = {arrVal(tf.activity).join(", ")} · wrong rows {filterViolations.length}</span>}</div>
+    <div style={{ display:"flex", alignItems:"baseline", gap:12, margin:"4px 0 8px", flexWrap:"wrap" }}><span style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13 }}>TO-DO · {shown.length}</span>{overdue.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"var(--danger)" }}>{overdue.length} overdue</span>}{upcoming.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"#7a560f" }}>{upcoming.length} upcoming</span>}{critical.length>0 && <span style={{ fontSize:11, fontWeight:900, color:"var(--danger)" }}>{critical.length} critical &gt;5d</span>}{hasActivityGate && <span style={{ fontSize:10, fontWeight:900, color:filterViolations.length?"var(--danger)":"var(--success)", border:"1px solid "+(filterViolations.length?"var(--danger)":"var(--success)"), padding:"3px 7px", borderRadius:999 }}>Filter check: Activity = {[...selectedActivityKeySet].map(stageLabelOf).join(", ")} · wrong rows {filterViolations.length}</span>}</div>
     <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:10 }}>{card("Shown",shown.length,"current filter total")}{card("Upcoming",upcoming.length,"within watch window","#7a560f")}{card("Overdue",overdue.length,"missed plan/revised","var(--danger)")}{card("Critical",critical.length,">5 working days late","var(--danger)")}</div>
-    <div style={{ border:"1px solid var(--line-2)", borderRadius:12, background:"var(--surface)", boxShadow:"var(--card-shadow)", padding:12, marginBottom:10 }}><div style={{ fontSize:11, fontWeight:950, color:"var(--muted-3)", textTransform:"uppercase", marginBottom:8, letterSpacing:.35 }}>Activity summary</div><div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(230px,1fr))", gap:9 }}>{activitySummary.map(a=><button key={a.activity} onClick={()=>{ set("activity",[a.activity]); set("activityKey",a.activityKey?[a.activityKey]:[]); }} style={{ border:"1px solid var(--line-3)", background:"var(--bg)", textAlign:"left", padding:"10px 11px", cursor:"pointer", fontFamily:"inherit", borderRadius:10 }}><div style={{ fontSize:12, fontWeight:950, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", marginBottom:7 }}>{a.activity}</div><div style={{ display:"flex", gap:7, flexWrap:"wrap" }}><span style={{ display:"inline-flex", alignItems:"center", gap:4, background:"#fff4d8", color:"#8a5200", border:"1px solid #d58a13", borderRadius:999, padding:"3px 7px", fontSize:11, fontWeight:950 }}>U <b style={{ fontSize:15 }}>{a.upcoming}</b></span><span style={{ display:"inline-flex", alignItems:"center", gap:4, background:"#ffe4dc", color:"#b82117", border:"1px solid #c5251a", borderRadius:999, padding:"3px 7px", fontSize:11, fontWeight:950 }}>O <b style={{ fontSize:15 }}>{a.overdue}</b></span><span style={{ display:"inline-flex", alignItems:"center", gap:4, background:"#ffd4cc", color:"#9f1712", border:"1px solid #9f1712", borderRadius:999, padding:"3px 7px", fontSize:11, fontWeight:950 }}>Critical <b style={{ fontSize:15 }}>{a.critical}</b></span></div></button>)}</div></div>
+    <div style={{ border:"1px solid var(--line-2)", borderRadius:12, background:"var(--surface)", boxShadow:"var(--card-shadow)", padding:12, marginBottom:10 }}><div style={{ fontSize:11, fontWeight:950, color:"var(--muted-3)", textTransform:"uppercase", marginBottom:8, letterSpacing:.35 }}>Activity summary</div><div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(230px,1fr))", gap:9 }}>{activitySummary.map(a=><button key={a.activity} onClick={()=>applyTodoActivity(a.activity,a.activityKey)} style={{ border:"1px solid var(--line-3)", background:"var(--bg)", textAlign:"left", padding:"10px 11px", cursor:"pointer", fontFamily:"inherit", borderRadius:10 }}><div style={{ fontSize:12, fontWeight:950, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", marginBottom:7 }}>{a.activity}</div><div style={{ display:"flex", gap:7, flexWrap:"wrap" }}><span style={{ display:"inline-flex", alignItems:"center", gap:4, background:"#fff4d8", color:"#8a5200", border:"1px solid #d58a13", borderRadius:999, padding:"3px 7px", fontSize:11, fontWeight:950 }}>U <b style={{ fontSize:15 }}>{a.upcoming}</b></span><span style={{ display:"inline-flex", alignItems:"center", gap:4, background:"#ffe4dc", color:"#b82117", border:"1px solid #c5251a", borderRadius:999, padding:"3px 7px", fontSize:11, fontWeight:950 }}>O <b style={{ fontSize:15 }}>{a.overdue}</b></span><span style={{ display:"inline-flex", alignItems:"center", gap:4, background:"#ffd4cc", color:"#9f1712", border:"1px solid #9f1712", borderRadius:999, padding:"3px 7px", fontSize:11, fontWeight:950 }}>Critical <b style={{ fontSize:15 }}>{a.critical}</b></span></div></button>)}</div></div>
     <div style={{ overflowX:"auto", border:"1px solid var(--line-3)", borderRadius:10, background:"var(--surface)" }}>
       {head}
       {shown.length?shown.map(row):<div style={{ fontSize:11, color:"var(--muted-1)", padding:"12px" }}>Nothing due or coming up. 👍</div>}
