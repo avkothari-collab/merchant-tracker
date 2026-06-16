@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { supabase } from "./supabaseClient";
 
 /* MERCH TRACKER — v31: P95 / large-sheet optimization pass */
+
 const FONT = `@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;800&family=JetBrains+Mono:wght@400;500;700&display=swap');`;
 const THEME_CSS = `
 :root, [data-theme="paper"] {
@@ -116,6 +117,55 @@ const todoDrillFilterFromSlice=(base={},df={})=>{
   Object.entries(map).forEach(([from,to])=>{ const vals=arrClean(df&&df[from]); if(vals.length) out[to]=vals; });
   if(out.activity && !out.activityKey){ const k=stageKeyFromAnyGlobal(Array.isArray(out.activity)?out.activity[0]:out.activity); if(k) out.activityKey=[k]; }
   if(out.key && !out.activityKey){ const k=stageKeyFromAnyGlobal(Array.isArray(out.key)?out.key[0]:out.key); if(k) out.activityKey=[k]; }
+  return out;
+};
+
+// SINGLE TABLE TRUTH MODEL
+// Tracker is the operational truth. Dashboards, To-Do, exports and drilldowns must summarize/filter
+// these canonical stage keys instead of reinterpreting display labels.
+const frontierKeysOf=(c)=>{
+  try{
+    const raw=c&&c.frontier;
+    const arr=raw instanceof Set ? [...raw] : (Array.isArray(raw)?raw:[]);
+    return arr.map(k=>stageKeyFromAnyGlobal(k)||String(k||"")).filter(k=>STAGE_ORDER_INDEX[k]!=null);
+  }catch(_e){ return []; }
+};
+const frontierLabelsOf=(c)=>frontierKeysOf(c).map(stageLabelFromKeyGlobal).filter(Boolean);
+const firstFrontierKeyOf=(c)=>frontierKeysOf(c)[0]||"";
+const currentDueForStage=(c,key)=>{
+  const r=(c&&Array.isArray(c.stages)?c.stages:[]).find(x=>x&&x.key===key);
+  return r?(r.actual||r.rev||r.plan||r.skip||null):null;
+};
+const canonicalLiveRow=(row)=>{
+  const s=(row&&row.s)||{}; const c=(row&&row.c)||{};
+  const keys=frontierKeysOf(c);
+  const primary=keys[0]||"";
+  const stageRows=(c.stages||[]).filter(r=>r&&keys.includes(r.key));
+  return {
+    ...(row||{}),
+    tableId:String(s.id||""),
+    tableCurrentStageKey:primary,
+    tableCurrentStageKeys:keys,
+    tableCurrentStageLabel:primary?stageLabelFromKeyGlobal(primary):"",
+    tableCurrentStageLabels:keys.map(stageLabelFromKeyGlobal).filter(Boolean),
+    tableCurrentChaseOwners:(c.chaseOwners||[]).map(o=>o&&o.owner).filter(Boolean),
+    tableOpenStageRows:stageRows,
+    tableDueDates:stageRows.map(r=>r.actual||r.rev||r.plan||r.skip||null).filter(Boolean),
+    tableStatus:c.status||"",
+    tableTone:c.tone||"",
+    tableReleased:!!c.released
+  };
+};
+const rowMatchesCurrentStage=(row,key)=>{
+  const k=stageKeyFromAnyGlobal(key)||String(key||"");
+  if(!k) return true;
+  const keys=(row&&row.tableCurrentStageKeys)||frontierKeysOf(row&&row.c);
+  return Array.isArray(keys)&&keys.includes(k);
+};
+const canonicalDrillSpec=(spec={})=>{
+  const out={...(spec||{})};
+  const k=stageKeyFromAnyGlobal(out.activityKey||out.key||out.activity||out.stage||"");
+  if(k){ out.activityKey=k; out.activity=stageLabelFromKeyGlobal(k); delete out.key; delete out.stage; }
   return out;
 };
 const CHASE_LABELS = ["Management","Sr Merchant","Jr Merchant","CAD","Designer","Store","Buyer","Merchant","Mill"];
@@ -591,7 +641,7 @@ const colorFor=(id)=>{ let h=0; const s=String(id); for(let i=0;i<s.length;i++) 
 const initials=(n)=>String(n||"?").trim().split(/\s+/).map(w=>w[0]||"").slice(0,2).join("").toUpperCase()||"?";
 function PeerTag({ who }){ if(!who||!who.length) return null; const anyEdit=who.some(w=>w.editing); const lead=who.find(w=>w.editing)||who[0]; const names=who.map(w=>w.name).join(", "); const label=who.length>1?(who.length+" · "+names):lead.name; return (<span style={{ position:"absolute", inset:0, border:(anyEdit?"2px dashed ":"2px solid ")+lead.color, pointerEvents:"none", zIndex:4, boxSizing:"border-box" }}><span title={names} style={{ position:"absolute", bottom:0, left:0, background:lead.color, color:"var(--surface)", fontSize:8, fontWeight:700, padding:"0 4px", whiteSpace:"nowrap", lineHeight:"12px", maxWidth:"100%", overflow:"hidden", textOverflow:"ellipsis" }}>{anyEdit?"✎ ":""}{label}</span></span>); }
 function MerchTracker({ me, onSignOut }){
-  const APP_BUILD_LABEL="v31cu stabilized filter/drill/export";
+  const APP_BUILD_LABEL="v31dc activity stage truth fastfix";
   const [styles,setStyles]=useState([]); // loaded from Supabase on mount
   const role=(me&&me.role)||"junior";
   const [usersOpen,setUsersOpen]=useState(false);
@@ -1283,7 +1333,7 @@ function MerchTracker({ me, onSignOut }){
   };
   const activeBranchStyles=useMemo(()=>styles.map(s=>styleForActiveBranch(s)),[styles,stageEvents]);
   const stylesComputeKey=useMemo(()=>activeBranchStyles.map(s=>styleComputeSignature(s)+"::resends="+JSON.stringify(effectiveResends&&Object.fromEntries(Object.entries(effectiveResends||{}).filter(([k])=>String(k).startsWith(String(s.id)+":"))))).join("||"),[activeBranchStyles,effectiveResends]);
-  const computed=useMemo(()=>{ const t=perfNow(); const cache=computeCacheRef.current; const liveIds=new Set(); let hits=0, recomputed=0; const rawById=new Map((styles||[]).map(raw=>[String(raw.id),raw])); const out=activeBranchStyles.map(activeStyle=>{ liveIds.add(activeStyle.id); const rawStyle=rawById.get(String(activeStyle.id))||activeStyle; const resendSig=JSON.stringify(effectiveResends&&Object.fromEntries(Object.entries(effectiveResends||{}).filter(([k])=>String(k).startsWith(String(activeStyle.id)+":")))); const sig=styleComputeSignature(activeStyle)+"::resends="+resendSig; const old=cache.get(activeStyle.id); if(old && old.sig===sig && old.cfgKey===cfgComputeKey){ hits++; const cached=old.out||{}; return { ...cached, rawStyle, activeStyle:cached.activeStyle||activeStyle, s:cached.activeStyle||activeStyle }; } const c=computeStyle(activeStyle,cfg,effectiveResends); /* IMPORTANT: live screens must read s/activeStyle, never rawStyle. rawStyle is kept only for save/history/audit. */ const item={ rawStyle, activeStyle, s:activeStyle, c, idx:buildSearchIndex(activeStyle,c) }; cache.set(activeStyle.id,{ sig, cfgKey:cfgComputeKey, out:item }); recomputed++; return item; }); for(const id of cache.keys()){ if(!liveIds.has(id)) cache.delete(id); } const ms=Math.round((perfNow()-t)*10)/10; const hist=pushPerfSample(perfRef.current.samples,ms); perfRef.current.computeMs=ms; perfRef.current.samples=hist.samples; perfRef.current.p95Ms=hist.p95; perfRef.current.styles=styles.length; perfRef.current.cacheHits=hits; perfRef.current.recomputed=recomputed; return out; },[styles,activeBranchStyles,stylesComputeKey,cfg,cfgComputeKey,effectiveResends]);
+  const computed=useMemo(()=>{ const t=perfNow(); const cache=computeCacheRef.current; const liveIds=new Set(); let hits=0, recomputed=0; const rawById=new Map((styles||[]).map(raw=>[String(raw.id),raw])); const out=activeBranchStyles.map(activeStyle=>{ liveIds.add(activeStyle.id); const rawStyle=rawById.get(String(activeStyle.id))||activeStyle; const resendSig=JSON.stringify(effectiveResends&&Object.fromEntries(Object.entries(effectiveResends||{}).filter(([k])=>String(k).startsWith(String(activeStyle.id)+":")))); const sig=styleComputeSignature(activeStyle)+"::resends="+resendSig; const old=cache.get(activeStyle.id); if(old && old.sig===sig && old.cfgKey===cfgComputeKey){ hits++; const cached=old.out||{}; return canonicalLiveRow({ ...cached, rawStyle, activeStyle:cached.activeStyle||activeStyle, s:cached.activeStyle||activeStyle }); } const c=computeStyle(activeStyle,cfg,effectiveResends); /* IMPORTANT: live screens must read s/activeStyle, never rawStyle. rawStyle is kept only for save/history/audit. */ let item={ rawStyle, activeStyle, s:activeStyle, c, idx:buildSearchIndex(activeStyle,c) }; item=canonicalLiveRow(item); cache.set(activeStyle.id,{ sig, cfgKey:cfgComputeKey, out:item }); recomputed++; return item; }); for(const id of cache.keys()){ if(!liveIds.has(id)) cache.delete(id); } const ms=Math.round((perfNow()-t)*10)/10; const hist=pushPerfSample(perfRef.current.samples,ms); perfRef.current.computeMs=ms; perfRef.current.samples=hist.samples; perfRef.current.p95Ms=hist.p95; perfRef.current.styles=styles.length; perfRef.current.cacheHits=hits; perfRef.current.recomputed=recomputed; return out; },[styles,activeBranchStyles,stylesComputeKey,cfg,cfgComputeKey,effectiveResends]);
   // Live/report source: archived styles stay available in Tracker Archive view, but are excluded from all live reports by default.
   const activeComputed=useMemo(()=>computed.filter(({s})=>!s.archived),[computed]);
   const chaseOwnerOptions=useMemo(()=>["All", ...Array.from(new Set([...STAGES.map(st=>(cfg.stageOwners&&cfg.stageOwners[st.key])||DEFAULT_STAGE_OWNERS[st.key]||st.owner), ...CHASE_LABELS])).filter(Boolean)], [cfg]);
@@ -1412,7 +1462,7 @@ function MerchTracker({ me, onSignOut }){
   const snapCurrent=()=>setViewSnap({ statusFilter, ownerFilter, search, searchCol, colFilters, activityFilter, savedView, archiveView, followFilter, sort });
   const clearAllFilters=()=>{ resetFilters(); setViewSnap(null); };
   const restoreView=()=>{ if(!viewSnap) return; setStatusFilter(viewSnap.statusFilter||"All"); setOwnerFilter(viewSnap.ownerFilter||"All"); setSearch(viewSnap.search||""); setSearchCol(viewSnap.searchCol||"auto"); setColFilters(viewSnap.colFilters||{}); setTrackerActivityFilter(viewSnap.activityFilter||null); setSavedView(viewSnap.savedView||""); setArchiveView(viewSnap.archiveView||"active"); setFollowFilter(!!viewSnap.followFilter); setSort(viewSnap.sort||{col:null,dir:1}); setViewSnap(null); };
-  const applyDrill=(spec)=>{ snapCurrent(); setStatusFilter(spec.status||"All"); setOwnerFilter(spec.owner||"All"); setSearch(spec.search||""); setSearchCol("auto"); setColFilters(spec.colFilters||{}); setTrackerActivityFilter(spec.activityKey||spec.key||spec.activity||null); setSavedView(""); setFilterCol(null); setSort({col:null,dir:1}); setTab("tracker"); };
+  const applyDrill=(spec)=>{ const drill=canonicalDrillSpec(spec||{}); snapCurrent(); setStatusFilter(drill.status||"All"); setOwnerFilter(drill.owner||"All"); setSearch(drill.search||""); setSearchCol("auto"); setColFilters(drill.colFilters||{}); setTrackerActivityFilter(drill.activityKey||drill.activity||null); setSavedView(""); setFilterCol(null); setSort({col:null,dir:1}); setTab("tracker"); };
   const presetPass=(s,c)=>{ if(!savedView) return true; const front=c.frontier?[...c.frontier]:[]; const has=(keys)=>front.some(k=>keys.includes(k)); const dueSoon=front.some(k=>{ const r=(c.stages||[]).find(x=>x.key===k); const d=r&&(r.rev||r.plan); const n=d?netWorkdays(TODAY,d):999; return d && n>=0 && n<=6; }); const anyRework=(c.stages||[]).some(r=>r.rework||r.rejected); if(savedView==="overdue") return (c.tone==="late"||c.status.startsWith("Overdue")); if(savedView==="dueThisWeek") return !c.released && dueSoon; if(savedView==="buyerPending") return !c.released && front.some(k=>((STAGES.find(x=>x.key===k)||{}).owner)==="Buyer"); if(savedView==="fabricPending") return !c.released && has(["labDip","labAppr","fabricIH"]); if(savedView==="ppPending") return !c.released && has(["ppSample","ppAppr","prodFile"]); if(savedView==="deliveryRisk") return c.tone==="late"||String(c.status).toLowerCase().includes("risk"); if(savedView==="following") return follows.has(s.id); if(savedView==="rework") return anyRework; if(savedView==="released") return c.released; return true; };
   const deferredSearch=useDeferredValue(search);
   const filterKey=useMemo(()=>JSON.stringify({ search:deferredSearch, searchCol, statusFilter, ownerFilter, archiveView, activityFilter:activityFilterKey, colFilters, followFilter, savedView, follows:[...follows].sort() }),[deferredSearch,searchCol,statusFilter,ownerFilter,archiveView,activityFilter,colFilters,followFilter,savedView,follows]);
@@ -1427,7 +1477,7 @@ function MerchTracker({ me, onSignOut }){
       const matchS=statusFilter==="All"||(statusFilter==="At Risk"&&(c.tone==="late"||c.tone==="warn"))||(statusFilter==="On Track"&&c.tone==="ok")||(statusFilter==="Released"&&c.released);
       const matchF=cfEntries.every(([col,allowed])=> passCol(s,c,col,allowed));
       const matchO=ownerFilter==="All"||(c.chaseOwners||[]).some(o=>filterNorm(o.owner)===filterNorm(ownerFilter));
-      const ak=activityFilterKey; const matchA=!ak||(c.frontier&&c.frontier.has(ak))||(c.stages||[]).some(r=>r&&r.key===ak&&!r.done);
+      const ak=activityFilterKey; const matchA=!ak||rowMatchesCurrentStage(row,ak);
       const matchArch=archiveView==="all"?true:(archiveView==="archived"?!!s.archived:!s.archived);
       const matchFollow=!followFilter||follows.has(s.id);
       return matchQ&&matchS&&matchF&&matchO&&matchA&&matchArch&&matchFollow&&presetPass(s,c);
@@ -1875,7 +1925,7 @@ function MerchTracker({ me, onSignOut }){
     const matchS=statusFilter==="All"||(statusFilter==="At Risk"&&(c.tone==="late"||c.tone==="warn"))||(statusFilter==="On Track"&&c.tone==="ok")||(statusFilter==="Released"&&c.released);
     const matchF=Object.entries(colFilters||{}).every(([cc,allowed])=> cc===exceptCol || passCol(s,c,cc,allowed));
     const matchO=ownerFilter==="All"||(c.chaseOwners||[]).some(o=>o.owner===ownerFilter);
-    const ak=activityFilterKey; const matchA=!ak||(c.frontier&&c.frontier.has(ak))||(c.stages||[]).some(r=>r&&r.key===ak&&!r.done);
+    const ak=activityFilterKey; const matchA=!ak||rowMatchesCurrentStage(row,ak);
     const matchArch=archiveView==="all"?true:(archiveView==="archived"?!!s.archived:!s.archived);
     const matchFollow=!followFilter||follows.has(s.id);
     return matchQ&&matchS&&matchF&&matchO&&matchA&&matchArch&&matchFollow&&presetPass(s,c);
@@ -2395,8 +2445,8 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
       </div>
       </>)}
 
-      {tab==="dashboard" && <OperationalDashboardView computed={activeComputed} todoItems={todoItems} cfg={cfg} applyDrill={applyDrill} drillTodo={(obj)=>{ setTodoFilter(obj); setTab("todo"); }}/>}
-      {tab==="management" && <ManagementDashboardView computed={activeComputed} todoItems={todoItems} cfg={cfg} applyDrill={applyDrill} drillTodo={(obj)=>{ setTodoFilter(obj); setTab("todo"); }}/>}
+      {tab==="dashboard" && <OperationalDashboardView computed={activeComputed} todoItems={todoItems} cfg={cfg} applyDrill={applyDrill} drillTodo={(obj)=>{ setTodoFilter(todoDrillFilterFromSlice({}, canonicalDrillSpec(obj||{}))); setTab("todo"); }}/>}
+      {tab==="management" && <ManagementDashboardView computed={activeComputed} todoItems={todoItems} cfg={cfg} applyDrill={applyDrill} drillTodo={(obj)=>{ setTodoFilter(todoDrillFilterFromSlice({}, canonicalDrillSpec(obj||{}))); setTab("todo"); }}/>}
       {tab==="escalation" && <EscalationMatrixView computed={activeComputed} cfg={cfg} applyDrill={applyDrill} />}
       {tab==="todo" && <TodoView items={todoItems} cfg={cfg} setCfg={setCfg} canEditSettings={canAdmin(role)} filter={todoFilter} setFilter={setTodoFilter} onJump={(id,key)=>{ snapCurrent(); resetFilters(); setTab("tracker"); requestAnimationFrame(()=>setTimeout(()=>jumpToEnter(id,key),60)); }}/>}
       {tab==="review" && <ReviewTabView computed={activeComputed} todoItems={todoItems} auditRows={auditRows} auditBusy={auditBusy} loadAuditRows={loadAuditRows} errorLog={errorLog} comments={comments} inbox={inbox} me={me} colLabelOf={colLabelOf} onJump={(id,col)=>{ setTab("tracker"); setTimeout(()=>{ setSel({id:Number(id),col:col||"__style"}); setFocus(null); scrollToCell(Number(id),col||"__style"); },60); }}/>}
@@ -2809,7 +2859,7 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
   const delRisk=fc.filter(({c})=>String(c.status).startsWith("Delivery risk")).length;
   // owner load + activity load from the spliced set
   const ownerLoad={}; const actAgg={};
-  fc.forEach(({s,c})=>{ if(c.released) return; (c.chaseOwners||[]).forEach(o=>{ ownerLoad[o.owner]=(ownerLoad[o.owner]||0)+1; }); (c.frontier?[...c.frontier]:[]).forEach(k=>{ const r=(c.stages||[]).find(x=>x.key===k); if(!r||r.done) return; const lbl=stageReviewLabel(s,r); const a=actAgg[lbl]=actAgg[lbl]||{n:0,over:0,key:k}; a.n++; if((r.rev||r.plan)&&TODAY>(r.rev||r.plan)) a.over++; }); });
+  fc.forEach(({s,c})=>{ if(c.released) return; (c.chaseOwners||[]).forEach(o=>{ ownerLoad[o.owner]=(ownerLoad[o.owner]||0)+1; }); (c.frontier?[...c.frontier]:[]).forEach(k=>{ const r=(c.stages||[]).find(x=>x.key===k); if(!r||r.done) return; const lbl=stageLabelFromKeyGlobal(k); const a=actAgg[lbl]=actAgg[lbl]||{n:0,over:0,key:k}; a.n++; if((r.rev||r.plan)&&TODAY>(r.rev||r.plan)) a.over++; }); });
   const owners=Object.entries(ownerLoad).sort((a,b)=>b[1]-a[1]); const maxOwner=Math.max(1,...owners.map(o=>o[1]));
   const acts=Object.entries(actAgg).sort((a,b)=>b[1].n-a[1].n); const maxAct=Math.max(1,...acts.map(e=>e[1].n));
   const overdueAct=acts.reduce((s,[,v])=>s+v.over,0);
@@ -2848,7 +2898,7 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
     </button>); });
   const dashboardSummary=[{ "Report Type":"Current Dashboard", "Slice Styles":total, "On Track":onTrack, "At Risk":atRisk, "Delivery Risk":delRisk, "Released":released, "Overdue Activities":overdueAct }];
   const dashboardStyleRows=fc.map(({s,c})=>({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Sample Fit":s.sampleFit||"", "Family":s.family||"", "Colour":s.colour||"", "Brand":s.brand||"", "Buyer":s.buyer||"", "Junior":s.owner||"", "Qty":s.qty||0, "Delivery":s.delivery||"", "Status":c.status||"", "Tone":c.tone||"", "Released":c.released?"YES":"", "% Done":c.pct, "Chase":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Next Pending":c.nextPending?c.nextPending.label:"", "Projected Release":c.projRelease?fmt(c.projRelease):"" }));
-  const dashboardBreakup=fc.map(({s,c})=>{ const nx=c.nextPending||null; const nxDue=nx?(nx.rev||nx.plan):null; const frontier=(c.frontier?[...c.frontier]:[]).map(k=>{ const r=(c.stages||[]).find(x=>x.key===k); return r?stageReviewLabel(s,r):k; }).join(", "); return { "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Colour":s.colour||"", "Buyer / Brand":s.buyer||s.brand||"", "Junior":s.owner||"", "Delivery":s.delivery||"", "Overall Status":c.status||"", "Overall Tone":c.tone||"", "Released":c.released?"YES":"NO", "% Done":c.pct, "Next Pending Stage":nx?stageReviewLabel(s,nx):"", "Next Pending Chase":nx?nx.owner:"", "Next Pending Due":nxDue?fmt(nxDue):"", "Next Pending Overdue?":(nxDue&&TODAY>nxDue)?"YES":"NO", "Actionable Frontier":frontier, "Chase Breakdown":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Fit Branch":c.fitBranch?c.fitBranch.txt:"", "Print Branch":c.printBranch?c.printBranch.txt:"", "Fabric Branch":c.fabricBranch?c.fabricBranch.txt:"", "PP Branch":c.ppBranch?c.ppBranch.txt:"", "Prod File Branch":c.prodFileBranch?c.prodFileBranch.txt:"", "Fabric IH Countdown":c.fabricCountdown?c.fabricCountdown.txt:"", "Projected Release":c.projRelease?fmt(c.projRelease):"", "Release Gate":c.releaseGate?fmt(c.releaseGate):"", "Float Days":c.float==null?"":c.float, "Idle Days":c.idle==null?"":c.idle }; });
+  const dashboardBreakup=fc.map(({s,c})=>{ const nx=c.nextPending||null; const nxDue=nx?(nx.rev||nx.plan):null; const frontier=(c.frontier?[...c.frontier]:[]).map(k=>{ const r=(c.stages||[]).find(x=>x.key===k); return r?stageLabelFromKeyGlobal(r.key):k; }).join(", "); return { "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Colour":s.colour||"", "Buyer / Brand":s.buyer||s.brand||"", "Junior":s.owner||"", "Delivery":s.delivery||"", "Overall Status":c.status||"", "Overall Tone":c.tone||"", "Released":c.released?"YES":"NO", "% Done":c.pct, "Next Pending Stage":nx?stageReviewLabel(s,nx):"", "Next Pending Chase":nx?nx.owner:"", "Next Pending Due":nxDue?fmt(nxDue):"", "Next Pending Overdue?":(nxDue&&TODAY>nxDue)?"YES":"NO", "Actionable Frontier":frontier, "Chase Breakdown":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Fit Branch":c.fitBranch?c.fitBranch.txt:"", "Print Branch":c.printBranch?c.printBranch.txt:"", "Fabric Branch":c.fabricBranch?c.fabricBranch.txt:"", "PP Branch":c.ppBranch?c.ppBranch.txt:"", "Prod File Branch":c.prodFileBranch?c.prodFileBranch.txt:"", "Fabric IH Countdown":c.fabricCountdown?c.fabricCountdown.txt:"", "Projected Release":c.projRelease?fmt(c.projRelease):"", "Release Gate":c.releaseGate?fmt(c.releaseGate):"", "Float Days":c.float==null?"":c.float, "Idle Days":c.idle==null?"":c.idle }; });
   const stageStartFor=(s,c,r)=>{ const st=STAGES.find(x=>x.key===r.key)||{}; const byKey={}; (c.stages||[]).forEach(x=>{ byKey[x.key]=x; }); if(r.key==="fabricIH") return (s.labDipReq && byKey.labAppr && byKey.labAppr.actual) ? byKey.labAppr.actual : parse(s.ordRec); if(st.pred==="__ord") return parse(s.ordRec); return byKey[st.pred] ? byKey[st.pred].actual : null; };
   const stageState=(r)=> r.skipped?"Waived / skipped":(r.rejected?"Rejected":(r.rework?"Rework / resend":(r.actual?"Done":(r.rev?"Revised plan":"Pending"))));
   const dashboardStageDetail=[];
@@ -3000,7 +3050,7 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const completionPct=total?Math.round((released/total)*100):0;
 
   const ownerLoad={}; const actAgg={};
-  fc.forEach(({s,c})=>{ if(c.released) return; (c.chaseOwners||[]).forEach(o=>{ ownerLoad[o.owner]=(ownerLoad[o.owner]||0)+1; }); (c.frontier?[...c.frontier]:[]).forEach(k=>{ const r=(c.stages||[]).find(x=>x.key===k); if(!r||r.done) return; const lbl=stageReviewLabel(s,r); const a=actAgg[lbl]=actAgg[lbl]||{n:0,over:0,key:k}; a.n++; if((r.rev||r.plan)&&TODAY>(r.rev||r.plan)) a.over++; }); });
+  fc.forEach(({s,c})=>{ if(c.released) return; (c.chaseOwners||[]).forEach(o=>{ ownerLoad[o.owner]=(ownerLoad[o.owner]||0)+1; }); (c.frontier?[...c.frontier]:[]).forEach(k=>{ const r=(c.stages||[]).find(x=>x.key===k); if(!r||r.done) return; const lbl=stageLabelFromKeyGlobal(k); const a=actAgg[lbl]=actAgg[lbl]||{n:0,over:0,key:k}; a.n++; if((r.rev||r.plan)&&TODAY>(r.rev||r.plan)) a.over++; }); });
   const owners=Object.entries(ownerLoad).sort((a,b)=>b[1]-a[1]); const maxOwner=Math.max(1,...owners.map(o=>o[1]));
   const acts=Object.entries(actAgg).sort((a,b)=>b[1].n-a[1].n); const maxAct=Math.max(1,...acts.map(e=>e[1].n));
   const overdueAct=acts.reduce((s,[,v])=>s+v.over,0);
@@ -3435,8 +3485,8 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   const norm=(v)=>String(v||"").replace(/^Escalate:\s*/i,"").replace(/\s+/g," ").trim().toLowerCase();
   const stageKeyFromAny=(v)=>stageKeyFromAnyGlobal(v);
   const canonicalTodoRow=(t,kind="Activity")=>{
-    const stageKey=stageKeyFromAny(t&&t.key)||stageKeyFromAny(t&&t.activityKey)||stageKeyFromAny(t&&t.originalActivity)||stageKeyFromAny(t&&t.activityLabel)||stageKeyFromAny(t&&t.activity)||String((t&&t.key)||"");
-    const stageLabel=stageLabelOf(stageKey)||String((t&&t.activityLabel)||(t&&t.originalActivity)||(t&&t.activity)||stageKey||"").replace(/^Escalate:\s*/i,"").replace(/\s+/g," ").trim();
+    const stageKey=stageKeyFromAny(t&&t.key)||stageKeyFromAny(t&&t.activityKey)||stageKeyFromAny(t&&t.stageKey)||stageKeyFromAny(t&&t.originalActivity)||stageKeyFromAny(t&&t.activityLabel)||stageKeyFromAny(t&&t.activity)||"";
+    const stageLabel=stageKey ? stageLabelOf(stageKey) : String((t&&t.activityLabel)||(t&&t.originalActivity)||(t&&t.activity)||"").replace(/^Escalate:\s*/i,"").replace(/\s+/g," ").trim();
     return {
       ...(t||{}),
       todoType: kind,
@@ -3474,7 +3524,8 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   const hasActivityGate=selectedActivityRawValues.length>0;
   const activityPass=(t)=>{
     if(!hasActivityGate) return true;
-    const rowKey=activityKeyOf(t);
+    const rowKey=stageKeyFromAny(activityKeyOf(t))||activityKeyOf(t);
+    // Hard rule: if the selected activity maps to a known TNA stage, only the same stage key may pass.
     if(selectedActivityKeySet.size>0) return selectedActivityKeySet.has(rowKey);
     return selectedActivityTokenSet.has(filterToken(activityCanonical(t))) || selectedActivityTokenSet.has(filterToken(rowKey));
   };
