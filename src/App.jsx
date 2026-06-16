@@ -115,10 +115,13 @@ const arrClean=(v)=>Array.isArray(v)?v.filter(x=>x!=null&&String(x).trim()!=="")
 const splitColoursAll=(txt)=>{ const raw=String(txt||"").trim(); if(!raw) return ["(no colour)"]; const parts=raw.split(/[,;|\/+]+/).map(x=>x.replace(/\s+/g," ").trim()).filter(Boolean); return parts.length?parts:[raw.replace(/\s+/g," ").trim()]; };
 const todoDrillFilterFromSlice=(base={},df={})=>{
   const out={...(base||{})};
-  const map={ order:"orderNo", junior:"junior", colour:"colour", fit:"fit", family:"family", brand:"brand", fabric:"fabric" };
+  const map={ order:"orderNo", junior:"junior", colour:"colour", fit:"fit", family:"family", brand:"brand", fabric:"fabric", buyer:"buyer" };
   Object.entries(map).forEach(([from,to])=>{ const vals=arrClean(df&&df[from]); if(vals.length) out[to]=vals; });
-  if(out.activity && !out.activityKey){ const keys=activityKeysFromAnyGlobal(out.activity); if(keys.length) out.activityKey=keys; }
-  if(out.key && !out.activityKey){ const keys=activityKeysFromAnyGlobal(out.key); if(keys.length) out.activityKey=keys; }
+  // Keep dashboard/management drill filters table-like: slice filters + clicked owner/activity become To-Do column filters.
+  // Activity is always stored as canonical stage keys plus display labels so Activity multi-select stays stable.
+  const actVals=[...arrClean(out.activityKey), ...arrClean(out.key), ...arrClean(out.activity)];
+  const actKeys=activityKeysFromAnyGlobal(actVals);
+  if(actKeys.length){ out.activityKey=actKeys; out.activity=actKeys.map(stageLabelFromKeyGlobal).filter(Boolean); delete out.key; }
   return out;
 };
 
@@ -247,6 +250,30 @@ const REJECTABLE=["fitAppr","artAppr","soAppr","labAppr","ppAppr"]; // approval 
 const SKIPPABLE_STAGES=["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr","labDip","labAppr","ppSample","ppAppr"]; // activities that can be waived/skipped
 const APPR_OF_SEND={ fitSend:"fitAppr", artwork:"artAppr", strikeOff:"soAppr", labDip:"labAppr", ppSample:"ppAppr" }; // send/make stage -> the approval that can reject it
 const SEND_FOR_APPR=Object.fromEntries(Object.entries(APPR_OF_SEND).map(([send,appr])=>[appr,send]));
+// Skip-pair integrity: live calculations must not chase an approval when its send/make stage was waived.
+// This is a non-destructive normalization layer: raw DB values stay available for audit/import review,
+// but Tracker/To-Do/Dashboards/Reports read this cleaned active style.
+const normalizeSkipPairs=(style)=>{
+  if(!style) return style;
+  const skips={...(style.skips||{})};
+  const actuals=style.actuals||{};
+  let changed=false;
+  Object.entries(APPR_OF_SEND).forEach(([sendKey,apprKey])=>{
+    const sendSkipped=!!skips[sendKey];
+    const apprSkipped=!!skips[apprKey];
+    if(sendSkipped && !apprSkipped){
+      skips[apprKey]=skips[sendKey];
+      changed=true;
+    }
+    // If approval was waived/imported but the send stage has no actual, waive the send too.
+    // If send already has an actual, keep it as history and do not convert it to skipped.
+    if(apprSkipped && !sendSkipped && !actuals[sendKey]){
+      skips[sendKey]=skips[apprKey];
+      changed=true;
+    }
+  });
+  return changed?{...style,skips}:style;
+};
 const stageReviewLabel=(style,r)=>{
   if(!r) return "";
   // IMPORTANT: stage key is the truth for filters, cards, drilldowns and To-Do rows.
@@ -993,15 +1020,11 @@ function MerchTracker({ me, onSignOut }){
   };
   const styleForActiveBranch=(style)=>{
     if(!style) return style;
-    let changed=false;
+    const normalized=normalizeSkipPairs(style);
+    let changed=normalized!==style;
+    style=normalized;
     const revs={...(style.revs||{})};
     const skips={...(style.skips||{})};
-    Object.entries(APPR_OF_SEND).forEach(([sendK,apprK])=>{
-      const sendSkip=skips[sendK];
-      const apprSkip=skips[apprK];
-      if(sendSkip && !apprSkip){ skips[apprK]=sendSkip; changed=true; }
-      if(apprSkip && !sendSkip){ skips[sendK]=apprSkip; changed=true; }
-    });
     STAGE_KEYS.forEach(k=>{
       const linked=APPR_OF_SEND[k]||SEND_FOR_APPR[k]||null;
       const round=linked?activeRoundForCell(style,k):0;
@@ -2861,7 +2884,7 @@ function MultiSelectDropdown({ label, value, options, onChange, rounded=false })
 
 /* ========================= DASHBOARD ========================= */
 function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillTodo }){
-  const [target,setTarget]=useState("tracker"); // where bar/owner/activity drills go
+  const [target,setTarget]=useState("tracker"); // where bar/owner/activity drills go: Tracker or To-Do only. Escalation cards route to To-Do with Type=Escalation.
   const [df,setDf]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("mt_dashboard_filter")||localStorage.getItem("mt_dashfilter")||"{}"); }catch(e){ return {}; } });
   useEffect(()=>{ try{ localStorage.setItem("mt_dashboard_filter", JSON.stringify(df)); }catch(e){} },[df]);
   const [mgmtOpen,setMgmtOpen]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("mt_mgmt_open")||"{}"); }catch(e){ return {}; } });
@@ -2907,8 +2930,8 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
   // splice carried into drills so the tracker shows the same slice
   const spliceCols=()=>{ const cf={}; const put=(k,col)=>{ const a=arrOf(df[k]); if(a.length) cf[col]=a; }; put("order","orderNo"); put("fit","sampleFit"); put("junior","owner"); put("family","family"); put("brand","brand"); put("fabric","fabricType"); put("colour","colour"); return cf; };
   const spliceSearch=()=> "";
-  const goOwner=(o)=>{ if(target==="escalation") drillTodo(todoDrillFilterFromSlice({ owner:o, todoType:"Escalation", priority:"Overdue" }, df)); else if(target==="todo") drillTodo(todoDrillFilterFromSlice({ owner:o }, df)); else applyDrill({ owner:o, colFilters:spliceCols(), search:spliceSearch() }); };
-  const goAct=(label,key)=>{ const k=stageKeyFromAnyGlobal(key||label); if(target==="escalation") drillTodo(todoDrillFilterFromSlice({ activity:[stageLabelFromKeyGlobal(k)||label], activityKey:k?[k]:[], key:k?[k]:[], todoType:"Escalation", priority:"Overdue" }, df)); else if(target==="todo") drillTodo(todoDrillFilterFromSlice({ activity:[stageLabelFromKeyGlobal(k)||label], activityKey:k?[k]:[], key:k?[k]:[] }, df)); else applyDrill({ activity:k||key, colFilters:spliceCols(), search:spliceSearch() }); };
+  const goOwner=(o)=>{ if(target==="todo") drillTodo(todoDrillFilterFromSlice({ owner:o }, df)); else applyDrill({ owner:o, colFilters:spliceCols(), search:spliceSearch() }); };
+  const goAct=(label,key)=>{ const k=stageKeyFromAnyGlobal(key||label); if(target==="todo") drillTodo(todoDrillFilterFromSlice({ activity:[stageLabelFromKeyGlobal(k)||label], activityKey:k?[k]:[], key:k?[k]:[] }, df)); else applyDrill({ activity:k||key, colFilters:spliceCols(), search:spliceSearch() }); };
   const goPhase=(phaseName)=>{ drillTodo&&drillTodo(todoDrillFilterFromSlice({ phase:phaseName }, df)); };
   const goStatus=(st,extra)=>applyDrill({ status:st, colFilters:{...spliceCols(),...(extra||{})}, search:spliceSearch() });
   const card=(label,val,color,onClick)=>(<button onClick={onClick} disabled={!onClick} style={{ flex:1, minWidth:130, textAlign:"left", background:"var(--surface)", border:"1px solid var(--ink)", padding:"14px 16px", cursor:onClick?"pointer":"default", fontFamily:"inherit" }}><div style={{ fontSize:28, fontWeight:800, fontFamily:"'Archivo',sans-serif", color, lineHeight:1 }}>{val}</div><div style={{ fontSize:10, color:"var(--muted-2)", marginTop:5, letterSpacing:0.5, textTransform:"uppercase" }}>{label}{onClick?" ›":""}</div></button>);
@@ -2974,7 +2997,7 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
       {sel("Fabric",df.fabric,fabrics,v=>setDf(d=>({...d,fabric:v})))}
       {anyDf && <button onClick={()=>setDf({})} style={{ fontFamily:"inherit", fontSize:10, padding:"5px 9px", cursor:"pointer", border:"1px solid var(--danger)", background:"var(--surface)", color:"var(--danger)", fontWeight:700 }}>clear slice</button>}
       <ReportExportMenu title="Dashboard" prefix="dashboard" sheets={dashboardSheets} defaultMode="detailed" />
-      <span style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6 }}><span style={{ fontSize:10, color:"var(--muted-2)" }}>drill to:</span><div style={{ display:"flex", border:"1px solid var(--ink)" }}>{["tracker","todo","escalation"].map((t,i,arr)=>(<button key={t} onClick={()=>setTarget(t)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:700, padding:"5px 10px", cursor:"pointer", border:"none", borderRight:i<arr.length-1?"1px solid var(--ink)":"none", background:target===t?"var(--ink)":"var(--surface)", color:target===t?"var(--bg)":"var(--ink)" }}>{t==="tracker"?"Tracker":t==="escalation"?"Escalation":"To-Do"}</button>))}</div></span>
+      <span style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6 }}><span style={{ fontSize:10, color:"var(--muted-2)" }}>drill to:</span><div style={{ display:"flex", border:"1px solid var(--ink)" }}>{["tracker","todo"].map((t,i,arr)=>(<button key={t} onClick={()=>setTarget(t)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:700, padding:"5px 10px", cursor:"pointer", border:"none", borderRight:i<arr.length-1?"1px solid var(--ink)":"none", background:target===t?"var(--ink)":"var(--surface)", color:target===t?"var(--bg)":"var(--ink)" }}>{t==="tracker"?"Tracker":"To-Do"}</button>))}</div></span>
     </div>
 
     <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
@@ -3002,7 +3025,7 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
       <div style={{ flex:1, minWidth:320, background:"var(--surface)", border:"1px solid var(--ink)", padding:16 }}>
         <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>WHO TO CHASE — by chase label</div>
         {bar(owners, maxOwner, (o)=>OWNER_COLOR2[o]||"var(--muted-2)", 64, (o)=>goOwner(o))}
-        <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8 }}>Click to open in {target==="tracker"?"Tracker":target==="escalation"?"Escalation":"To-Do"}.</div>
+        <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8 }}>Click to open in {target==="tracker"?"Tracker":"To-Do"}.</div>
       </div>
       <div style={{ flex:1, minWidth:320, background:"var(--surface)", border:"1px solid var(--ink)", padding:16 }}>
         <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>ESCALATION OWNER LOAD</div>
@@ -3017,7 +3040,7 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
             <span style={{ flex:1, height:16, background:"#f0ece3", position:"relative" }}><span style={{ position:"absolute", left:0, top:0, bottom:0, width:`${(v.n/maxAct)*100}%`, background:v.over?"var(--danger)":"var(--accent)" }}/></span>
             <span style={{ width:54, textAlign:"right", fontSize:10, fontWeight:700 }}>{v.n}{v.over?<span style={{ color:"var(--danger)" }}> ({v.over})</span>:null}</span>
           </button>))}
-        <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8 }}>Click to open in {target==="tracker"?"Tracker":target==="escalation"?"Escalation":"To-Do"}. Red = overdue.</div>
+        <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8 }}>Click to open in {target==="tracker"?"Tracker":"To-Do"}. Red = overdue.</div>
       </div>
       <div style={{ flex:1, minWidth:320, background:"var(--surface)", border:"1px solid var(--ink)", padding:16 }}>
         <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>WHERE STYLES ARE STUCK</div>
@@ -3037,7 +3060,7 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
 
 /* ========================= MANAGEMENT ANALYTICS ========================= */
 function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTodo }){
-  const [target,setTarget]=useState("tracker"); // where bar/owner/activity drills go
+  const [target,setTarget]=useState("tracker"); // where bar/owner/activity drills go: Tracker or To-Do only. Escalation cards route to To-Do with Type=Escalation.
   const [isPerfPending,startPerfTransition]=useTransition();
   const [df,setDf]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("mt_management_filter")||localStorage.getItem("mt_dashfilter")||"{}"); }catch(e){ return {}; } });
   useEffect(()=>{ try{ localStorage.setItem("mt_management_filter", JSON.stringify(df)); }catch(e){} },[df]);
@@ -3160,8 +3183,8 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
 
   const spliceCols=()=>{ const cf={}; const put=(k,col)=>{ const a=arrOf(df[k]); if(a.length) cf[col]=a; }; put("order","orderNo"); put("fit","sampleFit"); put("junior","owner"); put("family","family"); put("brand","brand"); put("fabric","fabricType"); put("colour","colour"); return cf; };
   const spliceSearch=()=> "";
-  const goOwner=(o)=>{ if(target==="escalation") drillTodo(todoDrillFilterFromSlice({ owner:o, todoType:"Escalation", priority:"Overdue" }, df)); else if(target==="todo") drillTodo(todoDrillFilterFromSlice({ owner:o }, df)); else applyDrill({ owner:o, colFilters:spliceCols(), search:spliceSearch() }); };
-  const goAct=(label,key)=>{ const k=stageKeyFromAnyGlobal(key||label); if(target==="escalation") drillTodo(todoDrillFilterFromSlice({ activity:[stageLabelFromKeyGlobal(k)||label], activityKey:k?[k]:[], key:k?[k]:[], todoType:"Escalation", priority:"Overdue" }, df)); else if(target==="todo") drillTodo(todoDrillFilterFromSlice({ activity:[stageLabelFromKeyGlobal(k)||label], activityKey:k?[k]:[], key:k?[k]:[] }, df)); else applyDrill({ activity:k||key, colFilters:spliceCols(), search:spliceSearch() }); };
+  const goOwner=(o)=>{ if(target==="todo") drillTodo(todoDrillFilterFromSlice({ owner:o }, df)); else applyDrill({ owner:o, colFilters:spliceCols(), search:spliceSearch() }); };
+  const goAct=(label,key)=>{ const k=stageKeyFromAnyGlobal(key||label); if(target==="todo") drillTodo(todoDrillFilterFromSlice({ activity:[stageLabelFromKeyGlobal(k)||label], activityKey:k?[k]:[], key:k?[k]:[] }, df)); else applyDrill({ activity:k||key, colFilters:spliceCols(), search:spliceSearch() }); };
   const goPhase=(phaseName)=>{ drillTodo&&drillTodo(todoDrillFilterFromSlice({ phase:phaseName }, df)); };
   const goStatus=(st,extra)=>applyDrill({ status:st, colFilters:{...spliceCols(),...(extra||{})}, search:spliceSearch() });
   const goSearch=(q)=>applyDrill({ status:"All", colFilters:spliceCols(), search:q||spliceSearch() });
@@ -3424,7 +3447,7 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
       <span style={{ fontSize:10, fontWeight:800, color:"var(--muted-2)", textTransform:"uppercase", letterSpacing:0.5 }}>Slice:</span>
       {sel("Order",df.order,orders,v=>setDf(d=>({...d,order:v})))} {sel("Fit",df.fit,fits,v=>setDf(d=>({...d,fit:v})))} {sel("Colour",df.colour,colours,v=>setDf(d=>({...d,colour:v})))} {sel("Junior",df.junior,juniors,v=>setDf(d=>({...d,junior:v})))} {sel("Family",df.family,families,v=>setDf(d=>({...d,family:v})))} {sel("Brand",df.brand,brands,v=>setDf(d=>({...d,brand:v})))} {sel("Fabric",df.fabric,fabrics,v=>setDf(d=>({...d,fabric:v})))}
       {anyDf && <button onClick={()=>setDf({})} style={{ fontFamily:"inherit", fontSize:10, padding:"6px 10px", cursor:"pointer", border:"1px solid var(--danger)", background:"var(--surface)", color:"var(--danger)", fontWeight:800, borderRadius:8 }}>clear slice</button>}
-      <span style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6 }}><span style={{ fontSize:10, color:"var(--muted-2)" }}>drill to:</span><div style={{ display:"flex", border:"1px solid var(--line-2)", borderRadius:8, overflow:"hidden" }}>{["tracker","todo","escalation"].map((t,i,arr)=>(<button key={t} onClick={()=>setTarget(t)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"6px 10px", cursor:"pointer", border:"none", borderRight:i<arr.length-1?"1px solid var(--line-2)":"none", background:target===t?"var(--ink)":"var(--surface)", color:target===t?"var(--bg)":"var(--ink)" }}>{t==="tracker"?"Tracker":t==="escalation"?"Escalation":"To-Do"}</button>))}</div></span>
+      <span style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6 }}><span style={{ fontSize:10, color:"var(--muted-2)" }}>drill to:</span><div style={{ display:"flex", border:"1px solid var(--line-2)", borderRadius:8, overflow:"hidden" }}>{["tracker","todo"].map((t,i,arr)=>(<button key={t} onClick={()=>setTarget(t)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"6px 10px", cursor:"pointer", border:"none", borderRight:i<arr.length-1?"1px solid var(--line-2)":"none", background:target===t?"var(--ink)":"var(--surface)", color:target===t?"var(--bg)":"var(--ink)" }}>{t==="tracker"?"Tracker":"To-Do"}</button>))}</div></span>
     </div>
 
     {anyDf && <div style={{ display:"flex", gap:7, flexWrap:"wrap", margin:"-4px 0 14px" }}>
