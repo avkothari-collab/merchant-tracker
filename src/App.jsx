@@ -1348,7 +1348,18 @@ function MerchTracker({ me, onSignOut }){
     if(STAGE_KEYS.includes(col)){ const r=(cc.stages||[]).find(x=>x.key===col); if(!r) return "— n/a"; if(r.done) return fmt(r.actual); if(r.rework) return "↻ Redo & resend"; if(r.rejected) return r.reject?("✕ Rejected "+fmt(r.reject)):"✕ Rejected"; if(r.rev) return "✎ Revised "+fmt(r.rev); return "● Pending"; }
     return "";
   };
-  const passCol=(s,c,col,allowed)=>{ if(!allowed||allowed.length===0) return true; if(col==="chase"){ const owners=(c.chaseOwners||[]).map(o=>o.owner); if(owners.length===0) return allowed.includes("(Blanks)"); return owners.some(o=>allowed.includes(o)); } return allowed.includes(valueFor(s,c,col)); };
+  const filterNorm=(v)=>String(v==null?"":v).replace(/\s+/g," ").trim().toLowerCase();
+  const passCol=(s,c,col,allowed)=>{
+    const allowedList=(Array.isArray(allowed)?allowed:[allowed]).filter(v=>v!=null && String(v).trim()!=="");
+    if(!allowedList.length) return true;
+    const allowedSet=new Set(allowedList.map(filterNorm));
+    if(col==="chase"){
+      const owners=(c.chaseOwners||[]).map(o=>o.owner).filter(Boolean);
+      if(owners.length===0) return allowedSet.has(filterNorm("(Blanks)"));
+      return owners.some(o=>allowedSet.has(filterNorm(o)));
+    }
+    return allowedSet.has(filterNorm(valueFor(s,c,col)));
+  };
   const chaseLabel=(owner)=>String(owner||"—");
   const SAVED_VIEWS=[ ["","Saved view: none"], ["overdue","Overdue"], ["dueThisWeek","Due this week"], ["buyerPending","Buyer approval pending"], ["fabricPending","Fabric pending"], ["ppPending","PP pending"], ["deliveryRisk","Delivery risk"], ["following","Followed styles"], ["rework","Rejected / rework"], ["released","Released"] ];
   const anyFilter = statusFilter!=="All"||ownerFilter!=="All"||!!search||Object.keys(colFilters).length>0||!!activityFilter||followFilter||!!savedView;
@@ -1361,7 +1372,25 @@ function MerchTracker({ me, onSignOut }){
   const deferredSearch=useDeferredValue(search);
   const filterKey=useMemo(()=>JSON.stringify({ search:deferredSearch, searchCol, statusFilter, ownerFilter, archiveView, activityFilter, colFilters, followFilter, savedView, follows:[...follows].sort() }),[deferredSearch,searchCol,statusFilter,ownerFilter,archiveView,activityFilter,colFilters,followFilter,savedView,follows]);
   const filterIdentity=useMemo(()=>JSON.stringify({ search:deferredSearch, searchCol, statusFilter, ownerFilter, archiveView, activityFilter, colFilters, followFilter, savedView }),[deferredSearch,searchCol,statusFilter,ownerFilter,archiveView,activityFilter,colFilters,followFilter,savedView]);
-  const filtered=useMemo(()=>{ const t=perfNow(); const q=String(deferredSearch||"").trim().toLowerCase(); const cfEntries=Object.entries(colFilters||{}); const out=computed.filter((row)=>{ const {s,c,idx}=row; const matchQ = !q ? true : (searchCol==="auto" ? (idx&&idx.auto?idx.auto:"").includes(q) : ((idx&&idx.byCol&&idx.byCol[searchCol])!=null?idx.byCol[searchCol]:lc(s[searchCol])).includes(q)); const matchS=statusFilter==="All"||(statusFilter==="At Risk"&&(c.tone==="late"||c.tone==="warn"))||(statusFilter==="On Track"&&c.tone==="ok")||(statusFilter==="Released"&&c.released); const matchF=cfEntries.every(([col,allowed])=> passCol(s,c,col,allowed)); const matchO=ownerFilter==="All"||(c.chaseOwners||[]).some(o=>o.owner===ownerFilter); const matchA=!activityFilter||(c.frontier&&c.frontier.has(activityFilter)); const matchArch=archiveView==="all"?true:(archiveView==="archived"?!!s.archived:!s.archived); const matchFollow=!followFilter||follows.has(s.id); return matchQ&&matchS&&matchF&&matchO&&matchA&&matchArch&&matchFollow&&presetPass(s,c); }); perfRef.current.filterMs=Math.round((perfNow()-t)*10)/10; perfRef.current.deferred=deferredSearch!==search; return out; },[computed,filterKey,deferredSearch,search]);
+  const filtered=useMemo(()=>{
+    const t=perfNow();
+    const q=String(deferredSearch||"").trim().toLowerCase();
+    const cfEntries=Object.entries(colFilters||{}).map(([col,allowed])=>[col,(Array.isArray(allowed)?allowed:[allowed]).filter(v=>v!=null && String(v).trim()!=="")]).filter(([,allowed])=>allowed.length);
+    const out=computed.filter((row)=>{
+      const {s,c,idx}=row;
+      const matchQ = !q ? true : (searchCol==="auto" ? (idx&&idx.auto?idx.auto:"").includes(q) : ((idx&&idx.byCol&&idx.byCol[searchCol])!=null?idx.byCol[searchCol]:lc(s[searchCol])).includes(q));
+      const matchS=statusFilter==="All"||(statusFilter==="At Risk"&&(c.tone==="late"||c.tone==="warn"))||(statusFilter==="On Track"&&c.tone==="ok")||(statusFilter==="Released"&&c.released);
+      const matchF=cfEntries.every(([col,allowed])=> passCol(s,c,col,allowed));
+      const matchO=ownerFilter==="All"||(c.chaseOwners||[]).some(o=>filterNorm(o.owner)===filterNorm(ownerFilter));
+      const matchA=!activityFilter||(c.frontier&&c.frontier.has(activityFilter));
+      const matchArch=archiveView==="all"?true:(archiveView==="archived"?!!s.archived:!s.archived);
+      const matchFollow=!followFilter||follows.has(s.id);
+      return matchQ&&matchS&&matchF&&matchO&&matchA&&matchArch&&matchFollow&&presetPass(s,c);
+    });
+    perfRef.current.filterMs=Math.round((perfNow()-t)*10)/10;
+    perfRef.current.deferred=deferredSearch!==search;
+    return out;
+  },[computed,filterKey,deferredSearch,search,stylesComputeKey,stageEvents]);
   const toneRank={ late:0, warn:1, ok:2, done:3, na:4 };
   const fitNum=(s)=>{ const m=String(s.sampleFit).match(/\d+/); return m?Number(m[0]):Infinity; };
   const sortVal=(col,{s,c})=>{ switch(col){ case "__style": return s.styleNo.toLowerCase(); case "orderNo": return (s.orderNo||"~").toLowerCase(); case "sampleFit": return fitNum(s); case "family": return s.family.toLowerCase(); case "colour": return s.colour.toLowerCase(); case "brand": return (s.brand||"").toLowerCase(); case "buyer": return (s.buyer||"").toLowerCase(); case "fabricType": return (s.fabricType||"").toLowerCase(); case "age": return (s.age||"").toLowerCase(); case "extra1": return (s.extra1||"").toLowerCase(); case "extra2": return (s.extra2||"").toLowerCase(); case "owner": return (s.owner||"").toLowerCase(); case "setId": return (s.setId||"~").toLowerCase(); case "setRole": return (s.setRole||"").toLowerCase(); case "qty": return Number(s.qty)||0; case "ordRec": return dateSerial(s.ordRec); case "delivery": return dateSerial(s.delivery); case "overall": return toneRank[c.tone]; case "fit": return toneRank[c.fitBranch.tone]; case "print": return toneRank[c.printBranch.tone]; case "fabric": return toneRank[c.fabricBranch.tone]; case "pp": return toneRank[c.ppBranch.tone]; case "prod": return toneRank[c.prodFileBranch.tone]; case "fabricCD": return c.fabricCountdown.n==null?Infinity:c.fabricCountdown.n; case "proj": return c.projRelease?dateSerial(c.projRelease):Infinity; case "pct": return c.pct; case "chase": return (c.chaseOwners||[]).length; case "float": return c.float==null?Infinity:c.float; case "idle": return c.idle==null?-1:c.idle; case "remarks": return (s.remarks||"~").toLowerCase(); default: {
@@ -1809,7 +1838,7 @@ function MerchTracker({ me, onSignOut }){
   const distinctFor=(col)=>{ const set=new Set(); computed.forEach((row)=>{ if(!passForFilterOptions(row,col)) return; const {s,c}=row; if(col==="chase"){ const owners=(c.chaseOwners||[]).map(o=>o.owner); if(owners.length===0) set.add("(Blanks)"); else owners.forEach(o=>set.add(o)); } else set.add(valueFor(s,c,col)); }); return [...set].sort((a,b)=> a==="(Blanks)"?1:b==="(Blanks)"?-1:(a>b?1:a<b?-1:0)); };
   const filterProps=(col)=>({ filterActive: !!colFilters[col], filterOpen: filterCol===col, filterValues: filterCol===col?distinctFor(col):null, filterAllowed: colFilters[col]||null,
     onToggleFilter:()=>{ finishEditing(); setFilterCol(p=>p===col?null:col); },
-    onSetFilter:(arr)=>setColFilters(f=>{ const n={...f}; if(!arr) delete n[col]; else n[col]=arr; return n; }),
+    onSetFilter:(arr)=>setColFilters(f=>{ const n={...f}; const clean=(Array.isArray(arr)?arr:[arr]).filter(v=>v!=null && String(v).trim()!=="").map(v=>String(v).replace(/\s+/g," ").trim()); if(!clean.length) delete n[col]; else n[col]=clean; return {...n}; }),
     onCloseFilter:()=>setFilterCol(null) });
   const funnel=useMemo(()=>{ const b={ "Pre-Fit":0,"Fit/Print":0,"Lab Dip":0,"Fabric IH":0,"PP":0,"Released":0 }; activeComputed.forEach(({c})=>{ if(c.released) b["Released"]++; else { const k=c.nextPending.key; if(k==="techpack") b["Pre-Fit"]++; else if(["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"].includes(k)) b["Fit/Print"]++; else if(["labDip","labAppr"].includes(k)) b["Lab Dip"]++; else if(k==="fabricIH") b["Fabric IH"]++; else b["PP"]++; } }); return b; },[activeComputed]);
 
@@ -3306,9 +3335,14 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   const displayItems=rawDisplayItems.filter(t=> todoMode==="all" || itemGroup(t)===todoMode);
   const phaseOf=(t)=>{ const k=t.key||""; if(k==="techpack") return "Pre-Fit"; if(["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"].includes(k)) return "Fit / Print"; if(["labDip","labAppr"].includes(k)) return "Lab Dip"; if(k==="fabricIH") return "Fabric IH"; return "PP / Prod"; };
   const stageLabelOf=(key)=>((STAGES.find(st=>st.key===key)||{}).label)||key||"";
-  const norm=(v)=>String(v||"").trim().toLowerCase();
+  const norm=(v)=>String(v||"").replace(/^Escalate:\s*/i,"").replace(/\s+/g," ").trim().toLowerCase();
+  const activityCanonical=(t)=>{
+    const base=t.originalActivity || t.activity || stageLabelOf(t.key) || t.key || "";
+    return String(base).replace(/^Escalate:\s*/i,"").replace(/\s+/g," ").trim();
+  };
+  const selectedFor=(field)=>arrVal(tf[field]).map(norm).filter(Boolean);
   const matchesAny=(field,candidates)=>{
-    const selected=arrVal(tf[field]).map(norm).filter(Boolean);
+    const selected=selectedFor(field);
     if(!selected.length) return true;
     const pool=arrVal(candidates).map(norm).filter(Boolean);
     return pool.some(v=>selected.includes(v));
@@ -3321,14 +3355,14 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
     if(field==="key") return [t.key, stageLabelOf(t.key)];
     if(field==="orderNo") return (t.orderNos&&t.orderNos.length)?t.orderNos:t.orderNo;
     if(field==="junior") return (t.juniors&&t.juniors.length)?t.juniors:t.junior;
-    if(field==="activity") return [t.activity, t.originalActivity, t.key, stageLabelOf(t.key)].filter(Boolean);
+    if(field==="activity") return [activityCanonical(t), t.key, stageLabelOf(t.key)].filter(Boolean);
     if(field==="style") return [t.styleNo, t.colour, ...(Array.isArray(t.styleNos)?t.styleNos:[])].filter(Boolean);
     return t[field];
   };
   const filterFields=["phase","priority","risk","todoType","key","orderNo","junior","activity","branch","owner","escalationOwner","style"];
   const passExcept=(t,except)=> filterFields.every(field=>field===except || matchesAny(field,candidatesFor(t,field)));
   const pass=(t)=>passExcept(t,null);
-  const distinct=(field)=>{ const vals=new Set(); displayItems.forEach(t=>{ if(!passExcept(t,field)) return; if(field==="priority") vals.add(t.overdue?"Overdue":"Upcoming"); else if(field==="phase") vals.add(phaseOf(t)); else if(field==="key") vals.add(stageLabelOf(t.key)); else if(field==="activity") { if(t.originalActivity) vals.add(t.originalActivity); else if(t.activity) vals.add(t.activity); } else if(field==="style") { if(t.isColour && t.colour) vals.add(t.colour); else if(t.styleNo) vals.add(t.styleNo); } else if(field==="orderNo" && Array.isArray(t.orderNos)&&t.orderNos.length) t.orderNos.forEach(v=>v&&vals.add(v)); else if(field==="junior" && Array.isArray(t.juniors)&&t.juniors.length) t.juniors.forEach(v=>v&&vals.add(v)); else { const v=t[field]; if(v) vals.add(v); } }); return [...vals].sort((a,b)=>String(a).localeCompare(String(b),undefined,{numeric:true,sensitivity:"base"})); };
+  const distinct=(field)=>{ const vals=new Set(); displayItems.forEach(t=>{ if(!passExcept(t,field)) return; if(field==="priority") vals.add(t.overdue?"Overdue":"Upcoming"); else if(field==="phase") vals.add(phaseOf(t)); else if(field==="key") vals.add(stageLabelOf(t.key)); else if(field==="activity") { const av=activityCanonical(t); if(av) vals.add(av); } else if(field==="style") { if(t.isColour && t.colour) vals.add(t.colour); else if(t.styleNo) vals.add(t.styleNo); } else if(field==="orderNo" && Array.isArray(t.orderNos)&&t.orderNos.length) t.orderNos.forEach(v=>v&&vals.add(v)); else if(field==="junior" && Array.isArray(t.juniors)&&t.juniors.length) t.juniors.forEach(v=>v&&vals.add(v)); else { const v=t[field]; if(v) vals.add(v); } }); return [...vals].sort((a,b)=>String(a).localeCompare(String(b),undefined,{numeric:true,sensitivity:"base"})); };
   const orders=distinct("orderNo"), juniors=distinct("junior"), activities=distinct("activity"), branches=distinct("branch"), owners=distinct("owner"), escOwners=distinct("escalationOwner"), types=distinct("todoType"), priorities=distinct("priority"), risks=distinct("risk"), phases=["Pre-Fit","Fit / Print","Lab Dip","Fabric IH","PP / Prod"], stylesList=distinct("style");
   const shown=displayItems.filter(pass);
   const overdue=shown.filter(t=>t.overdue), upcoming=shown.filter(t=>!t.overdue), critical=shown.filter(t=>t.overdue && (Number(t.daysLate)||0)>5);
@@ -3409,7 +3443,7 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
       <button onClick={(e)=>{ e.stopPropagation(); onJump(t.id,t.key); }} title="Open this style/stage in Tracker" style={{ flexShrink:0, fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"4px 9px", cursor:"pointer", border:"1px solid var(--ink)", borderRadius:8, background:"var(--surface)", color:"var(--ink)", userSelect:"none", WebkitUserSelect:"none" }}>Open</button>
     </div>
   </div>;
-  const activitySummary=Object.values(shown.reduce((acc,t)=>{ const k=t.activity||"(blank)"; const cur=acc[k]||(acc[k]={ activity:k, upcoming:0, overdue:0, critical:0, total:0 }); cur.total++; if(t.overdue){ cur.overdue++; if((Number(t.daysLate)||0)>5) cur.critical++; } else cur.upcoming++; return acc; },{})).sort((a,b)=>b.critical-a.critical||b.overdue-a.overdue||b.total-a.total).slice(0,10);
+  const activitySummary=Object.values(shown.reduce((acc,t)=>{ const k=activityCanonical(t)||"(blank)"; const cur=acc[k]||(acc[k]={ activity:k, upcoming:0, overdue:0, critical:0, total:0 }); cur.total++; if(t.overdue){ cur.overdue++; if((Number(t.daysLate)||0)>5) cur.critical++; } else cur.upcoming++; return acc; },{})).sort((a,b)=>b.critical-a.critical||b.overdue-a.overdue||b.total-a.total).slice(0,10);
   const cardTone=(title)=> title==="Upcoming"?{ bg:"#fff4d8", bd:"#d58a13", fg:"#8a5200" }:title==="Overdue"?{ bg:"#ffe4dc", bd:"#c5251a", fg:"#b82117" }:title==="Critical"?{ bg:"#ffd4cc", bd:"#9f1712", fg:"#9f1712" }:{ bg:"var(--surface)", bd:"var(--line-2)", fg:"var(--ink)" };
   const card=(title,n,sub,color)=>{ const tone=cardTone(title); return <div style={{ minWidth:165, flex:"1 1 165px", border:`2px solid ${tone.bd}`, borderRadius:14, background:tone.bg, padding:"12px 14px", boxShadow:"var(--card-shadow)" }}><div style={{ fontSize:10.5, textTransform:"uppercase", color:tone.fg, fontWeight:950, letterSpacing:.4 }}>{title}</div><div style={{ fontSize:34, fontFamily:"'Archivo',sans-serif", fontWeight:950, color:color||tone.fg, lineHeight:1.02 }}>{n}</div><div style={{ fontSize:10, color:tone.fg, fontWeight:800, opacity:.85 }}>{sub}</div></div>; };
   return (<div style={{ padding:"16px 22px", maxWidth:"none" }}>
