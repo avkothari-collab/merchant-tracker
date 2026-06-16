@@ -244,7 +244,7 @@ function computeStyle(s, cfg, resendMap={}){
   if(released){ status="Released"; tone="done"; }
   else if(nextPending&&nextPending.plan&&TODAY>nextPending.plan){ status=`Overdue ${Math.round((TODAY-nextPending.plan)/ONE_DAY)}d`; tone="late"; }
   else if(idle!==null&&idle>=7){ status=`Idle ${idle}d`; tone="warn"; }
-  const dueText=(k)=>{ const r=get(k); if(!r||!r.plan) return "pending"; return TODAY>r.plan?`OVERDUE ${Math.round((TODAY-r.plan)/ONE_DAY)}d`:`due ${fmt(r.plan)}`; };
+  const dueText=(k)=>{ const r=get(k); const d=r&&(r.rev||r.plan); if(!r||!d) return "pending"; return TODAY>d?`OVERDUE ${Math.round((TODAY-d)/ONE_DAY)}d`:`due ${fmt(d)}`; };
   const dueTone=(k)=>{ const r=get(k); const d=r&&(r.rev||r.plan); return d&&TODAY>d?"late":"warn"; };
   const bs=(txt,tn,extra={})=>({txt,tone:tn,...extra});
   const autoClosed=(k)=>{ const r=get(k); return !!(r&&r.autoClosed); };
@@ -932,7 +932,19 @@ function MerchTracker({ me, onSignOut }){
     }
     pushHistory();
     if(isStage){ const ck=id+":"+field+":actual"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); }
-    setStyles(prev=>prev.map(s=>{ if(s.id!==id) return s; if(isStage) return { ...s, actuals:{ ...s.actuals, [field]: val||undefined } }; if(field==="qty") return { ...s, qty:Number(val)||0 }; if(field==="__style") return { ...s, styleNo:val }; return { ...s, [field]:val }; })); flash(); };
+    setStyles(prev=>prev.map(s=>{
+      if(s.id!==id) return s;
+      if(isStage){
+        // Re-send actual is a round event, not a replacement for the original first-send actual.
+        // The active TNA state reads it from effectiveResends/stage_events, while actuals[field]
+        // preserves the first/normal actual for history, reports, and audit explanation.
+        if(willTrackResend) return s;
+        return { ...s, actuals:{ ...s.actuals, [field]: val||undefined } };
+      }
+      if(field==="qty") return { ...s, qty:Number(val)||0 };
+      if(field==="__style") return { ...s, styleNo:val };
+      return { ...s, [field]:val };
+    })); flash(); };
   const setRev=(id,key,val)=>{
     const curStyle=styles.find(x=>x.id===id);
     recordRevisionHistory(curStyle,key,val,"single");
@@ -1313,6 +1325,9 @@ function MerchTracker({ me, onSignOut }){
     // was exactly what made old/actual dates appear in the editor.
     const apprK=APPR_OF_SEND[col];
     if(apprK){
+      // Once an explicit re-send actual exists, actual must win over revised/auto in display/editing.
+      // Until then, the rejected send cell remains a revised re-send planning cell.
+      if(latestResendActualValue(st,col)) return false;
       const rej=st.rejects&&st.rejects[apprK];
       const apprActual=st.actuals&&st.actuals[apprK];
       const apprSkip=st.skips&&st.skips[apprK];
@@ -1324,8 +1339,11 @@ function MerchTracker({ me, onSignOut }){
   };
   const prefersRevisedDateEntry=(id,col)=>{
     if(!isStageCol(col)) return false;
-    if(rawReworkOrRejectedCell(id,col)) return true;
     const r=activeStageRow(id,col);
+    // Actual always wins over revised over auto. If a real resend/reapproval actual exists,
+    // normal editing should no longer be forced into revised planning mode.
+    if(r && r.actual && !r.skipped && !r.autoClosed) return false;
+    if(rawReworkOrRejectedCell(id,col)) return true;
     return !!(r && (r.rework || r.rejected) && !r.skipped && !r.autoClosed);
   };
   const preferredDateMode=(id,col,requested="actual")=> (requested==="actual" && prefersRevisedDateEntry(id,col)) ? "rev" : requested;
@@ -2042,7 +2060,7 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
                   const hasRev=cs&&cs.rev&&!cs.done;
                   const rvh=[];
                   const revCnt=Array.isArray(rvh)?rvh.length:0;
-                  const activeReworkPlanning=!!(cs && !cs.skipped && !cs.autoClosed && linkedApprovalRejectedOpen(s,st.key));
+                  const activeReworkPlanning=!!(cs && !cs.actual && !cs.skipped && !cs.autoClosed && linkedApprovalRejectedOpen(s,st.key));
                   const bg=bgFor(s.id,st.key,(cs&&cs.skipped)?"var(--tint-waive)":(cs&&cs.rejected)?"var(--tint-reject)":(activeReworkPlanning||cs&&cs.rework)?"var(--tint-rework)":(cs&&cs.actual&&cs.histReject?"var(--tint-histrej)":(isNext?"var(--tint-next)":"var(--surface)")));
                   return (
                     <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} onDoubleClick={(e)=>{ e.stopPropagation(); const mode=preferredDateMode(s.id,st.key,"actual"); if(mode==="rev" ? canRev : editable) beginDate(s.id,st.key,mode); }}
@@ -2063,7 +2081,7 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
                             {canRev && <span style={{ fontSize:8, color:"var(--muted-2)", fontWeight:750, whiteSpace:"nowrap" }}>use ↻ corner for revised re-send date</span>}
                             {editable && <button title="enter or edit actual date for the active re-send round (keeps first send in history)" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"actual",undefined,true); }} style={{ alignSelf:"flex-start", border:"1px solid var(--accent)", background:"rgba(255,244,227,0.92)", borderRadius:6, padding:"3px 6px", margin:0, fontFamily:"inherit", fontSize:8.5, color:"var(--accent)", fontWeight:900, whiteSpace:"nowrap", cursor:"pointer", minWidth:0, minHeight:0 }}>{`ENTER ACTUAL ${roundLabelFor(s,st.key,"RE-SEND")}`}</button>}
                           </span>
-                        ) : cs.actual ? (()=>{ const rh=resends&&resends[s.id+":"+st.key]; const cnt=Array.isArray(rh)?Math.max(0,rh.length-1):0; return <span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}><span style={{ display:"flex", alignItems:"center", gap:4 }}><Check size={11} color={OWNER_COLOR[(cfg.stageOwners&&cfg.stageOwners[st.key])||DEFAULT_STAGE_OWNERS[st.key]||st.owner]}/>{fmt(cs.actual)}</span>{cnt>0 && <span title={(rh||[]).map(d=>fmt(parse(typeof d==="string"?d:(d&&d.newVal)))).join(" → ")} style={{ fontSize:8, color:"#b4531a", fontWeight:800 }}>↻ resend #{cnt}</span>}{cs.histReject && <span style={{ fontSize:8, color:"#b03020", fontWeight:700 }}>↻ after REJ {fmt(cs.histReject)}</span>}</span>; })() : cs.rejected ? (
+                        ) : cs.actual ? (()=>{ const rh=(effectiveResends&&effectiveResends[s.id+":"+st.key])||(resends&&resends[s.id+":"+st.key]); const cnt=Array.isArray(rh)?Math.max(0,rh.filter(x=>{ const xx=normalizeResendEntry(x); return xx && !String(xx.source||"").toLowerCase().includes("first send"); }).length):0; return <span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}><span style={{ display:"flex", alignItems:"center", gap:4 }}><Check size={11} color={OWNER_COLOR[(cfg.stageOwners&&cfg.stageOwners[st.key])||DEFAULT_STAGE_OWNERS[st.key]||st.owner]}/>{fmt(cs.actual)}</span>{cnt>0 && <span title={(rh||[]).map(d=>fmt(parse(typeof d==="string"?d:(d&&d.newVal)))).join(" → ")} style={{ fontSize:8, color:"#b4531a", fontWeight:800 }}>↻ resend #{cnt}</span>}{cs.histReject && <span style={{ fontSize:8, color:"#b03020", fontWeight:700 }}>↻ after REJ {fmt(cs.histReject)}</span>}</span>; })() : cs.rejected ? (
                           <span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}>
                             <span style={{ fontSize:9, color:"#b03020", fontWeight:700, display:"flex", alignItems:"center", gap:3 }}><X size={9}/>REJECTED</span>
                             <span style={{ fontSize:9, color:"#b03020" }}>rej {fmt(cs.reject)}</span>
