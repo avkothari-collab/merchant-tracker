@@ -122,6 +122,16 @@ const todoDrillFilterFromSlice=(base={},df={})=>{
   const actVals=[...arrClean(out.activityKey), ...arrClean(out.key), ...arrClean(out.activity)];
   const actKeys=activityKeysFromAnyGlobal(actVals);
   if(actKeys.length){ out.activityKey=actKeys; out.activity=actKeys.map(stageLabelFromKeyGlobal).filter(Boolean); delete out.key; }
+  const styleVals=[...arrClean(out.styleId), ...arrClean(out.styleIds)];
+  if(styleVals.length){ out.styleId=[...new Set(styleVals.map(v=>String(v)))]; delete out.styleIds; }
+  return out;
+};
+const todoDrillFilterFromRows=(rows=[],base={},df={})=>{
+  const out=todoDrillFilterFromSlice(base,df);
+  const styleIds=[...new Set((rows||[]).map(r=>r&&r.id).filter(v=>v!=null&&String(v)!=="").map(v=>String(v)))];
+  const stageKeys=[...new Set((rows||[]).map(r=>stageKeyFromAnyGlobal((r&&r.activityKey)||(r&&r.key)||(r&&r.stageKey)||(r&&r.activity)||(r&&r.activityLabel))).filter(Boolean))];
+  if(styleIds.length) out.styleId=styleIds;
+  if(stageKeys.length){ out.activityKey=stageKeys; out.activity=stageKeys.map(stageLabelFromKeyGlobal).filter(Boolean); delete out.key; }
   return out;
 };
 
@@ -2924,15 +2934,21 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
   const escLoad=escalationTodo.reduce((m,t)=>{ const k=t.escalationOwner||"(blank)"; m[k]=(m[k]||0)+1; return m; },{});
   const escRows=Object.entries(escLoad).sort((a,b)=>b[1]-a[1]); const maxEsc=Math.max(1,...escRows.map(x=>x[1]));
   const phase={ "Pre-Fit":0,"Fit / Print":0,"Lab Dip":0,"Fabric IH":0,"PP / Prod":0 };
-  fc.forEach(({c})=>{ if(c.released) return; const k=c.nextPending&&c.nextPending.key; if(k==="techpack") phase["Pre-Fit"]++; else if(["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"].includes(k)) phase["Fit / Print"]++; else if(["labDip","labAppr"].includes(k)) phase["Lab Dip"]++; else if(k==="fabricIH") phase["Fabric IH"]++; else phase["PP / Prod"]++; });
+  const phaseKeyList=(phaseName)=> phaseName==="Pre-Fit"?["techpack"]:phaseName==="Fit / Print"?["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"]:phaseName==="Lab Dip"?["labDip","labAppr"]:phaseName==="Fabric IH"?["fabricIH"]:["ppSample","ppAppr","prodFile"];
+  const phaseOfKey=(k)=> k==="techpack"?"Pre-Fit":["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"].includes(k)?"Fit / Print":["labDip","labAppr"].includes(k)?"Lab Dip":k==="fabricIH"?"Fabric IH":"PP / Prod";
+  fc.forEach(({c})=>{ if(c.released) return; const k=c.nextPending&&c.nextPending.key; phase[phaseOfKey(k)]++; });
   const maxPhase=Math.max(1,...Object.values(phase));
   const OWNER_COLOR2=OWNER_COLOR;
   // splice carried into drills so the tracker shows the same slice
   const spliceCols=()=>{ const cf={}; const put=(k,col)=>{ const a=arrOf(df[k]); if(a.length) cf[col]=a; }; put("order","orderNo"); put("fit","sampleFit"); put("junior","owner"); put("family","family"); put("brand","brand"); put("fabric","fabricType"); put("colour","colour"); return cf; };
   const spliceSearch=()=> "";
-  const goOwner=(o)=>{ if(target==="todo") drillTodo(todoDrillFilterFromSlice({ owner:o }, df)); else applyDrill({ owner:o, colFilters:spliceCols(), search:spliceSearch() }); };
-  const goAct=(label,key)=>{ const k=stageKeyFromAnyGlobal(key||label); if(target==="todo") drillTodo(todoDrillFilterFromSlice({ activity:[stageLabelFromKeyGlobal(k)||label], activityKey:k?[k]:[], key:k?[k]:[] }, df)); else applyDrill({ activity:k||key, colFilters:spliceCols(), search:spliceSearch() }); };
-  const goPhase=(phaseName)=>{ drillTodo&&drillTodo(todoDrillFilterFromSlice({ phase:phaseName }, df)); };
+  const sliceTodoRows=(pred=()=>true)=>(todoItems||[]).filter(t=>todoMatchesSlice(t)&&pred(t));
+  const phaseStyleIds=(phaseName)=>new Set(fc.filter(({c})=>!c.released && phaseOfKey(c.nextPending&&c.nextPending.key)===phaseName).map(({s})=>String(s.id)));
+  const phaseTodoRows=(phaseName)=>{ const ids=phaseStyleIds(phaseName); const allowed=new Set(phaseKeyList(phaseName)); return sliceTodoRows(t=>ids.has(String(t.id)) && allowed.has(stageKeyFromAnyGlobal(t.activityKey||t.key||t.activity))); };
+  const drillRowsToTodo=(rows,base={})=>{ if(drillTodo) drillTodo(todoDrillFilterFromRows(rows,base,df)); };
+  const goOwner=(o)=>{ if(target==="todo") drillRowsToTodo(sliceTodoRows(t=>String(t.owner||"")===String(o)),{ owner:o }); else applyDrill({ owner:o, colFilters:spliceCols(), search:spliceSearch() }); };
+  const goAct=(label,key)=>{ const k=stageKeyFromAnyGlobal(key||label); if(target==="todo") drillRowsToTodo(sliceTodoRows(t=>stageKeyFromAnyGlobal(t.activityKey||t.key||t.activity)===k),{ activity:[stageLabelFromKeyGlobal(k)||label], activityKey:k?[k]:[], key:k?[k]:[] }); else applyDrill({ activity:k||key, colFilters:spliceCols(), search:spliceSearch() }); };
+  const goPhase=(phaseName)=>{ const keys=phaseKeyList(phaseName); if(target==="todo") drillRowsToTodo(phaseTodoRows(phaseName),{ phase:phaseName, activityKey:keys, activity:keys.map(stageLabelFromKeyGlobal) }); else applyDrill({ activity:keys, colFilters:spliceCols(), search:spliceSearch() }); };
   const goStatus=(st,extra)=>applyDrill({ status:st, colFilters:{...spliceCols(),...(extra||{})}, search:spliceSearch() });
   const card=(label,val,color,onClick)=>(<button onClick={onClick} disabled={!onClick} style={{ flex:1, minWidth:130, textAlign:"left", background:"var(--surface)", border:"1px solid var(--ink)", padding:"14px 16px", cursor:onClick?"pointer":"default", fontFamily:"inherit" }}><div style={{ fontSize:28, fontWeight:800, fontFamily:"'Archivo',sans-serif", color, lineHeight:1 }}>{val}</div><div style={{ fontSize:10, color:"var(--muted-2)", marginTop:5, letterSpacing:0.5, textTransform:"uppercase" }}>{label}{onClick?" ›":""}</div></button>);
   const sel=(label,val,opts,onChange)=><MultiSelectDropdown label={label} value={val} options={opts} onChange={onChange} />;
@@ -3007,7 +3023,7 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
       {card("Delivery risk",delRisk,"var(--danger)",()=>goStatus("All",{ overall:["Delivery risk"] }))}
       {card("Released",released,"var(--success)",()=>goStatus("Released"))}
       {card("Overdue activities",overdueAct,"var(--danger)")}
-      {card("Escalation items",escalationTodo.length,escalationTodo.length?"var(--danger)":"var(--success)",()=>{ drillTodo&&drillTodo(todoDrillFilterFromSlice({ todoType:"Escalation", priority:"Overdue" }, df)); })}
+      {card("Escalation items",escalationTodo.length,escalationTodo.length?"var(--danger)":"var(--success)",()=>drillRowsToTodo(escalationTodo,{ todoType:"Escalation", priority:"Overdue" }))}
     </div>
 
     <div style={{ marginTop:14, background:"var(--surface)", border:"1px solid var(--ink)", padding:14 }}>
@@ -3029,7 +3045,7 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
       </div>
       <div style={{ flex:1, minWidth:320, background:"var(--surface)", border:"1px solid var(--ink)", padding:16 }}>
         <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>ESCALATION OWNER LOAD</div>
-        {bar(escRows, maxEsc, ()=>"var(--danger)", 92, (o)=>drillTodo&&drillTodo(todoDrillFilterFromSlice({ todoType:"Escalation", priority:"Overdue", escalationOwner:o }, df)))}
+        {bar(escRows, maxEsc, ()=>"var(--danger)", 92, (o)=>drillRowsToTodo(escalationTodo.filter(t=>String(t.escalationOwner||"")===String(o)),{ todoType:"Escalation", priority:"Overdue", escalationOwner:o }))}
         <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8 }}>Click opens To-Do escalation rows for that owner.</div>
       </div>
       <div style={{ flex:1, minWidth:320, background:"var(--surface)", border:"1px solid var(--ink)", padding:16 }}>
@@ -3116,7 +3132,9 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const escRows=Object.entries(escLoad).sort((a,b)=>b[1]-a[1]); const maxEsc=Math.max(1,...escRows.map(x=>x[1]));
 
   const phase={ "Pre-Fit":0,"Fit / Print":0,"Lab Dip":0,"Fabric IH":0,"PP / Prod":0 };
-  fc.forEach(({c})=>{ if(c.released) return; const k=c.nextPending&&c.nextPending.key; if(k==="techpack") phase["Pre-Fit"]++; else if(["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"].includes(k)) phase["Fit / Print"]++; else if(["labDip","labAppr"].includes(k)) phase["Lab Dip"]++; else if(k==="fabricIH") phase["Fabric IH"]++; else phase["PP / Prod"]++; });
+  const phaseKeyList=(phaseName)=> phaseName==="Pre-Fit"?["techpack"]:phaseName==="Fit / Print"?["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"]:phaseName==="Lab Dip"?["labDip","labAppr"]:phaseName==="Fabric IH"?["fabricIH"]:["ppSample","ppAppr","prodFile"];
+  const phaseOfKey=(k)=> k==="techpack"?"Pre-Fit":["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"].includes(k)?"Fit / Print":["labDip","labAppr"].includes(k)?"Lab Dip":k==="fabricIH"?"Fabric IH":"PP / Prod";
+  fc.forEach(({c})=>{ if(c.released) return; const k=c.nextPending&&c.nextPending.key; phase[phaseOfKey(k)]++; });
   const maxPhase=Math.max(1,...Object.values(phase));
 
   const stageDef=(k)=>STAGES.find(x=>x.key===k)||{};
@@ -3183,9 +3201,13 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
 
   const spliceCols=()=>{ const cf={}; const put=(k,col)=>{ const a=arrOf(df[k]); if(a.length) cf[col]=a; }; put("order","orderNo"); put("fit","sampleFit"); put("junior","owner"); put("family","family"); put("brand","brand"); put("fabric","fabricType"); put("colour","colour"); return cf; };
   const spliceSearch=()=> "";
-  const goOwner=(o)=>{ if(target==="todo") drillTodo(todoDrillFilterFromSlice({ owner:o }, df)); else applyDrill({ owner:o, colFilters:spliceCols(), search:spliceSearch() }); };
-  const goAct=(label,key)=>{ const k=stageKeyFromAnyGlobal(key||label); if(target==="todo") drillTodo(todoDrillFilterFromSlice({ activity:[stageLabelFromKeyGlobal(k)||label], activityKey:k?[k]:[], key:k?[k]:[] }, df)); else applyDrill({ activity:k||key, colFilters:spliceCols(), search:spliceSearch() }); };
-  const goPhase=(phaseName)=>{ drillTodo&&drillTodo(todoDrillFilterFromSlice({ phase:phaseName }, df)); };
+  const sliceTodoRows=(pred=()=>true)=>(todoItems||[]).filter(t=>todoMatchesSlice(t)&&pred(t));
+  const phaseStyleIds=(phaseName)=>new Set(fc.filter(({c})=>!c.released && phaseOfKey(c.nextPending&&c.nextPending.key)===phaseName).map(({s})=>String(s.id)));
+  const phaseTodoRows=(phaseName)=>{ const ids=phaseStyleIds(phaseName); const allowed=new Set(phaseKeyList(phaseName)); return sliceTodoRows(t=>ids.has(String(t.id)) && allowed.has(stageKeyFromAnyGlobal(t.activityKey||t.key||t.activity))); };
+  const drillRowsToTodo=(rows,base={})=>{ if(drillTodo) drillTodo(todoDrillFilterFromRows(rows,base,df)); };
+  const goOwner=(o)=>{ if(target==="todo") drillRowsToTodo(sliceTodoRows(t=>String(t.owner||"")===String(o)),{ owner:o }); else applyDrill({ owner:o, colFilters:spliceCols(), search:spliceSearch() }); };
+  const goAct=(label,key)=>{ const k=stageKeyFromAnyGlobal(key||label); if(target==="todo") drillRowsToTodo(sliceTodoRows(t=>stageKeyFromAnyGlobal(t.activityKey||t.key||t.activity)===k),{ activity:[stageLabelFromKeyGlobal(k)||label], activityKey:k?[k]:[], key:k?[k]:[] }); else applyDrill({ activity:k||key, colFilters:spliceCols(), search:spliceSearch() }); };
+  const goPhase=(phaseName)=>{ const keys=phaseKeyList(phaseName); if(target==="todo") drillRowsToTodo(phaseTodoRows(phaseName),{ phase:phaseName, activityKey:keys, activity:keys.map(stageLabelFromKeyGlobal) }); else applyDrill({ activity:keys, colFilters:spliceCols(), search:spliceSearch() }); };
   const goStatus=(st,extra)=>applyDrill({ status:st, colFilters:{...spliceCols(),...(extra||{})}, search:spliceSearch() });
   const goSearch=(q)=>applyDrill({ status:"All", colFilters:spliceCols(), search:q||spliceSearch() });
   const goStageOpen=(key)=>applyDrill({ status:"All", activity:key, colFilters:spliceCols(), search:spliceSearch() });
@@ -3461,7 +3483,7 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
       {card("Delivery risk",delRisk,"var(--danger)",()=>goStatus("All",{ overall:["Delivery risk"] }))}
       {card("Released",released,"var(--success)",()=>goStatus("Released"))}
       {card("Overdue open activities",overdueAct,"var(--danger)",null,"frontier overdue")}
-      {card("Escalation items",escalationTodo.length,escalationTodo.length?"var(--danger)":"var(--success)",()=>drillTodo&&drillTodo(todoDrillFilterFromSlice({ todoType:"Escalation", priority:"Overdue" }, df)),"who must chase now")}
+      {card("Escalation items",escalationTodo.length,escalationTodo.length?"var(--danger)":"var(--success)",()=>drillRowsToTodo(escalationTodo,{ todoType:"Escalation", priority:"Overdue" }),"who must chase now")}
       {card("Avg late delay",fmtDays(avgDelay),avgDelay>0?"var(--danger)":"var(--success)",null,"delayed stages only")}
       {actualTimeCard}
       {/* Technical missed-only plan/revised cards removed from visible Management dashboard.
@@ -3470,7 +3492,7 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
 
     <div style={{ display:"flex", flexDirection:"column", gap:12, marginTop:22 }}>
       {section("Who to chase — current", owners.length?owners.map(([o,n])=>barLine(o,o,n,maxOwner,OWNER_COLOR[o]||"var(--accent)",()=>goOwner(o))):<div style={{ fontSize:11, color:"var(--muted-1)" }}>Nothing pending.</div>, "Open actionable items by chase label")}
-      {section("Escalation owner load", escRows.length?escRows.map(([o,n])=>barLine(o,o,n,maxEsc,"var(--danger)",()=>drillTodo&&drillTodo(todoDrillFilterFromSlice({ todoType:"Escalation", priority:"Overdue", escalationOwner:o }, df)),n)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No overdue escalation items.</div>, "Who must chase now based on editable Settings duration slabs")}
+      {section("Escalation owner load", escRows.length?escRows.map(([o,n])=>barLine(o,o,n,maxEsc,"var(--danger)",()=>drillRowsToTodo(escalationTodo.filter(t=>String(t.escalationOwner||"")===String(o)),{ todoType:"Escalation", priority:"Overdue", escalationOwner:o }),n)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>No overdue escalation items.</div>, "Who must chase now based on editable Settings duration slabs")}
       {section("Open activities", acts.length?acts.map(([label,v])=>barLine(label,label,v.n,maxAct,v.over?"var(--danger)":"var(--accent)",()=>goAct(label,v.key),v.over?`${v.n} (${v.over})`:v.n)):<div style={{ fontSize:11, color:"var(--muted-1)" }}>Nothing due.</div>, "Red count in bracket = overdue")}
       {section("Where styles are stuck", Object.entries(phase).map(([p,n])=>barLine(p,p,n,maxPhase,p==="Fabric IH"?"var(--danger)":"var(--accent)",()=>goPhase(p))), "Current next-pending phase · click opens matching To-Do phase")}
     </div>
@@ -3553,6 +3575,8 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   const activityCanonical=(t)=>String(t&&t._activityLabel||"").replace(/^Escalate:\s*/i,"").replace(/\s+/g," ").trim();
   const activityKeyOf=(t)=>String((t&&t._stageKey)||(t&&t.activityKey)||(t&&t.key)||"");
   const selectedFor=(field)=>arrVal(tf[field]).map(norm).filter(Boolean);
+  const selectedStyleIdSet=(()=>new Set([...arrVal(tf.styleId), ...arrVal(tf.styleIds)].map(v=>String(v)).filter(Boolean)))();
+  const exactStylePass=(t)=> !selectedStyleIdSet.size || selectedStyleIdSet.has(String(t&&t.id));
 
   // HARD activity gate for To-Do. This is intentionally strict:
   // when Activity/Stage is selected, a row may pass only if its canonical stage key matches.
@@ -3607,7 +3631,7 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   };
   // Activity/key/activityKey are handled only by activityPass above. They are excluded from the generic text matcher.
   const filterFields=["phase","priority","risk","todoType","orderNo","junior","branch","owner","escalationOwner","style","colour","fit","family","brand","fabric","buyer","planDate","days","drift","revReject","score"];
-  const passExcept=(t,except)=> (except==="activity" || activityPass(t)) && filterFields.every(field=>field===except || matchesAny(field,candidatesFor(t,field)));
+  const passExcept=(t,except)=> exactStylePass(t) && (except==="activity" || activityPass(t)) && filterFields.every(field=>field===except || matchesAny(field,candidatesFor(t,field)));
   const pass=(t)=>passExcept(t,null);
   const distinct=(field)=>{ const vals=new Set(); displayItems.forEach(t=>{ if(!passExcept(t,field)) return; if(field==="priority") vals.add(t.overdue?"Overdue":"Upcoming"); else if(field==="phase") vals.add(phaseOf(t)); else if(field==="key") vals.add(stageLabelOf(activityKeyOf(t))); else if(field==="activity") { const av=t._activityLabel||stageLabelOf(activityKeyOf(t)); if(av) vals.add(av); } else if(field==="style") { if(t.isColour && t.colour) vals.add(t.colour); else if(t.styleNo) vals.add(t.styleNo); } else if(field==="orderNo" && Array.isArray(t.orderNos)&&t.orderNos.length) t.orderNos.forEach(v=>v&&vals.add(v)); else if(field==="junior" && Array.isArray(t.juniors)&&t.juniors.length) t.juniors.forEach(v=>v&&vals.add(v)); else { arrVal(candidatesFor(t,field)).forEach(v=>v&&vals.add(v)); } }); return [...vals].sort((a,b)=>String(a).localeCompare(String(b),undefined,{numeric:true,sensitivity:"base"})); };
   const orders=distinct("orderNo"), juniors=distinct("junior"), activities=distinct("activity"), branches=distinct("branch"), owners=distinct("owner"), escOwners=distinct("escalationOwner"), types=distinct("todoType"), priorities=distinct("priority"), risks=distinct("risk"), phases=["Pre-Fit","Fit / Print","Lab Dip","Fabric IH","PP / Prod"], stylesList=distinct("style"), planDates=distinct("planDate"), dayBuckets=distinct("days"), driftBuckets=distinct("drift"), revRejects=distinct("revReject"), scoreBuckets=distinct("score");
@@ -3615,7 +3639,7 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   const activityScopedDisplayItems=hasActivityGate?displayItems.filter(activityPass):displayItems;
   const shownPre=activityScopedDisplayItems.filter(pass);
   const shown=shownPre.filter(activityPass);
-  const filterViolations=shown.filter(t=>!activityPass(t) || !pass(t));
+  const filterViolations=shown.filter(t=>!exactStylePass(t) || !activityPass(t) || !pass(t));
   const overdue=shown.filter(t=>t.overdue), upcoming=shown.filter(t=>!t.overdue), critical=shown.filter(t=>t.overdue && (Number(t.daysLate)||0)>5);
   const activityCount=rawDisplayItems.filter(t=>itemGroup(t)==="activity").length;
   const fabricLabCount=rawDisplayItems.filter(t=>itemGroup(t)==="fabricLab").length;
