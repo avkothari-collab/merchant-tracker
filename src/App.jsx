@@ -111,12 +111,14 @@ const stageKeyFromAnyGlobal=(v)=>{
 };
 const stageLabelFromKeyGlobal=(k)=>((STAGES||[]).find(x=>x.key===k)||{}).label||k||"";
 const arrClean=(v)=>Array.isArray(v)?v.filter(x=>x!=null&&String(x).trim()!==""):(v!=null&&String(v).trim()!==""?[v]:[]);
+// v31dg: one-table-truth safety pass; shared colour splitter used by Tracker/To-Do/Dashboard/Management filters.
+const splitColoursAll=(txt)=>{ const raw=String(txt||"").trim(); if(!raw) return ["(no colour)"]; const parts=raw.split(/[,;|\/+]+/).map(x=>x.replace(/\s+/g," ").trim()).filter(Boolean); return parts.length?parts:[raw.replace(/\s+/g," ").trim()]; };
 const todoDrillFilterFromSlice=(base={},df={})=>{
   const out={...(base||{})};
   const map={ order:"orderNo", junior:"junior", colour:"colour", fit:"fit", family:"family", brand:"brand", fabric:"fabric" };
   Object.entries(map).forEach(([from,to])=>{ const vals=arrClean(df&&df[from]); if(vals.length) out[to]=vals; });
-  if(out.activity && !out.activityKey){ const k=stageKeyFromAnyGlobal(Array.isArray(out.activity)?out.activity[0]:out.activity); if(k) out.activityKey=[k]; }
-  if(out.key && !out.activityKey){ const k=stageKeyFromAnyGlobal(Array.isArray(out.key)?out.key[0]:out.key); if(k) out.activityKey=[k]; }
+  if(out.activity && !out.activityKey){ const keys=activityKeysFromAnyGlobal(out.activity); if(keys.length) out.activityKey=keys; }
+  if(out.key && !out.activityKey){ const keys=activityKeysFromAnyGlobal(out.key); if(keys.length) out.activityKey=keys; }
   return out;
 };
 
@@ -162,10 +164,24 @@ const rowMatchesCurrentStage=(row,key)=>{
   const keys=(row&&row.tableCurrentStageKeys)||frontierKeysOf(row&&row.c);
   return Array.isArray(keys)&&keys.includes(k);
 };
+const activityKeysFromAnyGlobal=(v)=>{
+  const raw=Array.isArray(v)?v:(v==null||v===""?[]:[v]);
+  const keys=[];
+  raw.forEach(x=>{
+    const k=stageKeyFromAnyGlobal(x);
+    if(k && !keys.includes(k)) keys.push(k);
+  });
+  return keys;
+};
+const rowMatchesAnyCurrentStage=(row,keys)=>{
+  const arr=activityKeysFromAnyGlobal(keys);
+  if(!arr.length) return true;
+  return arr.some(k=>rowMatchesCurrentStage(row,k));
+};
 const canonicalDrillSpec=(spec={})=>{
   const out={...(spec||{})};
-  const k=stageKeyFromAnyGlobal(out.activityKey||out.key||out.activity||out.stage||"");
-  if(k){ out.activityKey=k; out.activity=stageLabelFromKeyGlobal(k); delete out.key; delete out.stage; }
+  const keys=activityKeysFromAnyGlobal(out.activityKey||out.key||out.activity||out.stage||[]);
+  if(keys.length){ out.activityKey=keys; out.activity=keys.map(stageLabelFromKeyGlobal).filter(Boolean); delete out.key; delete out.stage; }
   return out;
 };
 const CHASE_LABELS = ["Management","Sr Merchant","Jr Merchant","CAD","Designer","Store","Buyer","Merchant","Mill"];
@@ -280,14 +296,14 @@ const applicableStages=(s)=> STAGES.filter(st=> stageApplies(s,st));
 function computeStyle(s, cfg, resendMap={}){
   const ordRec=parse(s.ordRec), delivery=parse(s.delivery);
   const leadOf=(st)=>{ const v=cfg&&cfg.leads&&cfg.leads[st.key]; return v==null?st.lead:v; }; const rwOf=(st)=>{ const v=cfg&&cfg.rework&&cfg.rework[st.key]; return v==null?(REWORK_DAYS[st.key]||st.lead):v; }; const ownerOf=(k)=>{ const st=STAGES.find(x=>x.key===k); return (cfg&&cfg.stageOwners&&cfg.stageOwners[k]) || DEFAULT_STAGE_OWNERS[k] || (st&&st.owner) || "Jr Merchant"; }; const CUTD=(cfg&&cfg.fabricCutoff!=null)?cfg.fabricCutoff:FABRIC_CUTOFF_DAYS; const GATED=(cfg&&cfg.relGate!=null)?cfg.relGate:REL_GATE_DAYS;
-  const cutoff=addWorkdays(delivery,-CUTD);
+  const cutoff=delivery?addWorkdays(delivery,-CUTD):null;
   const eff={}, plan={};
   const applies=(k)=>{ const st=STAGES.find(x=>x.key===k); return stageApplies(s,st); };
   const actualOf=(k)=>parse(s.actuals[k]); const revOf=(k)=>parse(s.revs?.[k]); const rejOf=(k)=>parse(s.rejects?.[k]); const skipOf=(k)=>parse(s.skips?.[k]);
   const validResendActual=(sendK,apprK)=> latestTrackedResendDate(s,sendK,rejOf(apprK),resendMap);
   STAGES.forEach(st=>{
     let p;
-    if(st.cutoff){ const base=s.labDipReq?(eff["labAppr"]||eff["labDip"]||ordRec):ordRec; p=s.labDipReq?new Date(Math.max(addWorkdays(base,15)?.getTime()||0, cutoff.getTime())):cutoff; }
+    if(st.cutoff){ const base=s.labDipReq?(eff["labAppr"]||eff["labDip"]||ordRec):ordRec; const base15=addWorkdays(base,15); p=s.labDipReq?(cutoff?new Date(Math.max((base15&&base15.getTime())||0, cutoff.getTime())):base15):cutoff; }
     else { let predEff; if(st.key==="prodFile") predEff = (s.ppBypass || !s.ppNeeded) ? eff["fabricIH"] : eff["ppAppr"]; else predEff = st.pred==="__ord"?ordRec:eff[st.pred]; if((st.key==="ppSample"||st.key==="prodFile") && s.fitReq && eff["fitAppr"]) predEff = new Date(Math.max((predEff&&predEff.getTime())||0, eff["fitAppr"].getTime())); p=addWorkdays(predEff||ordRec, leadOf(st)); }
     const apprK=APPR_OF_SEND[st.key]; const rejAppr = !!(apprK && rejOf(apprK) && !actualOf(apprK) && !skipOf(apprK));
     const selfRej = REJECTABLE.includes(st.key) && rejOf(st.key) && !actualOf(st.key) && !skipOf(st.key);
@@ -315,7 +331,7 @@ function computeStyle(s, cfg, resendMap={}){
   if(fabricInHouse && nextPending && isFabricCrossCheck(nextPending)){ nextPending=stages.find(r=>!r.done && !isFabricCrossCheck(r)) || null; }
   const lateFIH=(k)=>{ const r=get(k); return !!(fihA && r && r.actual && r.actual>fihA); };
   const lastPlan=stages[stages.length-1]?.plan;
-  const float=lastPlan?netWorkdays(lastPlan,delivery):null;
+  const float=(lastPlan&&delivery)?netWorkdays(lastPlan,delivery):null;
   let status="On Track", tone="ok";
   if(released){ status="Released"; tone="done"; }
   else if(nextPending&&nextPending.plan&&TODAY>nextPending.plan){ status=`Overdue ${Math.round((TODAY-nextPending.plan)/ONE_DAY)}d`; tone="late"; }
@@ -660,9 +676,10 @@ function MerchTracker({ me, onSignOut }){
   const [sharedViews,setSharedViews]=useState(DEFAULT_NAMED_TRACKER_VIEWS);
   const [activeNamedView,setActiveNamedView]=useState("");
   const [archiveView,setArchiveView]=useState(PF.archiveView||"active");
-  const [activityFilter,setActivityFilter]=useState(()=>stageKeyFromAnyGlobal(PF.activityFilter)||null);
-  const setTrackerActivityFilter=(v)=>setActivityFilter(stageKeyFromAnyGlobal(v)||null);
-  const activityFilterKey=stageKeyFromAnyGlobal(activityFilter)||null;
+  const [activityFilter,setActivityFilter]=useState(()=>activityKeysFromAnyGlobal(PF.activityFilter));
+  const setTrackerActivityFilter=(v)=>setActivityFilter(activityKeysFromAnyGlobal(v));
+  const activityFilterKeys=activityKeysFromAnyGlobal(activityFilter);
+  const activityFilterKey=activityFilterKeys[0]||null; // legacy first-key alias only; use activityFilterKeys for filtering
   const [followFilter,setFollowFilter]=useState(PF.followFilter||false);
   const [viewSnap,setViewSnap]=useState(null); // saved tracker view before a drill, for one-click restore
   const scrollWrapRef=useRef(null);
@@ -978,6 +995,13 @@ function MerchTracker({ me, onSignOut }){
     if(!style) return style;
     let changed=false;
     const revs={...(style.revs||{})};
+    const skips={...(style.skips||{})};
+    Object.entries(APPR_OF_SEND).forEach(([sendK,apprK])=>{
+      const sendSkip=skips[sendK];
+      const apprSkip=skips[apprK];
+      if(sendSkip && !apprSkip){ skips[apprK]=sendSkip; changed=true; }
+      if(apprSkip && !sendSkip){ skips[sendK]=apprSkip; changed=true; }
+    });
     STAGE_KEYS.forEach(k=>{
       const linked=APPR_OF_SEND[k]||SEND_FOR_APPR[k]||null;
       const round=linked?activeRoundForCell(style,k):0;
@@ -987,7 +1011,7 @@ function MerchTracker({ me, onSignOut }){
         changed=true;
       }
     });
-    return changed?{...style,revs}:style;
+    return changed?{...style,revs,skips}:style;
   };
   const insertStageEvent=(style,stageKey,linkedStageKey,eventType,roundNo,eventDate,oldValue,newValue,note)=>{
     try{
@@ -1208,10 +1232,10 @@ function MerchTracker({ me, onSignOut }){
     const planCell=(s,c,k,withBuf)=>{ const r=stageRow(c,k); if(!r) return "n/a"; const a=activeActualDate(s,c,k); if(a||r.skipped||r.autoClosed) return ""; const t=r.rev||r.plan; if(!t) return ""; /* E6: buffer is a single B-day slack on our internal chain. Each approval inherits the shift from its (buffered) internal predecessor and adds NO buffer of its own — net effect is one B applied per stage, never doubled. */ const d=(withBuf&&B)?addWorkdays(t,B):t; return fmtY(d); };
     const stateCell=(s,c,k)=>{ const r=stageRow(c,k); if(!r) return "n/a"; if(r.actual) return "ACTUAL"; if(r.skipped) return "WAIVED"; if(r.rework) return "REWORK / RESEND"; if(r.rejected) return "REJECTED / RE-APPROVAL"; if(r.autoClosed) return "AUTO-CLOSED"; if(r.rev) return "REVISED"; if(r.plan) return "AUTO PLAN"; return ""; };
     const pairs=(o,s,c,withBuf,list)=>{ (list||STAGES).forEach(st=>{ o["Actual \u00b7 "+st.label]=actCell(s,c,st.key); o["Plan \u00b7 "+st.label]=planCell(s,c,st.key,withBuf); o["State \u00b7 "+st.label]=stateCell(s,c,st.key); }); };
-    const blockers=(c)=> (c.frontier?[...c.frontier]:[]).map(k=>{ const r=(c.stages||[]).find(x=>x.key===k); if(!r||r.done) return null; const lbl=stageReviewLabel(s,r); if(r.rework) return lbl+": redo & resend"; if(r.rejected) return lbl; if(REJECTABLE.includes(k)) return lbl+": not approved"; return lbl+": pending"; }).filter(Boolean);
+    const blockers=(style,c)=> (c.frontier?[...c.frontier]:[]).map(k=>{ const r=(c.stages||[]).find(x=>x.key===k); if(!r||r.done) return null; const lbl=stageReviewLabel(style,r); if(r.rework) return lbl+": redo & resend"; if(r.rejected) return lbl; if(REJECTABLE.includes(k)) return lbl+": not approved"; return lbl+": pending"; }).filter(Boolean);
     if(mode==="buyer"){ data=rows.map(({s,c})=>{ const o={ "Style No":s.styleNo, "Family":s.family, "Colour":s.colour, "Brand":s.brand, "Buyer":s.buyer||"", "Age Group":s.age||"", "Qty":s.qty, "Delivery":fmtIso(s.delivery), "Status":c.status }; pairs(o,s,c,incBuf); o["Proj. Release"]=c.projRelease?fmtY(c.projRelease):""; return o; }); name=incBuf?"buyer_tna_buf"+B+"d":"buyer_tna"; sheet="Buyer"; }
-    else if(mode==="release"){ data=rows.map(({s,c})=>{ const open=blockers(c); const o={ "Order No":s.orderNo, "Style No":s.styleNo, "Colour":s.colour, "Qty":s.qty }; if(relMode!=="summary"){ o["FIT"]=s.fitReq?"Y":"-"; o["PRT"]=s.printReq?"Y":"-"; o["S-O"]=s.soReq?"Y":"-"; o["LAB"]=s.labDipReq?"Y":"-"; o["BYP"]=s.ppBypass?"Y":"-"; o["PP"]=s.ppNeeded?"Y":"-"; pairs(o,s,c,false); } else { ["fitAppr","soAppr","fabricIH","ppAppr","prodFile"].forEach(k=>{ const st=STAGES.find(x=>x.key===k); o["Actual \u00b7 "+st.label]=actCell(s,c,k); o["Plan \u00b7 "+st.label]=planCell(s,c,k,false); }); } o["Proj. Release"]=c.projRelease?fmtY(c.projRelease):""; o["Delivery"]=fmtIso(s.delivery); o["Released"]=c.released?"YES":""; o["Pending / blockers"]=c.released?"released":(open.join("; ")||"none"); o["Remarks"]=s.remarks||""; o["Status"]=c.status; return o; }); name=relMode==="summary"?"release_plan_summary":"release_plan_detailed"; sheet="Release Plan"; }
-    else if(mode==="detail"){ data=rows.map(({s,c})=>{ const open=blockers(c); const o={ "Order No":s.orderNo, "Style No":s.styleNo, "Sample Fit":s.sampleFit, "Family":s.family, "Colour":s.colour, "Brand":s.brand, "Buyer":s.buyer||"", "Age Group":s.age||"", "Fabric Type":s.fabricType, "Owner":s.owner, "Qty":s.qty, "Order Date":fmtIso(s.ordRec), "Delivery":fmtIso(s.delivery), "FIT":s.fitReq?"Y":"-", "PRT":s.printReq?"Y":"-", "S-O":s.soReq?"Y":"-", "LAB":s.labDipReq?"Y":"-", "BYP":s.ppBypass?"Y":"-", "PP":s.ppNeeded?"Y":"-" }; pairs(o,s,c,false); o["% Done"]=c.pct+"%"; o["Float"]=(c.float!=null?c.float+"d":""); o["Idle"]=(c.idle!=null?c.idle+"d":""); o["Proj. Release"]=c.projRelease?fmtY(c.projRelease):""; o["Released"]=c.released?"YES":""; o["Pending / blockers"]=c.released?"released":(open.join("; ")||"none"); o["Remarks"]=s.remarks||""; o["Status"]=c.status; return o; }); name="detailed_summary"; sheet="Detailed"; }
+    else if(mode==="release"){ data=rows.map(({s,c})=>{ const open=blockers(s,c); const o={ "Order No":s.orderNo, "Style No":s.styleNo, "Colour":s.colour, "Qty":s.qty }; if(relMode!=="summary"){ o["FIT"]=s.fitReq?"Y":"-"; o["PRT"]=s.printReq?"Y":"-"; o["S-O"]=s.soReq?"Y":"-"; o["LAB"]=s.labDipReq?"Y":"-"; o["BYP"]=s.ppBypass?"Y":"-"; o["PP"]=s.ppNeeded?"Y":"-"; pairs(o,s,c,false); } else { ["fitAppr","soAppr","fabricIH","ppAppr","prodFile"].forEach(k=>{ const st=STAGES.find(x=>x.key===k); o["Actual \u00b7 "+st.label]=actCell(s,c,k); o["Plan \u00b7 "+st.label]=planCell(s,c,k,false); }); } o["Proj. Release"]=c.projRelease?fmtY(c.projRelease):""; o["Delivery"]=fmtIso(s.delivery); o["Released"]=c.released?"YES":""; o["Pending / blockers"]=c.released?"released":(open.join("; ")||"none"); o["Remarks"]=s.remarks||""; o["Status"]=c.status; return o; }); name=relMode==="summary"?"release_plan_summary":"release_plan_detailed"; sheet="Release Plan"; }
+    else if(mode==="detail"){ data=rows.map(({s,c})=>{ const open=blockers(s,c); const o={ "Order No":s.orderNo, "Style No":s.styleNo, "Sample Fit":s.sampleFit, "Family":s.family, "Colour":s.colour, "Brand":s.brand, "Buyer":s.buyer||"", "Age Group":s.age||"", "Fabric Type":s.fabricType, "Owner":s.owner, "Qty":s.qty, "Order Date":fmtIso(s.ordRec), "Delivery":fmtIso(s.delivery), "FIT":s.fitReq?"Y":"-", "PRT":s.printReq?"Y":"-", "S-O":s.soReq?"Y":"-", "LAB":s.labDipReq?"Y":"-", "BYP":s.ppBypass?"Y":"-", "PP":s.ppNeeded?"Y":"-" }; pairs(o,s,c,false); o["% Done"]=c.pct+"%"; o["Float"]=(c.float!=null?c.float+"d":""); o["Idle"]=(c.idle!=null?c.idle+"d":""); o["Proj. Release"]=c.projRelease?fmtY(c.projRelease):""; o["Released"]=c.released?"YES":""; o["Pending / blockers"]=c.released?"released":(open.join("; ")||"none"); o["Remarks"]=s.remarks||""; o["Status"]=c.status; return o; }); name="detailed_summary"; sheet="Detailed"; }
     else if(mode==="internal"){ data=rows.map(({s,c})=>{ const o={ "Order No":s.orderNo, "Style No":s.styleNo, "Sample Fit":s.sampleFit, "Family":s.family, "Colour":s.colour, "Buyer":s.buyer||"", "Age Group":s.age||"", "Qty":s.qty, "Delivery":fmtIso(s.delivery), "Status":c.status }; pairs(o,s,c,true); return o; }); name="internal_plan_buf"+B+"d"; }
     else { data=rows.map(({s,c})=>{ const o={ "Order No":s.orderNo, "Style No":s.styleNo, "Sample Fit":s.sampleFit, "Family":s.family, "Colour":s.colour, "Brand":s.brand, "Buyer":s.buyer||"", "Age Group":s.age||"", "Fabric Type":s.fabricType, "Junior":s.owner, "Qty":s.qty, "Order Date":fmtIso(s.ordRec), "Delivery":fmtIso(s.delivery), "Status":c.status }; STAGES.forEach(st=>{ o[st.label]=actCell(s,c,st.key); }); return o; }); name="merch_tracker"; }
     if(data&&data.length){ Object.keys(data[0]).forEach(k=>{ if(data.every(r=>r[k]==="n/a")) data.forEach(r=>{ delete r[k]; }); }); }
@@ -1337,14 +1361,14 @@ function MerchTracker({ me, onSignOut }){
   // Live/report source: archived styles stay available in Tracker Archive view, but are excluded from all live reports by default.
   const activeComputed=useMemo(()=>computed.filter(({s})=>!s.archived),[computed]);
   const chaseOwnerOptions=useMemo(()=>["All", ...Array.from(new Set([...STAGES.map(st=>(cfg.stageOwners&&cfg.stageOwners[st.key])||DEFAULT_STAGE_OWNERS[st.key]||st.owner), ...CHASE_LABELS])).filter(Boolean)], [cfg]);
-  const splitColoursForTodo=(txt)=>{ const raw=String(txt||"").trim(); if(!raw) return ["(no colour)"]; const parts=raw.split(/[,;|/+]+/).map(x=>x.replace(/\s+/g," ").trim()).filter(Boolean); return parts.length?parts:[raw.replace(/\s+/g," ").trim()]; };
+  const splitColoursForTodo=splitColoursAll;
   const todoItems=useMemo(()=>{
     const stageWeight=(key)=> key==="fitAppr"||key==="fitSend"?10:["fabricIH","ppSample","ppAppr","prodFile"].includes(key)?8:["artAppr","soAppr","labAppr"].includes(key)?6:4;
     const eventTimeMs=(e)=>{ try{ return new Date(e&&e.created_at||0).getTime()||0; }catch(_e){ return 0; } };
     const revisionCountFor=(style,key)=>{
       const sid=String(style&&style.id);
       const direct=style&&style.revs&&style.revs[key]?1:0;
-      const ev=(stageEvents||[]).filter(e=>String(e&&e.style_id)===sid && String(e&&e.stage_key)===String(key) && String(e&&e.event_type||"").toLowerCase().includes("revised"));
+      const ev=(stageEvents||[]).filter(e=>String(e&&e.style_id)===sid && String(e&&e.stage_key)===String(key) && String(e&&e.event_type||"").toLowerCase()==="revised");
       return Math.max(direct, ev.length);
     };
     const activeRejectRoundForTodo=(style,key)=>{ try{ return activeRoundForCell(style,key)||0; }catch(_e){ return 0; } };
@@ -1415,7 +1439,7 @@ function MerchTracker({ me, onSignOut }){
     return out;
   },[activeComputed,cfg,stageEvents]);
   const [todoFilter,setTodoFilter]=useState(PF.todoFilter||{});
-  useEffect(()=>{ try{ localStorage.setItem("mt_trackfilters", JSON.stringify({ search, searchCol, statusFilter, ownerFilter, archiveView, activityFilter:activityFilterKey, colFilters, tab, todoFilter, followFilter, savedView })); }catch(e){} },[search,searchCol,statusFilter,ownerFilter,archiveView,activityFilter,colFilters,tab,todoFilter,followFilter,savedView]);
+  useEffect(()=>{ try{ localStorage.setItem("mt_trackfilters", JSON.stringify({ search, searchCol, statusFilter, ownerFilter, archiveView, activityFilter:activityFilterKeys, colFilters, tab, todoFilter, followFilter, savedView })); }catch(e){} },[search,searchCol,statusFilter,ownerFilter,archiveView,activityFilterKeys.join("|"),colFilters,tab,todoFilter,followFilter,savedView]);
   useEffect(()=>{ try{ localStorage.setItem("mt_column_view",columnView); }catch(e){} },[columnView]);
   useEffect(()=>{ try{ localStorage.setItem("mt_freeze_n",String(freezeN)); }catch(e){} },[freezeN]);
   const valueFor=(s,cc,col)=>{
@@ -1450,7 +1474,7 @@ function MerchTracker({ me, onSignOut }){
   const chaseLabel=(owner)=>String(owner||"—");
   const SAVED_VIEWS=[ ["","Saved view: none"], ["overdue","Overdue"], ["dueThisWeek","Due this week"], ["buyerPending","Buyer approval pending"], ["fabricPending","Fabric pending"], ["ppPending","PP pending"], ["deliveryRisk","Delivery risk"], ["following","Followed styles"], ["rework","Rejected / rework"], ["released","Released"] ];
   const hasColFilters=()=>Object.values(colFilters||{}).some(v=>Array.isArray(v));
-  const anyFilter = statusFilter!=="All"||ownerFilter!=="All"||!!search||hasColFilters()||!!activityFilter||followFilter||!!savedView||archiveView!=="active";
+  const anyFilter = statusFilter!=="All"||ownerFilter!=="All"||!!search||hasColFilters()||activityFilterKeys.length>0||followFilter||!!savedView||archiveView!=="active";
   const resetFilters=()=>{
     // Hard reset: table filters, search, saved/drill filters, sort, hidden stale dropdown state.
     // This is deliberately not merged with old filter state; it replaces it.
@@ -1459,14 +1483,14 @@ function MerchTracker({ me, onSignOut }){
     setSort({col:null,dir:1}); setFilterCol(null); setFindIdx(-1); setFrMatches([]); setSel(null); setFocus(null);
     try{ localStorage.setItem("mt_trackfilters", JSON.stringify({ search:"", searchCol:"auto", statusFilter:"All", ownerFilter:"All", archiveView:"active", activityFilter:null, colFilters:{}, tab, todoFilter, followFilter:false, savedView:"" })); }catch(e){}
   };
-  const snapCurrent=()=>setViewSnap({ statusFilter, ownerFilter, search, searchCol, colFilters, activityFilter, savedView, archiveView, followFilter, sort });
+  const snapCurrent=()=>setViewSnap({ statusFilter, ownerFilter, search, searchCol, colFilters, activityFilter:activityFilterKeys, savedView, archiveView, followFilter, sort });
   const clearAllFilters=()=>{ resetFilters(); setViewSnap(null); };
-  const restoreView=()=>{ if(!viewSnap) return; setStatusFilter(viewSnap.statusFilter||"All"); setOwnerFilter(viewSnap.ownerFilter||"All"); setSearch(viewSnap.search||""); setSearchCol(viewSnap.searchCol||"auto"); setColFilters(viewSnap.colFilters||{}); setTrackerActivityFilter(viewSnap.activityFilter||null); setSavedView(viewSnap.savedView||""); setArchiveView(viewSnap.archiveView||"active"); setFollowFilter(!!viewSnap.followFilter); setSort(viewSnap.sort||{col:null,dir:1}); setViewSnap(null); };
-  const applyDrill=(spec)=>{ const drill=canonicalDrillSpec(spec||{}); snapCurrent(); setStatusFilter(drill.status||"All"); setOwnerFilter(drill.owner||"All"); setSearch(drill.search||""); setSearchCol("auto"); setColFilters(drill.colFilters||{}); setTrackerActivityFilter(drill.activityKey||drill.activity||null); setSavedView(""); setFilterCol(null); setSort({col:null,dir:1}); setTab("tracker"); };
+  const restoreView=()=>{ if(!viewSnap) return; setStatusFilter(viewSnap.statusFilter||"All"); setOwnerFilter(viewSnap.ownerFilter||"All"); setSearch(viewSnap.search||""); setSearchCol(viewSnap.searchCol||"auto"); setColFilters(viewSnap.colFilters||{}); setTrackerActivityFilter(viewSnap.activityFilter||[]); setSavedView(viewSnap.savedView||""); setArchiveView(viewSnap.archiveView||"active"); setFollowFilter(!!viewSnap.followFilter); setSort(viewSnap.sort||{col:null,dir:1}); setViewSnap(null); };
+  const applyDrill=(spec)=>{ const drill=canonicalDrillSpec(spec||{}); snapCurrent(); setStatusFilter(drill.status||"All"); setOwnerFilter(drill.owner||"All"); setSearch(drill.search||""); setSearchCol("auto"); setColFilters(drill.colFilters||{}); setTrackerActivityFilter(drill.activityKey||drill.activity||[]); setSavedView(""); setFilterCol(null); setSort({col:null,dir:1}); setTab("tracker"); };
   const presetPass=(s,c)=>{ if(!savedView) return true; const front=c.frontier?[...c.frontier]:[]; const has=(keys)=>front.some(k=>keys.includes(k)); const dueSoon=front.some(k=>{ const r=(c.stages||[]).find(x=>x.key===k); const d=r&&(r.rev||r.plan); const n=d?netWorkdays(TODAY,d):999; return d && n>=0 && n<=6; }); const anyRework=(c.stages||[]).some(r=>r.rework||r.rejected); if(savedView==="overdue") return (c.tone==="late"||c.status.startsWith("Overdue")); if(savedView==="dueThisWeek") return !c.released && dueSoon; if(savedView==="buyerPending") return !c.released && front.some(k=>((STAGES.find(x=>x.key===k)||{}).owner)==="Buyer"); if(savedView==="fabricPending") return !c.released && has(["labDip","labAppr","fabricIH"]); if(savedView==="ppPending") return !c.released && has(["ppSample","ppAppr","prodFile"]); if(savedView==="deliveryRisk") return c.tone==="late"||String(c.status).toLowerCase().includes("risk"); if(savedView==="following") return follows.has(s.id); if(savedView==="rework") return anyRework; if(savedView==="released") return c.released; return true; };
   const deferredSearch=useDeferredValue(search);
-  const filterKey=useMemo(()=>JSON.stringify({ search:deferredSearch, searchCol, statusFilter, ownerFilter, archiveView, activityFilter:activityFilterKey, colFilters, followFilter, savedView, follows:[...follows].sort() }),[deferredSearch,searchCol,statusFilter,ownerFilter,archiveView,activityFilter,colFilters,followFilter,savedView,follows]);
-  const filterIdentity=useMemo(()=>JSON.stringify({ search:deferredSearch, searchCol, statusFilter, ownerFilter, archiveView, activityFilter:activityFilterKey, colFilters, followFilter, savedView }),[deferredSearch,searchCol,statusFilter,ownerFilter,archiveView,activityFilter,colFilters,followFilter,savedView]);
+  const filterKey=useMemo(()=>JSON.stringify({ search:deferredSearch, searchCol, statusFilter, ownerFilter, archiveView, activityFilter:activityFilterKeys, colFilters, followFilter, savedView, follows:[...follows].sort() }),[deferredSearch,searchCol,statusFilter,ownerFilter,archiveView,activityFilterKeys.join("|"),colFilters,followFilter,savedView,follows]);
+  const filterIdentity=useMemo(()=>JSON.stringify({ search:deferredSearch, searchCol, statusFilter, ownerFilter, archiveView, activityFilter:activityFilterKeys, colFilters, followFilter, savedView }),[deferredSearch,searchCol,statusFilter,ownerFilter,archiveView,activityFilterKeys.join("|"),colFilters,followFilter,savedView]);
   const filtered=useMemo(()=>{
     const t=perfNow();
     const q=String(deferredSearch||"").trim().toLowerCase();
@@ -1477,7 +1501,7 @@ function MerchTracker({ me, onSignOut }){
       const matchS=statusFilter==="All"||(statusFilter==="At Risk"&&(c.tone==="late"||c.tone==="warn"))||(statusFilter==="On Track"&&c.tone==="ok")||(statusFilter==="Released"&&c.released);
       const matchF=cfEntries.every(([col,allowed])=> passCol(s,c,col,allowed));
       const matchO=ownerFilter==="All"||(c.chaseOwners||[]).some(o=>filterNorm(o.owner)===filterNorm(ownerFilter));
-      const ak=activityFilterKey; const matchA=!ak||rowMatchesCurrentStage(row,ak);
+      const matchA=rowMatchesAnyCurrentStage(row,activityFilterKeys);
       const matchArch=archiveView==="all"?true:(archiveView==="archived"?!!s.archived:!s.archived);
       const matchFollow=!followFilter||follows.has(s.id);
       return matchQ&&matchS&&matchF&&matchO&&matchA&&matchArch&&matchFollow&&presetPass(s,c);
@@ -1701,13 +1725,13 @@ function MerchTracker({ me, onSignOut }){
   const applyColumnView=(view)=>{ setColumnView(view); setColsOpen(false); if(view==="custom"){ setHidden(new Set()); return; } const all=[...INFO_COLS.map(c=>c.key),...STAGE_KEYS,"remarks"]; const spec=ROLE_VIEW_PRESETS[view]; if(!spec||!spec.show){ setHidden(new Set()); return; } const keep=new Set(spec.show); setHidden(new Set(all.filter(k=>!keep.has(k)))); setFreezeN(1); };
 
   const currentViewState=()=>({
-    search, searchCol, statusFilter, ownerFilter, archiveView, activityFilter:activityFilterKey, colFilters, savedView, columnView,
+    search, searchCol, statusFilter, ownerFilter, archiveView, activityFilter:activityFilterKeys, colFilters, savedView, columnView,
     hidden:[...hidden], sort, freezeN
   });
   const applyTrackerViewState=(state, name="")=>{
     const st=state||{};
     setSearch(st.search||""); setSearchCol(st.searchCol||"auto"); setStatusFilter(st.statusFilter||"All"); setOwnerFilter(st.ownerFilter||"All");
-    setArchiveView(st.archiveView||"active"); setTrackerActivityFilter(st.activityFilter||null); setColFilters(st.colFilters||{}); setSavedView(st.savedView||"");
+    setArchiveView(st.archiveView||"active"); setTrackerActivityFilter(st.activityFilter||[]); setColFilters(st.colFilters||{}); setSavedView(st.savedView||"");
     if(st.columnView){ setColumnView(st.columnView); }
     if(Array.isArray(st.hidden)) setHidden(new Set(st.hidden)); else if(st.columnView && st.columnView!=="custom") applyColumnView(st.columnView);
     setSort(st.sort&&st.sort.col?st.sort:{ col:null, dir:1 }); setFreezeN(Number(st.freezeN)||1); setActiveNamedView(name||""); setViewSnap(null);
@@ -1925,7 +1949,7 @@ function MerchTracker({ me, onSignOut }){
     const matchS=statusFilter==="All"||(statusFilter==="At Risk"&&(c.tone==="late"||c.tone==="warn"))||(statusFilter==="On Track"&&c.tone==="ok")||(statusFilter==="Released"&&c.released);
     const matchF=Object.entries(colFilters||{}).every(([cc,allowed])=> cc===exceptCol || passCol(s,c,cc,allowed));
     const matchO=ownerFilter==="All"||(c.chaseOwners||[]).some(o=>o.owner===ownerFilter);
-    const ak=activityFilterKey; const matchA=!ak||rowMatchesCurrentStage(row,ak);
+    const matchA=rowMatchesAnyCurrentStage(row,activityFilterKeys);
     const matchArch=archiveView==="all"?true:(archiveView==="archived"?!!s.archived:!s.archived);
     const matchFollow=!followFilter||follows.has(s.id);
     return matchQ&&matchS&&matchF&&matchO&&matchA&&matchArch&&matchFollow&&presetPass(s,c);
@@ -2205,7 +2229,7 @@ function MerchTracker({ me, onSignOut }){
         <select value={savedView} onChange={e=>{ setSavedView(e.target.value); if(e.target.value==="following") setFollowFilter(false); }} onClick={e=>e.stopPropagation()} title="quick saved operational views" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 8px", cursor:"pointer", border:"1px solid "+(savedView?"var(--accent)":"var(--ink)"), background:savedView?"var(--accent-tint)":"var(--surface)", fontWeight:savedView?700:400 }}>{SAVED_VIEWS.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>
         <div style={{ display:"flex", border:"1px solid var(--ink)" }}>{["All","At Risk","On Track","Released"].map(f=>(<button key={f} onClick={(e)=>{ e.stopPropagation(); setStatusFilter(f); }} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 11px", cursor:"pointer", border:"none", borderRight:f!=="Released"?"1px solid var(--ink)":"none", background:statusFilter===f?"var(--ink)":"var(--surface)", color:statusFilter===f?"var(--bg)":"var(--ink)" }}>{f}</button>))}</div>
         <div style={{ display:"flex", border:"1px solid var(--ink)" }}>{chaseOwnerOptions.map((f,i)=>(<button key={f} onClick={(e)=>{ e.stopPropagation(); setOwnerFilter(f); }} title="chase label / department" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 9px", cursor:"pointer", border:"none", borderRight:i<chaseOwnerOptions.length-1?"1px solid var(--ink)":"none", background:ownerFilter===f?"#2563a6":"var(--surface)", color:ownerFilter===f?"var(--surface)":"var(--ink)" }}>{f==="All"?"Chase":f}</button>))}</div>
-        <select value={activityFilterKey||""} onChange={e=>{ setTrackerActivityFilter(e.target.value||null); }} onClick={e=>e.stopPropagation()} title="show only styles whose current pending action is this activity" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 8px", cursor:"pointer", border:"1px solid "+(activityFilter?"var(--accent)":"var(--ink)"), background:activityFilter?"var(--accent-tint)":"var(--surface)", fontWeight:activityFilter?700:400 }}><option value="">Activity: all</option>{STAGES.map(st=>(<option key={st.key} value={st.key}>{st.label}</option>))}</select>
+        <MultiSelectDropdown label="Activity" value={activityFilterKeys.map(stageLabelFromKeyGlobal).filter(Boolean)} options={STAGES.map(st=>st.label)} onChange={vals=>setTrackerActivityFilter(vals)} />
         <div style={{ display:"flex", border:"1px solid var(--ink)" }}>{[["active","Active"],["all","All"],["archived","Archived"]].map(([v,lab])=>(<button key={v} onClick={(e)=>{ e.stopPropagation(); setArchiveView(v); }} title="archived styles are hidden from the live sheet" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 9px", cursor:"pointer", border:"none", borderRight:v!=="archived"?"1px solid var(--ink)":"none", background:archiveView===v?"#5a6650":"var(--surface)", color:archiveView===v?"var(--surface)":"var(--ink)" }}>{lab}</button>))}</div>
         <button onClick={(e)=>{ e.stopPropagation(); setFollowFilter(v=>!v); }} title="show only styles you follow" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 11px", cursor:"pointer", border:"1px solid var(--ink)", background:followFilter?"var(--accent)":"var(--surface)", color:followFilter?"var(--surface)":"var(--ink)", display:"inline-flex", alignItems:"center", gap:5 }}><Star size={12} fill={followFilter?"var(--surface)":"none"}/> Following</button>
         {canAdmin(role) && archiveView!=="archived" && anyFilter && <button onClick={(e)=>{ e.stopPropagation(); archiveFiltered(true); }} title="archive the styles currently shown (e.g. a finished season)" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 10px", cursor:"pointer", border:"1px solid #5a6650", background:"var(--surface)", color:"#5a6650", fontWeight:700 }}>Archive these ({rows.length})</button>}
@@ -2218,11 +2242,11 @@ function MerchTracker({ me, onSignOut }){
         {canMaster(role) && <button onClick={(e)=>{ e.stopPropagation(); setBulkResult(null); setBulkOpen(true); }} title="bulk upload / update styles from Excel" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 11px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--ink)", color:"var(--bg)", fontWeight:700, display:"flex", alignItems:"center", gap:6 }}><Plus size={13}/> Upload styles</button>}
         {canMaster(role) && <button onClick={(e)=>{ e.stopPropagation(); setBulkActionsOpen(true); }} title="bulk actions on currently visible/filtered rows" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 11px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--surface)", color:"var(--ink)", fontWeight:700, display:"flex", alignItems:"center", gap:6 }}><Check size={13}/> Bulk actions ({rows.length})</button>}
         <span style={{ position:"relative" }}><button onClick={(e)=>{ e.stopPropagation(); setExpOpen(o=>!o); }} title="export options" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 11px", cursor:"pointer", border:"1px solid var(--ink)", background:expOpen?"var(--ink)":"var(--surface)", color:expOpen?"var(--bg)":"var(--ink)", fontWeight:700, display:"flex", alignItems:"center", gap:6 }}>⬇ Export</button>{expOpen && (<div onClick={e=>e.stopPropagation()} style={{ position:"absolute", top:"100%", left:0, marginTop:4, zIndex:370, background:"var(--surface)", border:"1px solid var(--ink)", boxShadow:"4px 4px 0 var(--ink)", padding:12, width:288 }}><div style={{ fontSize:11, fontWeight:700, marginBottom:8 }}>Export {rows.length} filtered styles</div>{[["full","Full \u2014 all columns (actual dates)"],["detail","Detailed summary \u2014 everything (toggles + every stage)"],["release","Release plan \u2014 for production (incl. blockers)"],["internal","Internal plan (with buffer)"],["buyer","Buyer view \u2014 key details (printable)"]].map(([v,lbl])=>(<label key={v} style={{ display:"flex", gap:6, fontSize:10, padding:"3px 0", cursor:"pointer", alignItems:"flex-start" }}><input type="radio" checked={expMode===v} onChange={()=>setExpMode(v)} style={{ marginTop:1 }}/>{lbl}</label>))}{expMode==="release" && (<div style={{ display:"flex", gap:6, margin:"4px 0 2px" }}>{[["detailed","Detailed"],["summary","Summary"]].map(([v,l])=>(<button key={v} onClick={()=>setExpRelMode(v)} style={{ flex:1, fontFamily:"inherit", fontSize:10, fontWeight:700, padding:"4px 0", cursor:"pointer", border:"1px solid var(--ink)", background:expRelMode===v?"var(--ink)":"var(--surface)", color:expRelMode===v?"var(--bg)":"var(--ink)" }}>{l}</button>))}</div>)}{expMode==="buyer" && (<label style={{ display:"flex", gap:6, fontSize:10, padding:"4px 0", cursor:"pointer", alignItems:"flex-start", borderTop:"1px solid var(--line-3)", marginTop:4, paddingTop:6 }}><input type="checkbox" checked={expIncBuf} onChange={e=>setExpIncBuf(e.target.checked)} style={{ marginTop:1 }}/>Include internal buffered plan dates <span style={{ color:"var(--muted-1)" }}>(for your team only)</span></label>)}{(expMode==="internal"||(expMode==="buyer"&&expIncBuf)) && (<div style={{ fontSize:10, color:"var(--muted-4)", margin:"6px 0 4px", lineHeight:1.5, background:"#f7f4ee", border:"1px solid #e6e0d4", padding:"6px 8px" }}>Add buffer to internal plan dates of <input type="number" min={0} max={30} value={expBuf} onChange={e=>setExpBuf(Math.max(0,Math.min(30,Number(e.target.value)||0)))} style={{ width:40, fontFamily:"inherit", fontSize:11, padding:"2px 4px", border:"1px solid var(--ink)", margin:"0 4px" }}/> working days.<div style={{ color:"var(--muted-1)", marginTop:4 }}>Buyer approvals (Fit / Art / S-O / Lab / PP Appr) get no extra buffer of their own, but follow the buffered internal dates. Actual dates stay unchanged.</div></div>)}<div style={{ display:"flex", gap:8, marginTop:10 }}><button onClick={()=>{ runExport(expMode,expBuf,expIncBuf,expRelMode); setExpOpen(false); }} style={{ flex:1, fontFamily:"inherit", fontSize:11, fontWeight:700, padding:6, cursor:"pointer", border:"1px solid var(--ink)", background:"var(--accent)" }}>⬇ Export .xlsx</button><button onClick={()=>setExpOpen(false)} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 10px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--bg)" }}><X size={12}/></button></div></div>)}</span>
-        <div style={{ position:"relative" }}><button onClick={(e)=>{ e.stopPropagation(); finishEditing(); setFillOpen(o=>!o); setColsOpen(false); }} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 11px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--accent)", color:"var(--ink)", fontWeight:700, display:"flex", alignItems:"center", gap:6 }}><Copy size={13}/> Fill date → {rows.length}</button>{fillOpen && (<FillPanel count={rows.length} role={role} activeCol={(editing&&editing.col)||(sel&&sel.col)} onClose={()=>setFillOpen(false)} onApply={(key,val,mode)=>{ pushHistory(); const ids=rows.map(r=>r.s.id); const idset=new Set(ids); const resendRows=(!top && mode!=="revised" && SEND_STAGE_KEYS.includes(key) && val)?styles.filter(s=>idset.has(s.id)&&shouldTrackResend(s,key,val)):[]; const _msg=val?(resendRows.length?`Fill this date into all ${ids.length} visible styles?
+        <div style={{ position:"relative" }}><button onClick={(e)=>{ e.stopPropagation(); finishEditing(); setFillOpen(o=>!o); setColsOpen(false); }} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 11px", cursor:"pointer", border:"1px solid var(--ink)", background:"var(--accent)", color:"var(--ink)", fontWeight:700, display:"flex", alignItems:"center", gap:6 }}><Copy size={13}/> Fill date → {rows.length}</button>{fillOpen && (<FillPanel count={rows.length} role={role} activeCol={(editing&&editing.col)||(sel&&sel.col)} onClose={()=>setFillOpen(false)} onApply={(key,val,mode)=>{ pushHistory(); const ids=rows.map(r=>r.s.id); const idset=new Set(ids); const top=(key==="ordRec"||key==="delivery"); const resendRows=(!top && mode!=="revised" && SEND_STAGE_KEYS.includes(key) && val)?styles.filter(s=>idset.has(s.id)&&shouldTrackResend(s,key,val)):[]; const resendIdSet=new Set(resendRows.map(s=>s.id)); const _msg=val?(resendRows.length?`Fill this date into all ${ids.length} visible styles?
 
 ${resendRows.length} row(s) already have an actual date and are in rejected/rework loop. These will be saved as RE-SEND actuals and old send dates will be kept in resend history.
 
-Other existing dates in this column will be overwritten.`:`Fill this date into all ${ids.length} visible styles? Existing dates in that column will be overwritten.`):(`Clear this date for all ${ids.length} visible styles? This blanks them — only do this if you mean to.`); if(!window.confirm(_msg)){ setFillOpen(false); return; } try{ supabase.from("audit_log").insert({ style_id:null, style_no:"", col:key, field:mode==="revised"?"bulk revised":"bulk actual", old_val:`${ids.length} visible styles`, new_val:val||"CLEARED", actor_id:me.id, actor_name:me.name||me.email }).then(()=>{}).catch(()=>{}); }catch(e){} if(mode==="revised"){ if(!canEditRev(role)){ setFillOpen(false); return; } styles.filter(s=>idset.has(s.id)).forEach(s=>recordRevisionHistory(s,key,val,"bulk fill")); ids.forEach(id=>{ const ck=id+":"+key+":revised"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); }); setStyles(prev=>prev.map(s=>idset.has(s.id)?{...s,revs:{...(s.revs||{}),[key]:val||undefined}}:s)); flash(); setFillOpen(false); return; } if(!canEdit(role,key,"actual")){ setFillOpen(false); return; } const top=(key==="ordRec"||key==="delivery"); if(!top){ ids.forEach(id=>{ const ck=id+":"+key+":actual"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); }); if(SEND_STAGE_KEYS.includes(key)&&val){ styles.filter(s=>idset.has(s.id)).forEach(s=>{ if(shouldTrackResend(s,key,val)) recordResendActual(s,key,val,"bulk fill"); }); } } setStyles(prev=>prev.map(s=>idset.has(s.id)?(top?{...s,[key]:val||""}:{...s,actuals:{...s.actuals,[key]:val||undefined}}):s)); flash(); setFillOpen(false); }}/>)}</div>
+Other existing dates in this column will be overwritten.`:`Fill this date into all ${ids.length} visible styles? Existing dates in that column will be overwritten.`):(`Clear this date for all ${ids.length} visible styles? This blanks them — only do this if you mean to.`); if(!window.confirm(_msg)){ setFillOpen(false); return; } try{ supabase.from("audit_log").insert({ style_id:null, style_no:"", col:key, field:mode==="revised"?"bulk revised":"bulk actual", old_val:`${ids.length} visible styles`, new_val:val||"CLEARED", actor_id:me.id, actor_name:me.name||me.email }).then(()=>{}).catch(()=>{}); }catch(e){} if(mode==="revised"){ if(!canEditRev(role)){ setFillOpen(false); return; } styles.filter(s=>idset.has(s.id)).forEach(s=>recordRevisionHistory(s,key,val,"bulk fill")); ids.forEach(id=>{ const ck=id+":"+key+":revised"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); }); setStyles(prev=>prev.map(s=>idset.has(s.id)?{...s,revs:{...(s.revs||{}),[key]:val||undefined}}:s)); flash(); setFillOpen(false); return; } if(!canEdit(role,key,"actual")){ setFillOpen(false); return; } if(!top){ ids.forEach(id=>{ const ck=id+":"+key+":actual"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); }); if(SEND_STAGE_KEYS.includes(key)&&val){ resendRows.forEach(s=>{ const appr=APPR_OF_SEND[key]; const round=activeRejectRound(s,key,appr)||1; const old=(s.actuals&&s.actuals[key])||""; insertStageEvent(s,key,appr,"resend_actual",round,val||null,old||null,val||null,`Bulk re-send ${round} actual entered`); recordResendActual(s,key,val,"bulk fill"); }); } } setStyles(prev=>prev.map(s=>idset.has(s.id)?(top?{...s,[key]:val||""}:((val&&resendIdSet.has(s.id))?s:{...s,actuals:{...s.actuals,[key]:val||undefined}})):s)); flash(); setFillOpen(false); }}/>)}</div>
         </div>
       </div>
 
@@ -2300,7 +2324,7 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
         if(search) chip("q",(searchCol==="auto"?"search":searchCol)+": "+search, ()=>setSearch(""));
         if(statusFilter!=="All") chip("st","status: "+statusFilter, ()=>setStatusFilter("All"));
         if(ownerFilter!=="All") chip("ow","chase: "+ownerFilter, ()=>setOwnerFilter("All"));
-        if(activityFilterKey) chip("ac","activity: "+((STAGES.find(x=>x.key===activityFilterKey)||{}).label||activityFilterKey), ()=>setTrackerActivityFilter(null));
+        if(activityFilterKeys.length) chip("ac",activityFilterKeys.length===1?"activity: "+stageLabelFromKeyGlobal(activityFilterKeys[0]):"activity: "+activityFilterKeys.length+" selected", ()=>setTrackerActivityFilter([]));
         if(followFilter) chip("fo","following only", ()=>setFollowFilter(false));
         if(savedView) chip("sv","saved: "+((SAVED_VIEWS.find(x=>x[0]===savedView)||[])[1]||savedView), ()=>setSavedView(""));
         if(activeNamedView) chip("nv","default view: "+activeNamedView, ()=>setActiveNamedView(""));
@@ -2846,11 +2870,11 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
   const toggleMgmt=(key)=>setMgmtOpen(o=>({ ...o, [key]: !isMgmtOpen(key) }));
   const arrOf=(v)=>Array.isArray(v)?v:(v?[v]:[]);
   const hasSel=(key,val)=>{ const a=arrOf(df[key]); return !a.length || a.includes(val); };
-  const hasColourSel=(st)=>{ const a=arrOf(df.colour); if(!a.length) return true; const cols=String(st.colour||"").split(/[,/]/).map(x=>x.trim()).filter(Boolean); return a.some(v=>cols.includes(v)); };
+  const hasColourSel=(st)=>{ const a=arrOf(df.colour); if(!a.length) return true; const cols=splitColoursAll(st.colour); return a.some(v=>cols.includes(v)); };
   const matchDf=(st,except)=> (except==="order"||hasSel("order",st.orderNo)) && (except==="fit"||hasSel("fit",st.sampleFit)) && (except==="junior"||hasSel("junior",st.owner)) && (except==="family"||hasSel("family",st.family)) && (except==="brand"||hasSel("brand",st.brand)) && (except==="fabric"||hasSel("fabric",st.fabricType)) && (except==="colour"||hasColourSel(st));
   const distinctC=(key,fn)=>{ const s=new Set(); computed.forEach(({s:st})=>{ if(!matchDf(st,key)) return; fn(st).forEach(v=>{ if(v) s.add(v); }); }); return [...s].sort(); };
   const orders=distinctC("order",s=>[s.orderNo]); const fits=distinctC("fit",s=>[s.sampleFit]); const juniors=distinctC("junior",s=>[s.owner]); const families=distinctC("family",s=>[s.family]); const brands=distinctC("brand",s=>[s.brand]); const fabrics=distinctC("fabric",s=>[s.fabricType]);
-  const colours=distinctC("colour",s=>String(s.colour||"").split(/[,/]/).map(x=>x.trim()));
+  const colours=distinctC("colour",s=>splitColoursAll(s.colour));
   const fc=computed.filter(({s})=> hasSel("order",s.orderNo) && hasSel("fit",s.sampleFit) && hasSel("junior",s.owner) && hasSel("family",s.family) && hasSel("brand",s.brand) && hasSel("fabric",s.fabricType) && hasColourSel(s) );
   const total=fc.length;
   const onTrack=fc.filter(({c})=>c.tone==="ok").length;
@@ -2869,7 +2893,7 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
     if(!st) return false;
     const orderVals=(Array.isArray(t.orderNos)&&t.orderNos.length?t.orderNos:[t.orderNo,st.orderNo]).filter(Boolean);
     const juniorVals=(Array.isArray(t.juniors)&&t.juniors.length?t.juniors:[t.junior,st.owner]).filter(Boolean);
-    const colourVals=String(t.colour||st.colour||"").split(/[,;|/+]+/).map(x=>x.trim()).filter(Boolean);
+    const colourVals=splitColoursAll(t.colour||st.colour||"");
     const matchArray=(key,vals)=>{ const a=arrOf(df[key]); return !a.length || vals.some(v=>a.includes(v)); };
     return matchArray("order",orderVals) && matchArray("junior",juniorVals) && hasSel("fit",st.sampleFit) && hasSel("family",st.family) && hasSel("brand",st.brand) && hasSel("fabric",st.fabricType) && (!arrOf(df.colour).length || arrOf(df.colour).some(v=>colourVals.includes(v)));
   };
@@ -2883,8 +2907,8 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
   // splice carried into drills so the tracker shows the same slice
   const spliceCols=()=>{ const cf={}; const put=(k,col)=>{ const a=arrOf(df[k]); if(a.length) cf[col]=a; }; put("order","orderNo"); put("fit","sampleFit"); put("junior","owner"); put("family","family"); put("brand","brand"); put("fabric","fabricType"); put("colour","colour"); return cf; };
   const spliceSearch=()=> "";
-  const goOwner=(o)=>{ if(target==="todo") drillTodo(todoDrillFilterFromSlice({ owner:o }, df)); else applyDrill({ owner:o, colFilters:spliceCols(), search:spliceSearch() }); };
-  const goAct=(label,key)=>{ const k=stageKeyFromAnyGlobal(key||label); if(target==="todo") drillTodo(todoDrillFilterFromSlice({ activity:[stageLabelFromKeyGlobal(k)||label], activityKey:k?[k]:[], key:k?[k]:[] }, df)); else applyDrill({ activity:k||key, colFilters:spliceCols(), search:spliceSearch() }); };
+  const goOwner=(o)=>{ if(target==="escalation") drillTodo(todoDrillFilterFromSlice({ owner:o, todoType:"Escalation", priority:"Overdue" }, df)); else if(target==="todo") drillTodo(todoDrillFilterFromSlice({ owner:o }, df)); else applyDrill({ owner:o, colFilters:spliceCols(), search:spliceSearch() }); };
+  const goAct=(label,key)=>{ const k=stageKeyFromAnyGlobal(key||label); if(target==="escalation") drillTodo(todoDrillFilterFromSlice({ activity:[stageLabelFromKeyGlobal(k)||label], activityKey:k?[k]:[], key:k?[k]:[], todoType:"Escalation", priority:"Overdue" }, df)); else if(target==="todo") drillTodo(todoDrillFilterFromSlice({ activity:[stageLabelFromKeyGlobal(k)||label], activityKey:k?[k]:[], key:k?[k]:[] }, df)); else applyDrill({ activity:k||key, colFilters:spliceCols(), search:spliceSearch() }); };
   const goPhase=(phaseName)=>{ drillTodo&&drillTodo(todoDrillFilterFromSlice({ phase:phaseName }, df)); };
   const goStatus=(st,extra)=>applyDrill({ status:st, colFilters:{...spliceCols(),...(extra||{})}, search:spliceSearch() });
   const card=(label,val,color,onClick)=>(<button onClick={onClick} disabled={!onClick} style={{ flex:1, minWidth:130, textAlign:"left", background:"var(--surface)", border:"1px solid var(--ink)", padding:"14px 16px", cursor:onClick?"pointer":"default", fontFamily:"inherit" }}><div style={{ fontSize:28, fontWeight:800, fontFamily:"'Archivo',sans-serif", color, lineHeight:1 }}>{val}</div><div style={{ fontSize:10, color:"var(--muted-2)", marginTop:5, letterSpacing:0.5, textTransform:"uppercase" }}>{label}{onClick?" ›":""}</div></button>);
@@ -2897,14 +2921,14 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
       <span style={{ width:54, textAlign:"right", fontSize:10, fontWeight:700 }}>{fmtR?fmtR(v):n}</span>
     </button>); });
   const dashboardSummary=[{ "Report Type":"Current Dashboard", "Slice Styles":total, "On Track":onTrack, "At Risk":atRisk, "Delivery Risk":delRisk, "Released":released, "Overdue Activities":overdueAct }];
-  const dashboardStyleRows=fc.map(({s,c})=>({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Sample Fit":s.sampleFit||"", "Family":s.family||"", "Colour":s.colour||"", "Brand":s.brand||"", "Buyer":s.buyer||"", "Junior":s.owner||"", "Qty":s.qty||0, "Delivery":s.delivery||"", "Status":c.status||"", "Tone":c.tone||"", "Released":c.released?"YES":"", "% Done":c.pct, "Chase":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Next Pending":c.nextPending?c.nextPending.label:"", "Projected Release":c.projRelease?fmt(c.projRelease):"" }));
+  const dashboardStyleRows=fc.map(({s,c})=>({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Sample Fit":s.sampleFit||"", "Family":s.family||"", "Colour":s.colour||"", "Brand":s.brand||"", "Buyer":s.buyer||"", "Junior":s.owner||"", "Qty":s.qty||0, "Delivery":s.delivery||"", "Status":c.status||"", "Tone":c.tone||"", "Released":c.released?"YES":"", "% Done":c.pct, "Chase":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Next Pending":c.nextPending?stageReviewLabel(s,c.nextPending):"", "Projected Release":c.projRelease?fmt(c.projRelease):"" }));
   const dashboardBreakup=fc.map(({s,c})=>{ const nx=c.nextPending||null; const nxDue=nx?(nx.rev||nx.plan):null; const frontier=(c.frontier?[...c.frontier]:[]).map(k=>{ const r=(c.stages||[]).find(x=>x.key===k); return r?stageLabelFromKeyGlobal(r.key):k; }).join(", "); return { "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Colour":s.colour||"", "Buyer / Brand":s.buyer||s.brand||"", "Junior":s.owner||"", "Delivery":s.delivery||"", "Overall Status":c.status||"", "Overall Tone":c.tone||"", "Released":c.released?"YES":"NO", "% Done":c.pct, "Next Pending Stage":nx?stageReviewLabel(s,nx):"", "Next Pending Chase":nx?nx.owner:"", "Next Pending Due":nxDue?fmt(nxDue):"", "Next Pending Overdue?":(nxDue&&TODAY>nxDue)?"YES":"NO", "Actionable Frontier":frontier, "Chase Breakdown":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Fit Branch":c.fitBranch?c.fitBranch.txt:"", "Print Branch":c.printBranch?c.printBranch.txt:"", "Fabric Branch":c.fabricBranch?c.fabricBranch.txt:"", "PP Branch":c.ppBranch?c.ppBranch.txt:"", "Prod File Branch":c.prodFileBranch?c.prodFileBranch.txt:"", "Fabric IH Countdown":c.fabricCountdown?c.fabricCountdown.txt:"", "Projected Release":c.projRelease?fmt(c.projRelease):"", "Release Gate":c.releaseGate?fmt(c.releaseGate):"", "Float Days":c.float==null?"":c.float, "Idle Days":c.idle==null?"":c.idle }; });
   const stageStartFor=(s,c,r)=>{ const st=STAGES.find(x=>x.key===r.key)||{}; const byKey={}; (c.stages||[]).forEach(x=>{ byKey[x.key]=x; }); if(r.key==="fabricIH") return (s.labDipReq && byKey.labAppr && byKey.labAppr.actual) ? byKey.labAppr.actual : parse(s.ordRec); if(st.pred==="__ord") return parse(s.ordRec); return byKey[st.pred] ? byKey[st.pred].actual : null; };
   const stageState=(r)=> r.skipped?"Waived / skipped":(r.rejected?"Rejected":(r.rework?"Rework / resend":(r.actual?"Done":(r.rev?"Revised plan":"Pending"))));
   const dashboardStageDetail=[];
   const dashboardActualVsPlan=[];
   const dashboardRevisedVsActual=[];
-  fc.forEach(({s,c})=>{ (c.stages||[]).forEach(r=>{ const st=STAGES.find(x=>x.key===r.key)||{}; const start=stageStartFor(s,c,r); const due=r.rev||r.plan; const delayDue=(due&&r.actual)?netWorkdays(due,r.actual):null; const delayPlan=(r.plan&&r.actual)?netWorkdays(r.plan,r.actual):null; const delayRev=(r.rev&&r.actual)?netWorkdays(r.rev,r.actual):null; const duration=(start&&r.actual)?Math.max(0,netWorkdays(start,r.actual)||0):null; const frontier=(c.frontier&&c.frontier.has(r.key)); dashboardStageDetail.push({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Colour":s.colour||"", "Buyer / Brand":s.buyer||s.brand||"", "Junior":s.owner||"", "Stage":r.label, "Stage Key":r.key, "Branch":BRANCH_OF[r.key]||"", "Chase Label":r.owner||"", "State":stageState(r), "Actionable Frontier?":frontier?"YES":"NO", "Auto Plan Date":r.plan?fmt(r.plan):"", "Revised Date":r.rev?fmt(r.rev):"", "Actual Date":r.actual?fmt(r.actual):"", "Due Used":due?fmt(due):"", "Due Status":due?(TODAY>due?"Overdue":"Not overdue"):"", "Rejected Date":r.reject?fmt(r.reject):"", "Skipped Date":r.skip?fmt(r.skip):"", "Start Date Used":start?fmt(start):"", "Delay vs Due Days":delayDue==null?"":r1(delayDue), "Delay vs Auto Plan Days":delayPlan==null?"":r1(delayPlan), "Actual vs Revised Days":delayRev==null?"":r1(delayRev), "Actual Duration Days":duration==null?"":r1(duration), "Overall Status":c.status||"" }); if(delayPlan!=null){ dashboardActualVsPlan.push({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Stage":r.label, "Branch":BRANCH_OF[r.key]||"", "Auto Plan Date":fmt(r.plan), "Revised Date":r.rev?fmt(r.rev):"", "Actual Date":fmt(r.actual), "Actual vs Original Plan Days":r1(delayPlan||0), "Accuracy":(delayPlan===0?"On original plan":(delayPlan>0?"Late vs original plan":"Early vs original plan")), "Included?":"YES - auto plan + actual exist" }); } if(r.rev&&r.actual){ dashboardRevisedVsActual.push({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Stage":r.label, "Branch":BRANCH_OF[r.key]||"", "Auto Plan Date":r.plan?fmt(r.plan):"", "Revised Date":fmt(r.rev), "Actual Date":fmt(r.actual), "Actual vs Revised Days":r1(delayRev||0), "Accuracy":(delayRev===0?"On revised date":(delayRev>0?"Late vs revised":"Early vs revised")), "Included?":"YES - revised exists" }); } }); });
+  fc.forEach(({s,c})=>{ (c.stages||[]).forEach(r=>{ const st=STAGES.find(x=>x.key===r.key)||{}; const start=stageStartFor(s,c,r); const due=r.rev||r.plan; const delayDue=(due&&r.actual)?netWorkdays(due,r.actual):null; const delayPlan=(r.plan&&r.actual)?netWorkdays(r.plan,r.actual):null; const delayRev=(r.rev&&r.actual)?netWorkdays(r.rev,r.actual):null; const duration=(start&&r.actual)?Math.max(0,netWorkdays(start,r.actual)||0):null; const frontier=(c.frontier&&c.frontier.has(r.key)); dashboardStageDetail.push({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Colour":s.colour||"", "Buyer / Brand":s.buyer||s.brand||"", "Junior":s.owner||"", "Stage":stageReviewLabel(s,r), "Stage Key":r.key, "Branch":BRANCH_OF[r.key]||"", "Chase Label":r.owner||"", "State":stageState(r), "Actionable Frontier?":frontier?"YES":"NO", "Auto Plan Date":r.plan?fmt(r.plan):"", "Revised Date":r.rev?fmt(r.rev):"", "Actual Date":r.actual?fmt(r.actual):"", "Due Used":due?fmt(due):"", "Due Status":due?(TODAY>due?"Overdue":"Not overdue"):"", "Rejected Date":r.reject?fmt(r.reject):"", "Skipped Date":r.skip?fmt(r.skip):"", "Start Date Used":start?fmt(start):"", "Delay vs Due Days":delayDue==null?"":r1(delayDue), "Delay vs Auto Plan Days":delayPlan==null?"":r1(delayPlan), "Actual vs Revised Days":delayRev==null?"":r1(delayRev), "Actual Duration Days":duration==null?"":r1(duration), "Overall Status":c.status||"" }); if(delayPlan!=null){ dashboardActualVsPlan.push({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Stage":stageReviewLabel(s,r), "Branch":BRANCH_OF[r.key]||"", "Auto Plan Date":fmt(r.plan), "Revised Date":r.rev?fmt(r.rev):"", "Actual Date":fmt(r.actual), "Actual vs Original Plan Days":r1(delayPlan||0), "Accuracy":(delayPlan===0?"On original plan":(delayPlan>0?"Late vs original plan":"Early vs original plan")), "Included?":"YES - auto plan + actual exist" }); } if(r.rev&&r.actual){ dashboardRevisedVsActual.push({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Stage":stageReviewLabel(s,r), "Branch":BRANCH_OF[r.key]||"", "Auto Plan Date":r.plan?fmt(r.plan):"", "Revised Date":fmt(r.rev), "Actual Date":fmt(r.actual), "Actual vs Revised Days":r1(delayRev||0), "Accuracy":(delayRev===0?"On revised date":(delayRev>0?"Late vs revised":"Early vs revised")), "Included?":"YES - revised exists" }); } }); });
   const avgArr=(arr,key)=>arr.length?r1(arr.reduce((sum,row)=>sum+(Number(row[key])||0),0)/arr.length):0;
   const lateAvgArr=(arr,key)=>{ const late=arr.filter(row=>(Number(row[key])||0)>0); return late.length?r1(late.reduce((sum,row)=>sum+(Number(row[key])||0),0)/late.length):0; };
   const dashboardPlanAccuracySummary=[
@@ -2950,7 +2974,7 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
       {sel("Fabric",df.fabric,fabrics,v=>setDf(d=>({...d,fabric:v})))}
       {anyDf && <button onClick={()=>setDf({})} style={{ fontFamily:"inherit", fontSize:10, padding:"5px 9px", cursor:"pointer", border:"1px solid var(--danger)", background:"var(--surface)", color:"var(--danger)", fontWeight:700 }}>clear slice</button>}
       <ReportExportMenu title="Dashboard" prefix="dashboard" sheets={dashboardSheets} defaultMode="detailed" />
-      <span style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6 }}><span style={{ fontSize:10, color:"var(--muted-2)" }}>drill to:</span><div style={{ display:"flex", border:"1px solid var(--ink)" }}>{["tracker","todo"].map(t=>(<button key={t} onClick={()=>setTarget(t)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:700, padding:"5px 10px", cursor:"pointer", border:"none", borderRight:t==="tracker"?"1px solid var(--ink)":"none", background:target===t?"var(--ink)":"var(--surface)", color:target===t?"var(--bg)":"var(--ink)" }}>{t==="tracker"?"Tracker":"To-Do"}</button>))}</div></span>
+      <span style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6 }}><span style={{ fontSize:10, color:"var(--muted-2)" }}>drill to:</span><div style={{ display:"flex", border:"1px solid var(--ink)" }}>{["tracker","todo","escalation"].map((t,i,arr)=>(<button key={t} onClick={()=>setTarget(t)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:700, padding:"5px 10px", cursor:"pointer", border:"none", borderRight:i<arr.length-1?"1px solid var(--ink)":"none", background:target===t?"var(--ink)":"var(--surface)", color:target===t?"var(--bg)":"var(--ink)" }}>{t==="tracker"?"Tracker":t==="escalation"?"Escalation":"To-Do"}</button>))}</div></span>
     </div>
 
     <div style={{ display:"flex", gap:10, flexWrap:"wrap" }}>
@@ -2978,7 +3002,7 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
       <div style={{ flex:1, minWidth:320, background:"var(--surface)", border:"1px solid var(--ink)", padding:16 }}>
         <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>WHO TO CHASE — by chase label</div>
         {bar(owners, maxOwner, (o)=>OWNER_COLOR2[o]||"var(--muted-2)", 64, (o)=>goOwner(o))}
-        <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8 }}>Click to open in {target==="todo"?"To-Do":"Tracker"}.</div>
+        <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8 }}>Click to open in {target==="tracker"?"Tracker":target==="escalation"?"Escalation":"To-Do"}.</div>
       </div>
       <div style={{ flex:1, minWidth:320, background:"var(--surface)", border:"1px solid var(--ink)", padding:16 }}>
         <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>ESCALATION OWNER LOAD</div>
@@ -2993,7 +3017,7 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
             <span style={{ flex:1, height:16, background:"#f0ece3", position:"relative" }}><span style={{ position:"absolute", left:0, top:0, bottom:0, width:`${(v.n/maxAct)*100}%`, background:v.over?"var(--danger)":"var(--accent)" }}/></span>
             <span style={{ width:54, textAlign:"right", fontSize:10, fontWeight:700 }}>{v.n}{v.over?<span style={{ color:"var(--danger)" }}> ({v.over})</span>:null}</span>
           </button>))}
-        <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8 }}>Click to open in {target==="todo"?"To-Do":"Tracker"}. Red = overdue.</div>
+        <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8 }}>Click to open in {target==="tracker"?"Tracker":target==="escalation"?"Escalation":"To-Do"}. Red = overdue.</div>
       </div>
       <div style={{ flex:1, minWidth:320, background:"var(--surface)", border:"1px solid var(--ink)", padding:16 }}>
         <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>WHERE STYLES ARE STUCK</div>
@@ -3035,11 +3059,11 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
 
   const arrOf=(v)=>Array.isArray(v)?v:(v?[v]:[]);
   const hasSel=(key,val)=>{ const a=arrOf(df[key]); return !a.length || a.includes(val); };
-  const hasColourSel=(st)=>{ const a=arrOf(df.colour); if(!a.length) return true; const cols=String(st.colour||"").split(/[,/]/).map(x=>x.trim()).filter(Boolean); return a.some(v=>cols.includes(v)); };
+  const hasColourSel=(st)=>{ const a=arrOf(df.colour); if(!a.length) return true; const cols=splitColoursAll(st.colour); return a.some(v=>cols.includes(v)); };
   const matchDf=(st,except)=> (except==="order"||hasSel("order",st.orderNo)) && (except==="fit"||hasSel("fit",st.sampleFit)) && (except==="junior"||hasSel("junior",st.owner)) && (except==="family"||hasSel("family",st.family)) && (except==="brand"||hasSel("brand",st.brand)) && (except==="fabric"||hasSel("fabric",st.fabricType)) && (except==="colour"||hasColourSel(st));
   const distinctC=(key,fn)=>{ const set=new Set(); computed.forEach(({s:st})=>{ if(!matchDf(st,key)) return; fn(st).forEach(v=>{ if(v) set.add(v); }); }); return [...set].sort(); };
   const orders=distinctC("order",s=>[s.orderNo]); const fits=distinctC("fit",s=>[s.sampleFit]); const juniors=distinctC("junior",s=>[s.owner]); const families=distinctC("family",s=>[s.family]); const brands=distinctC("brand",s=>[s.brand]); const fabrics=distinctC("fabric",s=>[s.fabricType]);
-  const colours=distinctC("colour",s=>String(s.colour||"").split(/[,/]/).map(x=>x.trim()));
+  const colours=distinctC("colour",s=>splitColoursAll(s.colour));
   const fc=computed.filter(({s})=> hasSel("order",s.orderNo) && hasSel("fit",s.sampleFit) && hasSel("junior",s.owner) && hasSel("family",s.family) && hasSel("brand",s.brand) && hasSel("fabric",s.fabricType) && hasColourSel(s) );
 
   const total=fc.length;
@@ -3060,7 +3084,7 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
     if(!st) return false;
     const orderVals=(Array.isArray(t.orderNos)&&t.orderNos.length?t.orderNos:[t.orderNo,st.orderNo]).filter(Boolean);
     const juniorVals=(Array.isArray(t.juniors)&&t.juniors.length?t.juniors:[t.junior,st.owner]).filter(Boolean);
-    const colourVals=String(t.colour||st.colour||"").split(/[,;|/+]+/).map(x=>x.trim()).filter(Boolean);
+    const colourVals=splitColoursAll(t.colour||st.colour||"");
     const matchArray=(key,vals)=>{ const a=arrOf(df[key]); return !a.length || vals.some(v=>a.includes(v)); };
     return matchArray("order",orderVals) && matchArray("junior",juniorVals) && hasSel("fit",st.sampleFit) && hasSel("family",st.family) && hasSel("brand",st.brand) && hasSel("fabric",st.fabricType) && (!arrOf(df.colour).length || arrOf(df.colour).some(v=>colourVals.includes(v)));
   };
@@ -3096,9 +3120,9 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
       if(r.key==="fabricIH") start = (s.labDipReq && byKey.labAppr && byKey.labAppr.actual) ? byKey.labAppr.actual : parse(s.ordRec);
       const duration=start?Math.max(0,netWorkdays(start,r.actual)||0):null;
       const delayPlan=(r.plan&&r.actual)?netWorkdays(r.plan,r.actual):null; const delayRevised=(r.rev&&r.actual)?netWorkdays(r.rev,r.actual):null;
-      delayRecords.push({ style:s.styleNo, order:s.orderNo, buyer:s.buyer||s.brand||"", owner:s.owner||"", stage:r.label, stageKey:r.key, dept:r.owner, delay, delayPlan, delayRevised, duration, actual:r.actual, due, plan:r.plan, revised:r.rev, start });
+      delayRecords.push({ style:s.styleNo, order:s.orderNo, buyer:s.buyer||s.brand||"", owner:s.owner||"", stage:stageReviewLabel(s,r), stageKey:r.key, dept:r.owner, delay, delayPlan, delayRevised, duration, actual:r.actual, due, plan:r.plan, revised:r.rev, start });
       const perfExtra={ delayPlan, delayRevised };
-      addPerf(stagePerf,r.key,r.label,delay,duration,{ owner:r.owner, ...perfExtra });
+      addPerf(stagePerf,r.key,stageReviewLabel(s,r),delay,duration,{ owner:r.owner, ...perfExtra });
       addPerf(deptPerf,r.owner,r.owner,delay,duration,perfExtra);
       if(r.owner==="Buyer") addPerf(buyerPerf,s.buyer||s.brand||"(No buyer)",s.buyer||s.brand||"(No buyer)",delay,duration,perfExtra);
       addPerf(chaseDelay,r.owner||"(No chase label)",r.owner||"(No chase label)",delay,duration,perfExtra);
@@ -3136,8 +3160,8 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
 
   const spliceCols=()=>{ const cf={}; const put=(k,col)=>{ const a=arrOf(df[k]); if(a.length) cf[col]=a; }; put("order","orderNo"); put("fit","sampleFit"); put("junior","owner"); put("family","family"); put("brand","brand"); put("fabric","fabricType"); put("colour","colour"); return cf; };
   const spliceSearch=()=> "";
-  const goOwner=(o)=>{ if(target==="todo") drillTodo(todoDrillFilterFromSlice({ owner:o }, df)); else applyDrill({ owner:o, colFilters:spliceCols(), search:spliceSearch() }); };
-  const goAct=(label,key)=>{ const k=stageKeyFromAnyGlobal(key||label); if(target==="todo") drillTodo(todoDrillFilterFromSlice({ activity:[stageLabelFromKeyGlobal(k)||label], activityKey:k?[k]:[], key:k?[k]:[] }, df)); else applyDrill({ activity:k||key, colFilters:spliceCols(), search:spliceSearch() }); };
+  const goOwner=(o)=>{ if(target==="escalation") drillTodo(todoDrillFilterFromSlice({ owner:o, todoType:"Escalation", priority:"Overdue" }, df)); else if(target==="todo") drillTodo(todoDrillFilterFromSlice({ owner:o }, df)); else applyDrill({ owner:o, colFilters:spliceCols(), search:spliceSearch() }); };
+  const goAct=(label,key)=>{ const k=stageKeyFromAnyGlobal(key||label); if(target==="escalation") drillTodo(todoDrillFilterFromSlice({ activity:[stageLabelFromKeyGlobal(k)||label], activityKey:k?[k]:[], key:k?[k]:[], todoType:"Escalation", priority:"Overdue" }, df)); else if(target==="todo") drillTodo(todoDrillFilterFromSlice({ activity:[stageLabelFromKeyGlobal(k)||label], activityKey:k?[k]:[], key:k?[k]:[] }, df)); else applyDrill({ activity:k||key, colFilters:spliceCols(), search:spliceSearch() }); };
   const goPhase=(phaseName)=>{ drillTodo&&drillTodo(todoDrillFilterFromSlice({ phase:phaseName }, df)); };
   const goStatus=(st,extra)=>applyDrill({ status:st, colFilters:{...spliceCols(),...(extra||{})}, search:spliceSearch() });
   const goSearch=(q)=>applyDrill({ status:"All", colFilters:spliceCols(), search:q||spliceSearch() });
@@ -3159,7 +3183,7 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
       { Check:"Escalation source", Formula:"Escalation Owner Load uses To-Do overdue escalation rows only", Value:escalationTodo.length, Expected:"overdue + escalation owner", Result:escalationTodo.every(t=>t.overdue&&t.escalationOwner)?"OK":"CHECK" },
       { Check:"Slice rows", Formula:"All management tables use filtered slice", Value:fc.length, Expected:total, Result:"OK" }
     ];
-  const currentStyles=fc.map(({s,c})=>({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Fit":s.sampleFit||"", "Family":s.family||"", "Colour":s.colour||"", "Brand":s.brand||"", "Buyer":s.buyer||"", "Junior":s.owner||"", "Qty":s.qty||0, "Delivery":s.delivery||"", "Status":c.status||"", "Tone":c.tone||"", "Released":c.released?"YES":"", "% Done":c.pct, "Chase":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Next Pending":c.nextPending?c.nextPending.label:"", "Projected Release":c.projRelease?fmt(c.projRelease):"" }));
+  const currentStyles=fc.map(({s,c})=>({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Fit":s.sampleFit||"", "Family":s.family||"", "Colour":s.colour||"", "Brand":s.brand||"", "Buyer":s.buyer||"", "Junior":s.owner||"", "Qty":s.qty||0, "Delivery":s.delivery||"", "Status":c.status||"", "Tone":c.tone||"", "Released":c.released?"YES":"", "% Done":c.pct, "Chase":(c.chaseOwners||[]).map(o=>`${o.owner} (${o.count})`).join(", "), "Next Pending":c.nextPending?stageReviewLabel(s,c.nextPending):"", "Projected Release":c.projRelease?fmt(c.projRelease):"" }));
   const currentSliceStageDetail=[];
   fc.forEach(({s,c})=>{ (c.stages||[]).forEach(r=>{ const due=r.rev||r.plan; const start=stageStartFor(s,c,r); const delayDue=(due&&r.actual)?netWorkdays(due,r.actual):null; const delayPlan=(r.plan&&r.actual)?netWorkdays(r.plan,r.actual):null; const delayRevised=(r.rev&&r.actual)?netWorkdays(r.rev,r.actual):null; const duration=(start&&r.actual)?Math.max(0,netWorkdays(start,r.actual)||0):null; currentSliceStageDetail.push({ "Order No":s.orderNo||"", "Style No":s.styleNo||"", "Buyer / Brand":s.buyer||s.brand||"", "Junior / Style Owner":s.owner||"", "Stage":r.label||"", "Chase Label":r.owner||"", "State":stageState(r), "Auto Plan Date":r.plan?fmt(r.plan):"", "Revised Date":r.rev?fmt(r.rev):"", "Due Used":due?fmt(due):"", "Actual Date":r.actual?fmt(r.actual):"", "Start Used":start?fmt(start):"", "Delay vs Due Days":delayDue==null?"":r1(delayDue), "Actual vs Original Plan Days":delayPlan==null?"":r1(delayPlan), "Actual vs Revised Days":delayRevised==null?"":r1(delayRevised), "Actual Duration Days":duration==null?"":r1(duration), "Actionable Frontier?":(c.frontier&&c.frontier.has(r.key))?"YES":"NO" }); }); });
   const stageData=stageRows.map(r=>({"TNA Order":stageOrderOf(r.key),"Section":stageSectionOf(r.key),"Stage":r.label,"Chase Label":r.owner||"","Completed":r.n,"Late Count":r.lateN,"Late %":r.n?Math.round((r.lateN/r.n)*100):0,"Avg Actual Time Days":r1(avg(r.durSum,r.durN)),"Avg Actual vs Original Plan Days":r1(avg(r.planSum,r.planN)),"Avg Delay vs Due Days":r1(avg(r.delaySum,r.n)),"Avg Actual vs Revised Plan Days":r1(avg(r.revSum,r.revN)),"Worst Delay vs Due Days":r1(r.maxDelay),"Duration Records":r.durN,"Original Plan Records":r.planN,"Revised Records":r.revN}));
@@ -3318,7 +3342,7 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
       { label:"Buyer Approval Delay", data:exportBuyerDelayData, detailData:buyerApprovalDetail, modes:["summary","detailed"] },
       { label:"Chase Delay Ranking", data:exportChaseDelayData, detailData:chaseDetailRows, modes:["summary","detailed"] },
       { label:"Buyer Brand Delays", data:exportBrandDelayData, detailData:brandDetailRows, modes:["summary","detailed"] },
-      { label:"Escalation Owner Load", data:escRows.map(([owner,count])=>({"Escalation Owner":owner,"Overdue Items":count})), detailData:escalationTodo.map(t=>({"Order No":t.orderNo||"","Style No":t.styleNo||"","Activity":t.activity||"","Chase Label":t.owner||"","Escalation Owner":t.escalationOwner||"","Escalation Level":t.escalationLevel||"","Days Overdue":t.daysLate||"","Action":t.escalationAction||""})), modes:["summary","detailed"] },
+      { label:"Escalation Owner Load", data:escRows.map(([owner,count])=>({"Escalation Owner":owner,"Overdue Items":count})), detailData:escalationTodo.map(t=>({"Order No":t.orderNo||"","Style No":t.styleNo||"","Activity":t._activityLabel||t.activity||"","Chase Label":t.owner||"","Escalation Owner":t.escalationOwner||"","Escalation Level":t.escalationLevel||"","Days Overdue":t.daysLate||"","Action":t.escalationAction||""})), modes:["summary","detailed"] },
       { label:"Current Slice Styles", data:currentStyles, detailData:currentSliceStageDetail, modes:["detailed"] },
       { label:"Plan Accuracy Summary", data:planAccuracyData, modes:["summary","detailed"] },
       { label:"Actual vs Original Plan", data:planActualData, detailData:detailRowsFor("Actual vs Original Plan", planActualRecords), modes:["summary","detailed"] },
@@ -3400,7 +3424,7 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
       <span style={{ fontSize:10, fontWeight:800, color:"var(--muted-2)", textTransform:"uppercase", letterSpacing:0.5 }}>Slice:</span>
       {sel("Order",df.order,orders,v=>setDf(d=>({...d,order:v})))} {sel("Fit",df.fit,fits,v=>setDf(d=>({...d,fit:v})))} {sel("Colour",df.colour,colours,v=>setDf(d=>({...d,colour:v})))} {sel("Junior",df.junior,juniors,v=>setDf(d=>({...d,junior:v})))} {sel("Family",df.family,families,v=>setDf(d=>({...d,family:v})))} {sel("Brand",df.brand,brands,v=>setDf(d=>({...d,brand:v})))} {sel("Fabric",df.fabric,fabrics,v=>setDf(d=>({...d,fabric:v})))}
       {anyDf && <button onClick={()=>setDf({})} style={{ fontFamily:"inherit", fontSize:10, padding:"6px 10px", cursor:"pointer", border:"1px solid var(--danger)", background:"var(--surface)", color:"var(--danger)", fontWeight:800, borderRadius:8 }}>clear slice</button>}
-      <span style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6 }}><span style={{ fontSize:10, color:"var(--muted-2)" }}>drill to:</span><div style={{ display:"flex", border:"1px solid var(--line-2)", borderRadius:8, overflow:"hidden" }}>{["tracker","todo"].map(t=>(<button key={t} onClick={()=>setTarget(t)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"6px 10px", cursor:"pointer", border:"none", borderRight:t==="tracker"?"1px solid var(--line-2)":"none", background:target===t?"var(--ink)":"var(--surface)", color:target===t?"var(--bg)":"var(--ink)" }}>{t==="tracker"?"Tracker":"To-Do"}</button>))}</div></span>
+      <span style={{ marginLeft:"auto", display:"flex", alignItems:"center", gap:6 }}><span style={{ fontSize:10, color:"var(--muted-2)" }}>drill to:</span><div style={{ display:"flex", border:"1px solid var(--line-2)", borderRadius:8, overflow:"hidden" }}>{["tracker","todo","escalation"].map((t,i,arr)=>(<button key={t} onClick={()=>setTarget(t)} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"6px 10px", cursor:"pointer", border:"none", borderRight:i<arr.length-1?"1px solid var(--line-2)":"none", background:target===t?"var(--ink)":"var(--surface)", color:target===t?"var(--bg)":"var(--ink)" }}>{t==="tracker"?"Tracker":t==="escalation"?"Escalation":"To-Do"}</button>))}</div></span>
     </div>
 
     {anyDf && <div style={{ display:"flex", gap:7, flexWrap:"wrap", margin:"-4px 0 14px" }}>
@@ -3551,14 +3575,19 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
     if(field==="brand") return [t.brand, ...(Array.isArray(t.brands)?t.brands:[])].filter(Boolean);
     if(field==="fabric") return [t.fabric, ...(Array.isArray(t.fabrics)?t.fabrics:[])].filter(Boolean);
     if(field==="buyer") return [t.buyer, ...(Array.isArray(t.buyers)?t.buyers:[])].filter(Boolean);
+    if(field==="planDate") return t.exp?fmt(t.exp):"(Blank)";
+    if(field==="days") return t.overdue?`Late ${Math.abs(Number(t.du)||0)}d`:`Left ${Number(t.du)||0}d`;
+    if(field==="drift") return `${Number(t.driftOriginal)||0}d`;
+    if(field==="revReject") return `${Number(t.revisionCount)||0} rev / ${Number(t.rejectionRound)||0} rej`;
+    if(field==="score") return String(Number(t.priorityScore)||0);
     return t[field];
   };
   // Activity/key/activityKey are handled only by activityPass above. They are excluded from the generic text matcher.
-  const filterFields=["phase","priority","risk","todoType","orderNo","junior","branch","owner","escalationOwner","style","colour","fit","family","brand","fabric","buyer"];
+  const filterFields=["phase","priority","risk","todoType","orderNo","junior","branch","owner","escalationOwner","style","colour","fit","family","brand","fabric","buyer","planDate","days","drift","revReject","score"];
   const passExcept=(t,except)=> (except==="activity" || activityPass(t)) && filterFields.every(field=>field===except || matchesAny(field,candidatesFor(t,field)));
   const pass=(t)=>passExcept(t,null);
-  const distinct=(field)=>{ const vals=new Set(); displayItems.forEach(t=>{ if(!passExcept(t,field)) return; if(field==="priority") vals.add(t.overdue?"Overdue":"Upcoming"); else if(field==="phase") vals.add(phaseOf(t)); else if(field==="key") vals.add(stageLabelOf(activityKeyOf(t))); else if(field==="activity") { const av=t._activityLabel||stageLabelOf(activityKeyOf(t)); if(av) vals.add(av); } else if(field==="style") { if(t.isColour && t.colour) vals.add(t.colour); else if(t.styleNo) vals.add(t.styleNo); } else if(field==="orderNo" && Array.isArray(t.orderNos)&&t.orderNos.length) t.orderNos.forEach(v=>v&&vals.add(v)); else if(field==="junior" && Array.isArray(t.juniors)&&t.juniors.length) t.juniors.forEach(v=>v&&vals.add(v)); else { const v=t[field]; if(v) vals.add(v); } }); return [...vals].sort((a,b)=>String(a).localeCompare(String(b),undefined,{numeric:true,sensitivity:"base"})); };
-  const orders=distinct("orderNo"), juniors=distinct("junior"), activities=distinct("activity"), branches=distinct("branch"), owners=distinct("owner"), escOwners=distinct("escalationOwner"), types=distinct("todoType"), priorities=distinct("priority"), risks=distinct("risk"), phases=["Pre-Fit","Fit / Print","Lab Dip","Fabric IH","PP / Prod"], stylesList=distinct("style");
+  const distinct=(field)=>{ const vals=new Set(); displayItems.forEach(t=>{ if(!passExcept(t,field)) return; if(field==="priority") vals.add(t.overdue?"Overdue":"Upcoming"); else if(field==="phase") vals.add(phaseOf(t)); else if(field==="key") vals.add(stageLabelOf(activityKeyOf(t))); else if(field==="activity") { const av=t._activityLabel||stageLabelOf(activityKeyOf(t)); if(av) vals.add(av); } else if(field==="style") { if(t.isColour && t.colour) vals.add(t.colour); else if(t.styleNo) vals.add(t.styleNo); } else if(field==="orderNo" && Array.isArray(t.orderNos)&&t.orderNos.length) t.orderNos.forEach(v=>v&&vals.add(v)); else if(field==="junior" && Array.isArray(t.juniors)&&t.juniors.length) t.juniors.forEach(v=>v&&vals.add(v)); else { arrVal(candidatesFor(t,field)).forEach(v=>v&&vals.add(v)); } }); return [...vals].sort((a,b)=>String(a).localeCompare(String(b),undefined,{numeric:true,sensitivity:"base"})); };
+  const orders=distinct("orderNo"), juniors=distinct("junior"), activities=distinct("activity"), branches=distinct("branch"), owners=distinct("owner"), escOwners=distinct("escalationOwner"), types=distinct("todoType"), priorities=distinct("priority"), risks=distinct("risk"), phases=["Pre-Fit","Fit / Print","Lab Dip","Fabric IH","PP / Prod"], stylesList=distinct("style"), planDates=distinct("planDate"), dayBuckets=distinct("days"), driftBuckets=distinct("drift"), revRejects=distinct("revReject"), scoreBuckets=distinct("score");
   // Final source for rendered rows. The activity hard gate is applied before and after generic filters.
   const activityScopedDisplayItems=hasActivityGate?displayItems.filter(activityPass):displayItems;
   const shownPre=activityScopedDisplayItems.filter(pass);
@@ -3609,17 +3638,17 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
     <div style={{ padding:"6px 6px" }}>{hsel("branch",branches,"Branch")}</div>
     <div style={{ padding:"6px 6px" }}>{hsel("owner",owners,"Chase")}</div>
     <div style={{ padding:"6px 6px" }}>{hsel("escalationOwner",escOwners,"Escalation")}</div>
-    <div style={{ padding:"6px 8px", fontSize:9, fontWeight:900, textTransform:"uppercase", color:"#8a857a" }}>Plan Date</div>
-    <div style={{ padding:"6px 8px", fontSize:9, fontWeight:900, textTransform:"uppercase", color:"#8a857a" }}>Days Late / Left</div>
-    <div style={{ padding:"6px 8px", fontSize:9, fontWeight:900, textTransform:"uppercase", color:"#8a857a" }}>Drift vs Original</div>
-    <div style={{ padding:"6px 8px", fontSize:9, fontWeight:900, textTransform:"uppercase", color:"#8a857a" }}>Rev / Reject</div>
-    <div style={{ padding:"6px 8px", fontSize:9, fontWeight:900, textTransform:"uppercase", color:"#8a857a" }}>Score</div>
+    <div style={{ padding:"6px 6px" }}>{hsel("planDate",planDates,"Plan Date")}</div>
+    <div style={{ padding:"6px 6px" }}>{hsel("days",dayBuckets,"Days")}</div>
+    <div style={{ padding:"6px 6px" }}>{hsel("drift",driftBuckets,"Drift")}</div>
+    <div style={{ padding:"6px 6px" }}>{hsel("revReject",revRejects,"Rev/Reject")}</div>
+    <div style={{ padding:"6px 6px" }}>{hsel("score",scoreBuckets,"Score")}</div>
     <div style={{ padding:"6px 8px", fontSize:9, fontWeight:900, textTransform:"uppercase", color:"#8a857a" }}>Actions</div>
   </div>;
-  const data=shown.map(t=>({ "Due Priority":t.overdue?"Overdue":"Upcoming", "Risk Bucket":t.priorityBucket||"Daily Chase", "Priority Score":Number(t.priorityScore)||0, "Priority Reason":t.priorityReason||"", "To-Do Section":itemGroup(t)==="fabricLab"?"Fabric / Lab Dip":"Activities", "Type":t.todoType||"Activity", "Order No":t.orderNo||"", "Style / Colour":t.isColour?String(t.colour||""):t.styleNo, "Grouped Count":t.isColour?(t.count||0):"", "Junior":t.junior||"", "Activity":t.activity||"", "Branch":t.branch||"", "Chase Label":t.owner||"", "Escalation Owner":t.escalationOwner||"", "Escalation Level":t.escalationLevel||"", "Escalation Action":t.escalationAction||"", "Original Plan":t.originalPlan?fmt(t.originalPlan):"", "Due Used":t.dueUsed?fmt(t.dueUsed):(t.exp?fmt(t.exp):""), "Days Late / Left":t.overdue?Math.abs(t.du):t.du, "Drift vs Original Days":Number(t.driftOriginal)||0, "Revision Count":Number(t.revisionCount)||0, "Rejection Round":Number(t.rejectionRound)||0, "Style ID":t.id, "Stage Key":t.key, "Activity Key":t.activityKey||t.key, "Fit":t.fit||"", "Family":t.family||"", "Brand":t.brand||"", "Fabric":t.fabric||"", "Buyer":t.buyer||"" }));
+  const data=shown.map(t=>({ "Due Priority":t.overdue?"Overdue":"Upcoming", "Risk Bucket":t.priorityBucket||"Daily Chase", "Priority Score":Number(t.priorityScore)||0, "Priority Reason":t.priorityReason||"", "To-Do Section":itemGroup(t)==="fabricLab"?"Fabric / Lab Dip":"Activities", "Type":t.todoType||"Activity", "Order No":t.orderNo||"", "Style / Colour":t.isColour?String(t.colour||""):t.styleNo, "Grouped Count":t.isColour?(t.count||0):"", "Junior":t.junior||"", "Activity":t._activityLabel||t.activity||"", "Branch":t.branch||"", "Chase Label":t.owner||"", "Escalation Owner":t.escalationOwner||"", "Escalation Level":t.escalationLevel||"", "Escalation Action":t.escalationAction||"", "Original Plan":t.originalPlan?fmt(t.originalPlan):"", "Due Used":t.dueUsed?fmt(t.dueUsed):(t.exp?fmt(t.exp):""), "Days Late / Left":t.overdue?Math.abs(t.du):t.du, "Drift vs Original Days":Number(t.driftOriginal)||0, "Revision Count":Number(t.revisionCount)||0, "Rejection Round":Number(t.rejectionRound)||0, "Style ID":t.id, "Stage Key":t.key, "Activity Key":t.activityKey||t.key, "Fit":t.fit||"", "Family":t.family||"", "Brand":t.brand||"", "Fabric":t.fabric||"", "Buyer":t.buyer||"" }));
   const summary=[{ "Report Type":"To-Do", "Section":todoMode==="all"?"All":(todoMode==="activity"?"Activities":"Fabric / Lab Dip"), "Shown Items":shown.length, "Base Activity Items":baseItems.length, "Escalation Rows Included":includeEsc?escalationRows.length:0, "Total Display Items":displayItems.length, "Overdue":overdue.length, "Upcoming":upcoming.length, "Critical / Hidden Risk":critical.length, "Hidden Risk Items":shown.filter(t=>String(t.priorityBucket||"")==="Hidden Risk").length }];
   const byOwner={}; const byActivity={};
-  shown.forEach(t=>{ byOwner[t.owner||"(blank)"]=(byOwner[t.owner||"(blank)"]||0)+1; byActivity[t.activity||"(blank)"]=(byActivity[t.activity||"(blank)"]||0)+1; });
+  shown.forEach(t=>{ byOwner[t.owner||"(blank)"]=(byOwner[t.owner||"(blank)"]||0)+1; byActivity[(t._activityLabel||t.activity)||"(blank)"]=(byActivity[(t._activityLabel||t.activity)||"(blank)"]||0)+1; });
   const ownerRows=Object.entries(byOwner).map(([k,v])=>({"Chase Label":k,"Items":v}));
   const activityRows=Object.entries(byActivity).map(([k,v])=>({"Activity":k,"Items":v}));
   const riskRows=Object.entries(shown.reduce((m,t)=>{ const k=t.priorityBucket||"Daily Chase"; const x=m[k]=m[k]||{n:0,maxScore:0,drift:0}; x.n++; x.maxScore=Math.max(x.maxScore,Number(t.priorityScore)||0); x.drift+=Number(t.driftOriginal)||0; return m; },{})).map(([k,v])=>({"Risk Bucket":k,"Items":v.n,"Max Priority Score":v.maxScore,"Total Drift Days":v.drift}));
