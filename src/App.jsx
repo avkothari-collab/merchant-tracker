@@ -586,6 +586,7 @@ const colorFor=(id)=>{ let h=0; const s=String(id); for(let i=0;i<s.length;i++) 
 const initials=(n)=>String(n||"?").trim().split(/\s+/).map(w=>w[0]||"").slice(0,2).join("").toUpperCase()||"?";
 function PeerTag({ who }){ if(!who||!who.length) return null; const anyEdit=who.some(w=>w.editing); const lead=who.find(w=>w.editing)||who[0]; const names=who.map(w=>w.name).join(", "); const label=who.length>1?(who.length+" · "+names):lead.name; return (<span style={{ position:"absolute", inset:0, border:(anyEdit?"2px dashed ":"2px solid ")+lead.color, pointerEvents:"none", zIndex:4, boxSizing:"border-box" }}><span title={names} style={{ position:"absolute", bottom:0, left:0, background:lead.color, color:"var(--surface)", fontSize:8, fontWeight:700, padding:"0 4px", whiteSpace:"nowrap", lineHeight:"12px", maxWidth:"100%", overflow:"hidden", textOverflow:"ellipsis" }}>{anyEdit?"✎ ":""}{label}</span></span>); }
 function MerchTracker({ me, onSignOut }){
+  const APP_BUILD_LABEL="v31cu stabilized filter/drill/export";
   const [styles,setStyles]=useState([]); // loaded from Supabase on mount
   const role=(me&&me.role)||"junior";
   const [usersOpen,setUsersOpen]=useState(false);
@@ -1275,7 +1276,7 @@ function MerchTracker({ me, onSignOut }){
   };
   const activeBranchStyles=useMemo(()=>styles.map(s=>styleForActiveBranch(s)),[styles,stageEvents]);
   const stylesComputeKey=useMemo(()=>activeBranchStyles.map(s=>styleComputeSignature(s)+"::resends="+JSON.stringify(effectiveResends&&Object.fromEntries(Object.entries(effectiveResends||{}).filter(([k])=>String(k).startsWith(String(s.id)+":"))))).join("||"),[activeBranchStyles,effectiveResends]);
-  const computed=useMemo(()=>{ const t=perfNow(); const cache=computeCacheRef.current; const liveIds=new Set(); let hits=0, recomputed=0; const out=activeBranchStyles.map(s=>{ liveIds.add(s.id); const resendSig=JSON.stringify(effectiveResends&&Object.fromEntries(Object.entries(effectiveResends||{}).filter(([k])=>String(k).startsWith(String(s.id)+":")))); const sig=styleComputeSignature(s)+"::resends="+resendSig; const old=cache.get(s.id); if(old && old.sig===sig && old.cfgKey===cfgComputeKey){ hits++; return old.out; } const c=computeStyle(s,cfg,effectiveResends); const item={s:styles.find(raw=>raw.id===s.id)||s,c,idx:buildSearchIndex(s,c)}; cache.set(s.id,{ sig, cfgKey:cfgComputeKey, out:item }); recomputed++; return item; }); for(const id of cache.keys()){ if(!liveIds.has(id)) cache.delete(id); } const ms=Math.round((perfNow()-t)*10)/10; const hist=pushPerfSample(perfRef.current.samples,ms); perfRef.current.computeMs=ms; perfRef.current.samples=hist.samples; perfRef.current.p95Ms=hist.p95; perfRef.current.styles=styles.length; perfRef.current.cacheHits=hits; perfRef.current.recomputed=recomputed; return out; },[styles,activeBranchStyles,stylesComputeKey,cfg,cfgComputeKey,effectiveResends]);
+  const computed=useMemo(()=>{ const t=perfNow(); const cache=computeCacheRef.current; const liveIds=new Set(); let hits=0, recomputed=0; const rawById=new Map((styles||[]).map(raw=>[String(raw.id),raw])); const out=activeBranchStyles.map(activeStyle=>{ liveIds.add(activeStyle.id); const rawStyle=rawById.get(String(activeStyle.id))||activeStyle; const resendSig=JSON.stringify(effectiveResends&&Object.fromEntries(Object.entries(effectiveResends||{}).filter(([k])=>String(k).startsWith(String(activeStyle.id)+":")))); const sig=styleComputeSignature(activeStyle)+"::resends="+resendSig; const old=cache.get(activeStyle.id); if(old && old.sig===sig && old.cfgKey===cfgComputeKey){ hits++; const cached=old.out||{}; return { ...cached, rawStyle, activeStyle:cached.activeStyle||activeStyle, s:cached.activeStyle||activeStyle }; } const c=computeStyle(activeStyle,cfg,effectiveResends); /* IMPORTANT: live screens must read s/activeStyle, never rawStyle. rawStyle is kept only for save/history/audit. */ const item={ rawStyle, activeStyle, s:activeStyle, c, idx:buildSearchIndex(activeStyle,c) }; cache.set(activeStyle.id,{ sig, cfgKey:cfgComputeKey, out:item }); recomputed++; return item; }); for(const id of cache.keys()){ if(!liveIds.has(id)) cache.delete(id); } const ms=Math.round((perfNow()-t)*10)/10; const hist=pushPerfSample(perfRef.current.samples,ms); perfRef.current.computeMs=ms; perfRef.current.samples=hist.samples; perfRef.current.p95Ms=hist.p95; perfRef.current.styles=styles.length; perfRef.current.cacheHits=hits; perfRef.current.recomputed=recomputed; return out; },[styles,activeBranchStyles,stylesComputeKey,cfg,cfgComputeKey,effectiveResends]);
   // Live/report source: archived styles stay available in Tracker Archive view, but are excluded from all live reports by default.
   const activeComputed=useMemo(()=>computed.filter(({s})=>!s.archived),[computed]);
   const chaseOwnerOptions=useMemo(()=>["All", ...Array.from(new Set([...STAGES.map(st=>(cfg.stageOwners&&cfg.stageOwners[st.key])||DEFAULT_STAGE_OWNERS[st.key]||st.owner), ...CHASE_LABELS])).filter(Boolean)], [cfg]);
@@ -1419,7 +1420,7 @@ function MerchTracker({ me, onSignOut }){
       const matchS=statusFilter==="All"||(statusFilter==="At Risk"&&(c.tone==="late"||c.tone==="warn"))||(statusFilter==="On Track"&&c.tone==="ok")||(statusFilter==="Released"&&c.released);
       const matchF=cfEntries.every(([col,allowed])=> passCol(s,c,col,allowed));
       const matchO=ownerFilter==="All"||(c.chaseOwners||[]).some(o=>filterNorm(o.owner)===filterNorm(ownerFilter));
-      const matchA=!activityFilter||(c.frontier&&c.frontier.has(activityFilter));
+      const matchA=!activityFilter||(c.frontier&&c.frontier.has(activityFilter))||(c.stages||[]).some(r=>r&&r.key===activityFilter&&!r.done);
       const matchArch=archiveView==="all"?true:(archiveView==="archived"?!!s.archived:!s.archived);
       const matchFollow=!followFilter||follows.has(s.id);
       return matchQ&&matchS&&matchF&&matchO&&matchA&&matchArch&&matchFollow&&presetPass(s,c);
@@ -2645,64 +2646,60 @@ function FilterMenu({ values, allowed, onSet, onClose }){
   const [q,setQ]=useState("");
   const anchorRef=useRef(null); const [pos,setPos]=useState(null);
   const norm=(v)=>String(v==null?"":v).replace(/\s+/g," ").trim();
-  const allValues=useMemo(()=>[...new Set((values||[]).map(norm).filter(Boolean))].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true,sensitivity:"base"})),[values]);
+  // Freeze the value list when the popup opens. Earlier the menu rebuilt while users clicked
+  // checkboxes, causing the dropdown to flash/turn white or lose pending selections when the
+  // filtered table recalculated underneath it.
+  const [allValues]=useState(()=>[...new Set((values||[]).map(norm).filter(Boolean))].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true,sensitivity:"base"})));
   const rawAllowed=Array.isArray(allowed)?allowed:null;
   const isNoneSelected=Array.isArray(rawAllowed) && rawAllowed.some(v=>String(v)===FILTER_NONE);
-  const allowedArr=Array.isArray(rawAllowed)?rawAllowed.map(norm).filter(v=>v && v!==FILTER_NONE):null;
-  const selectedSet=new Set(isNoneSelected?[]:(allowedArr||allValues).map(norm));
+  const initialAllowed=Array.isArray(rawAllowed)?rawAllowed.map(norm).filter(v=>v && v!==FILTER_NONE):null;
+  const [pending,setPending]=useState(()=> new Set(isNoneSelected?[]:(initialAllowed||allValues).map(norm)) );
+  useEffect(()=>{ setPending(new Set(isNoneSelected?[]:(initialAllowed||allValues).map(norm))); },[allowed]);
   const shown=allValues.filter(v=>filterNorm(v).includes(filterNorm(q)));
   const filterIsActive=Array.isArray(rawAllowed);
-  const allShownSelected=shown.length>0 && shown.every(v=>selectedSet.has(v));
-  const selectedCount=filterIsActive?selectedSet.size:allValues.length;
-  const setSelection=(arr)=>{
-    const clean=[...new Set((arr||[]).map(norm).filter(Boolean))];
-    // zero selected must remain an active filter that returns zero rows; it is not "clear filter".
-    // selecting all values is the only case equivalent to clearing this column filter.
-    if(clean.length===allValues.length){ onSet(null); return; }
-    onSet(clean);
+  const selectedCount=pending.size;
+  const apply=()=>{
+    const arr=[...pending];
+    if(arr.length===allValues.length){ onSet(null); onClose&&onClose(); return; }
+    onSet(arr);
+    onClose&&onClose();
   };
-  const toggle=(v)=>{
-    const cur=new Set(filterIsActive?selectedSet:allValues);
-    if(cur.has(v)) cur.delete(v); else cur.add(v);
-    setSelection([...cur]);
-  };
-  const selectShown=()=>{
-    const cur=new Set(filterIsActive?selectedSet:[]);
-    shown.forEach(v=>cur.add(v));
-    setSelection([...cur]);
-  };
-  const clearShown=()=>{
-    const cur=new Set(filterIsActive?selectedSet:allValues);
-    shown.forEach(v=>cur.delete(v));
-    setSelection([...cur]);
-  };
-  useEffect(()=>{ const a=anchorRef.current; if(!a) return; const r=a.getBoundingClientRect(); const W=236,H=326; let left=r.left-200; if(left+W>window.innerWidth-8) left=window.innerWidth-8-W; if(left<8) left=8; let top=r.bottom+2; if(top+H>window.innerHeight-8) top=Math.max(8,window.innerHeight-8-H); setPos({top,left}); },[]);
+  const toggle=(v)=>setPending(cur=>{ const n=new Set(cur); if(n.has(v)) n.delete(v); else n.add(v); return n; });
+  const selectShown=()=>setPending(cur=>{ const n=new Set(cur); shown.forEach(v=>n.add(v)); return n; });
+  const clearShown=()=>setPending(cur=>{ const n=new Set(cur); shown.forEach(v=>n.delete(v)); return n; });
+  const clearFilter=()=>{ onSet(null); onClose&&onClose(); };
+  const none=()=>{ setPending(new Set()); };
+  useEffect(()=>{ const a=anchorRef.current; if(!a) return; const r=a.getBoundingClientRect(); const W=260,H=350; let left=r.left-220; if(left+W>window.innerWidth-8) left=window.innerWidth-8-W; if(left<8) left=8; let top=r.bottom+4; if(top+H>window.innerHeight-8) top=Math.max(8,window.innerHeight-8-H); setPos({top,left}); },[]);
+  const btn={ fontFamily:"'JetBrains Mono', monospace", fontSize:9, fontWeight:900, padding:"5px 7px", border:"1px solid #1f1f1d", background:"#fffdf8", color:"#1f1f1d", cursor:"pointer" };
   const menu=(
-    <div onClick={e=>e.stopPropagation()} style={{ position:"fixed", top:pos?pos.top:-9999, left:pos?pos.left:-9999, zIndex:360, background:"var(--surface)", color:"var(--ink)", border:"1px solid var(--ink)", boxShadow:"4px 4px 0 var(--ink)", padding:8, width:234, textTransform:"none", letterSpacing:0, fontWeight:400, maxHeight:"82vh", overflowY:"auto" }}>
-      <input autoFocus value={q} onClick={e=>e.stopPropagation()} onKeyDown={e=>e.stopPropagation()} onChange={e=>setQ(e.target.value)} placeholder="search values…" style={{ width:"100%", fontFamily:"inherit", fontSize:11, padding:"4px 6px", border:"1px solid var(--line-2)", outline:"none", marginBottom:6, boxSizing:"border-box" }}/>
-      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginBottom:6 }}>
-        <button onClick={()=>onSet(null)} title="remove this column filter" style={{ ...chip, fontSize:9, background:!filterIsActive?"var(--ink)":"var(--surface)", color:!filterIsActive?"var(--bg)":"var(--ink)" }}>All / clear filter</button>
-        <button onClick={()=>setSelection(allValues)} disabled={!allValues.length} style={{ ...chip, fontSize:9, opacity:allValues.length?1:.5 }}>Select all</button>
-        <button onClick={selectShown} disabled={!shown.length} style={{ ...chip, fontSize:9, opacity:shown.length?1:.5 }}>Select matches</button>
-        <button onClick={clearShown} disabled={!shown.length} style={{ ...chip, fontSize:9, opacity:shown.length?1:.5 }}>Uncheck matches</button>
+    <div onClick={e=>e.stopPropagation()} style={{ position:"fixed", top:pos?pos.top:-9999, left:pos?pos.left:-9999, zIndex:9999, background:"#fffdf8", color:"#1f1f1d", border:"1px solid #1f1f1d", boxShadow:"4px 4px 0 rgba(31,31,29,.28)", padding:9, width:260, textTransform:"none", letterSpacing:0, fontWeight:400, maxHeight:"82vh", overflowY:"auto" }}>
+      <div style={{ fontSize:10, fontWeight:950, marginBottom:6, display:"flex", justifyContent:"space-between", gap:8 }}><span>Column filter</span><button onClick={onClose} style={{...btn,padding:"2px 7px"}}>×</button></div>
+      <input autoFocus value={q} onClick={e=>e.stopPropagation()} onKeyDown={e=>e.stopPropagation()} onChange={e=>setQ(e.target.value)} placeholder="search values…" style={{ width:"100%", fontFamily:"inherit", fontSize:11, padding:"5px 7px", border:"1px solid #8f8577", outline:"none", marginBottom:7, boxSizing:"border-box", background:"#ffffff", color:"#1f1f1d" }}/>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginBottom:7 }}>
+        <button onClick={clearFilter} title="remove this column filter" style={{ ...btn, background:!filterIsActive?"#1f1f1d":"#fffdf8", color:!filterIsActive?"#fffdf8":"#1f1f1d" }}>All / clear</button>
+        <button onClick={()=>setPending(new Set(allValues))} disabled={!allValues.length} style={{ ...btn, opacity:allValues.length?1:.5 }}>Select all</button>
+        <button onClick={selectShown} disabled={!shown.length} style={{ ...btn, opacity:shown.length?1:.5 }}>Select matches</button>
+        <button onClick={clearShown} disabled={!shown.length} style={{ ...btn, opacity:shown.length?1:.5 }}>Uncheck matches</button>
+        <button onClick={none} style={{ ...btn, gridColumn:"1 / span 2", background:"#fff2f0", color:"#b82117" }}>Show zero rows</button>
       </div>
-      <div style={{ fontSize:9, color:"var(--muted-2)", marginBottom:5 }}>{filterIsActive?`${selectedCount} of ${allValues.length} selected`:`All ${allValues.length} values visible`}{q?` · ${shown.length} match search`:""}</div>
-      <div style={{ maxHeight:188, overflowY:"auto", borderTop:"1px solid var(--line-3)" }}>
-        {shown.map(v=>(<label key={v} style={{ display:"flex", alignItems:"center", gap:6, fontSize:10, padding:"3px 0", borderBottom:"1px solid var(--line-3)", cursor:"pointer" }}>
-          <input type="checkbox" checked={selectedSet.has(v)} onChange={()=>toggle(v)} style={{ cursor:"pointer" }}/>
+      <div style={{ fontSize:9, color:"#6f6a61", marginBottom:5 }}>{selectedCount} of {allValues.length} selected{q?` · ${shown.length} match search`:""} · changes apply only when you click Apply</div>
+      <div style={{ maxHeight:190, overflowY:"auto", borderTop:"1px solid #e7dcc2" }}>
+        {shown.map(v=>(<label key={v} style={{ display:"flex", alignItems:"center", gap:7, fontSize:10, padding:"4px 0", borderBottom:"1px solid #eee4d2", cursor:"pointer", color:"#1f1f1d" }}>
+          <input type="checkbox" checked={pending.has(v)} onChange={()=>toggle(v)} style={{ cursor:"pointer" }}/>
           <span style={{ flex:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{v}</span>
-          <button onClick={(e)=>{ e.preventDefault(); e.stopPropagation(); setSelection([v]); }} title="show only this" style={{ fontSize:8, border:"1px solid var(--line-2)", background:"var(--bg)", cursor:"pointer", padding:"1px 5px", color:"var(--muted-3)" }}>only</button>
+          <button onClick={(e)=>{ e.preventDefault(); e.stopPropagation(); setPending(new Set([v])); }} title="show only this" style={{ fontSize:8, border:"1px solid #8f8577", background:"#fffdf8", cursor:"pointer", padding:"1px 5px", color:"#1f1f1d" }}>only</button>
         </label>))}
-        {shown.length===0 && <div style={{ fontSize:10, color:"var(--muted-1)", padding:"6px 0" }}>No matching values.</div>}
+        {shown.length===0 && <div style={{ fontSize:10, color:"#6f6a61", padding:"6px 0" }}>No matching values.</div>}
       </div>
-      <div style={{ display:"flex", gap:6, marginTop:6 }}>
-        <button onClick={()=>onSet(null)} style={{ ...chip, flex:1, fontSize:9 }}>Clear filter</button>
-        <button onClick={onClose} style={{ ...chip, flex:1, fontSize:9, background:"var(--ink)", color:"var(--bg)" }}>Done</button>
+      <div style={{ display:"flex", gap:6, marginTop:7 }}>
+        <button onClick={clearFilter} style={{ ...btn, flex:1 }}>Clear filter</button>
+        <button onClick={apply} style={{ ...btn, flex:1, background:"#1f1f1d", color:"#fffdf8" }}>Apply</button>
       </div>
     </div>
   );
   return (<><span ref={anchorRef} style={{ position:"absolute", width:0, height:0 }}/>{createPortal(menu, document.body)}</>);
 }
+
 function FillPanel({ count, role, activeCol, onApply, onClose }){
   const validActiveCol=(col)=> col && (["ordRec","delivery"].includes(col)||STAGE_KEYS.includes(col)) ? col : "";
   const activeFillCol=validActiveCol(activeCol);
@@ -3429,13 +3426,32 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   // when Activity/Stage is selected, a row may pass only if its canonical stage key matches.
   // Display labels such as "Escalate: Strike-off", "Fit Send rework / resend", grouped lab rows, etc.
   // are ignored for matching. This prevents Lab Dip / Artwork / Fit Send rows leaking into Strike-off.
+  // HARD activity gate for To-Do. Do not trust the dropdown label alone.
+  // The gate is ON whenever the UI has any activity text/key selected, even if mapping fails.
+  // Then we match by canonical stage key first, and by normalized token as a fallback.
+  // This prevents the visible filter "Activity: Strike-off" from showing Lab Dip / Artwork rows.
+  const selectedActivityRawValues=[...arrVal(tf.activityKey), ...arrVal(tf.key), ...arrVal(tf.activity)].filter(v=>v!=null&&String(v).trim()!="");
   const selectedActivityKeySet=(()=>{
-    const vals=[...arrVal(tf.activityKey), ...arrVal(tf.key), ...arrVal(tf.activity)].filter(v=>v!=null&&String(v).trim()!=="");
-    const keys=vals.map(v=>stageKeyFromAny(v)).filter(Boolean);
+    const keys=selectedActivityRawValues.map(v=>stageKeyFromAny(v)).filter(Boolean);
     return new Set(keys);
   })();
-  const hasActivityGate=selectedActivityKeySet.size>0;
-  const activityPass=(t)=> !hasActivityGate || selectedActivityKeySet.has(activityKeyOf(t));
+  const selectedActivityTokenSet=(()=>new Set(selectedActivityRawValues.map(v=>filterToken(v)).filter(Boolean)))();
+  const hasActivityGate=selectedActivityRawValues.length>0;
+  const activityPass=(t)=>{
+    if(!hasActivityGate) return true;
+    const rowKey=String((t&&t.key)||(t&&t.activityKey)||"");
+    const rowActivityKey=String((t&&t.activityKey)||(t&&t.key)||"");
+    // Hard gate first: if we could resolve the selected activity to a stage key, the row must have
+    // that exact stage key. No display-text fallback is allowed in this case; that was how Lab Dip,
+    // Artwork, and Fit Send rows leaked into a Strike-off filter.
+    if(selectedActivityKeySet.size>0){
+      return selectedActivityKeySet.has(rowKey) || selectedActivityKeySet.has(rowActivityKey);
+    }
+    // Fallback only when the selected value cannot be mapped to a known stage key.
+    const rk=activityKeyOf(t)||"";
+    const rowTokens=[stageLabelOf(rk), rk, activityCanonical(t), t.activity, t.originalActivity, t.activityLabel].map(v=>filterToken(v)).filter(Boolean);
+    return rowTokens.some(tok=>selectedActivityTokenSet.has(tok));
+  };
 
   const matchesAny=(field,candidates)=>{
     const selected=selectedFor(field);
@@ -3465,9 +3481,9 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   const pass=(t)=>passExcept(t,null);
   const distinct=(field)=>{ const vals=new Set(); displayItems.forEach(t=>{ if(!passExcept(t,field)) return; if(field==="priority") vals.add(t.overdue?"Overdue":"Upcoming"); else if(field==="phase") vals.add(phaseOf(t)); else if(field==="key") vals.add(stageLabelOf(t.key)); else if(field==="activity") { const av=stageLabelOf(activityKeyOf(t))||activityCanonical(t); if(av) vals.add(av); } else if(field==="style") { if(t.isColour && t.colour) vals.add(t.colour); else if(t.styleNo) vals.add(t.styleNo); } else if(field==="orderNo" && Array.isArray(t.orderNos)&&t.orderNos.length) t.orderNos.forEach(v=>v&&vals.add(v)); else if(field==="junior" && Array.isArray(t.juniors)&&t.juniors.length) t.juniors.forEach(v=>v&&vals.add(v)); else { const v=t[field]; if(v) vals.add(v); } }); return [...vals].sort((a,b)=>String(a).localeCompare(String(b),undefined,{numeric:true,sensitivity:"base"})); };
   const orders=distinct("orderNo"), juniors=distinct("junior"), activities=distinct("activity"), branches=distinct("branch"), owners=distinct("owner"), escOwners=distinct("escalationOwner"), types=distinct("todoType"), priorities=distinct("priority"), risks=distinct("risk"), phases=["Pre-Fit","Fit / Print","Lab Dip","Fabric IH","PP / Prod"], stylesList=distinct("style");
-  const shownPre=displayItems.filter(pass);
-  // Root safeguard: the final rendered rows are also checked by the canonical activity key.
-  // This prevents display labels, escalation labels, grouped colour rows, or stale filter state from leaking wrong activities into To-Do.
+  // Final source for rendered rows. The activity hard gate is applied before and after generic filters.
+  const activityScopedDisplayItems=hasActivityGate?displayItems.filter(activityPass):displayItems;
+  const shownPre=activityScopedDisplayItems.filter(pass);
   const shown=shownPre.filter(activityPass);
   const filterViolations=shown.filter(t=>!activityPass(t) || !pass(t));
   const overdue=shown.filter(t=>t.overdue), upcoming=shown.filter(t=>!t.overdue), critical=shown.filter(t=>t.overdue && (Number(t.daysLate)||0)>5);
@@ -3579,7 +3595,7 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
       {anyF && <button onClick={()=>{ setTf({}); setFilter&&setFilter({}); }} style={{ fontFamily:"inherit", fontSize:10, padding:"5px 9px", cursor:"pointer", border:"1px solid var(--danger)", background:"var(--surface)", color:"var(--danger)", fontWeight:700 }}>clear filters</button>}
       <span style={{ marginLeft:"auto" }}><ReportExportMenu title="To-Do" prefix="todo" sheets={todoSheets} defaultMode="detailed" /></span>
     </div>
-    <div style={{ display:"flex", alignItems:"baseline", gap:12, margin:"4px 0 8px", flexWrap:"wrap" }}><span style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13 }}>TO-DO · {shown.length}</span>{overdue.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"var(--danger)" }}>{overdue.length} overdue</span>}{upcoming.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"#7a560f" }}>{upcoming.length} upcoming</span>}{critical.length>0 && <span style={{ fontSize:11, fontWeight:900, color:"var(--danger)" }}>{critical.length} critical &gt;5d</span>}{hasActivityGate && <span style={{ fontSize:10, fontWeight:900, color:filterViolations.length?"var(--danger)":"var(--success)", border:"1px solid "+(filterViolations.length?"var(--danger)":"var(--success)"), padding:"3px 7px", borderRadius:999 }}>Filter check: Activity = {[...selectedActivityKeySet].map(stageLabelOf).join(", ")} · wrong rows {filterViolations.length}</span>}</div>
+    <div style={{ display:"flex", alignItems:"baseline", gap:12, margin:"4px 0 8px", flexWrap:"wrap" }}><span style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13 }}>TO-DO · {shown.length}</span>{overdue.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"var(--danger)" }}>{overdue.length} overdue</span>}{upcoming.length>0 && <span style={{ fontSize:11, fontWeight:700, color:"#7a560f" }}>{upcoming.length} upcoming</span>}{critical.length>0 && <span style={{ fontSize:11, fontWeight:900, color:"var(--danger)" }}>{critical.length} critical &gt;5d</span>}{hasActivityGate && <span style={{ fontSize:10, fontWeight:900, color:filterViolations.length?"var(--danger)":"var(--success)", border:"1px solid "+(filterViolations.length?"var(--danger)":"var(--success)"), padding:"3px 7px", borderRadius:999 }}>Filter engine v31ct · Activity raw: {selectedActivityRawValues.join(", ")} · key: {[...selectedActivityKeySet].map(stageLabelOf).join(", ")||"token fallback"} · wrong rows {filterViolations.length}</span>}</div>
     <div style={{ display:"flex", gap:10, flexWrap:"wrap", marginBottom:10 }}>{card("Shown",shown.length,"current filter total")}{card("Upcoming",upcoming.length,"within watch window","#7a560f")}{card("Overdue",overdue.length,"missed plan/revised","var(--danger)")}{card("Critical",critical.length,">5 working days late","var(--danger)")}</div>
     <div style={{ border:"1px solid var(--line-2)", borderRadius:12, background:"var(--surface)", boxShadow:"var(--card-shadow)", padding:12, marginBottom:10 }}><div style={{ fontSize:11, fontWeight:950, color:"var(--muted-3)", textTransform:"uppercase", marginBottom:8, letterSpacing:.35 }}>Activity summary</div><div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(230px,1fr))", gap:9 }}>{activitySummary.map(a=><button key={a.activity} onClick={()=>applyTodoActivity(a.activity,a.activityKey)} style={{ border:"1px solid var(--line-3)", background:"var(--bg)", textAlign:"left", padding:"10px 11px", cursor:"pointer", fontFamily:"inherit", borderRadius:10 }}><div style={{ fontSize:12, fontWeight:950, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", marginBottom:7 }}>{a.activity}</div><div style={{ display:"flex", gap:7, flexWrap:"wrap" }}><span style={{ display:"inline-flex", alignItems:"center", gap:4, background:"#fff4d8", color:"#8a5200", border:"1px solid #d58a13", borderRadius:999, padding:"3px 7px", fontSize:11, fontWeight:950 }}>U <b style={{ fontSize:15 }}>{a.upcoming}</b></span><span style={{ display:"inline-flex", alignItems:"center", gap:4, background:"#ffe4dc", color:"#b82117", border:"1px solid #c5251a", borderRadius:999, padding:"3px 7px", fontSize:11, fontWeight:950 }}>O <b style={{ fontSize:15 }}>{a.overdue}</b></span><span style={{ display:"inline-flex", alignItems:"center", gap:4, background:"#ffd4cc", color:"#9f1712", border:"1px solid #9f1712", borderRadius:999, padding:"3px 7px", fontSize:11, fontWeight:950 }}>Critical <b style={{ fontSize:15 }}>{a.critical}</b></span></div></button>)}</div></div>
     <div style={{ overflowX:"auto", border:"1px solid var(--line-3)", borderRadius:10, background:"var(--surface)" }}>
