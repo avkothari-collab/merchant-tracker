@@ -969,6 +969,31 @@ function MerchTracker({ me, onSignOut }){
     if(dup){ window.alert("Duplicate blocked. Another row already has this Order No + Style No:\n\nOrder No: "+nextOrder+"\nStyle No: "+nextStyle+"\n\nChange cancelled to protect the unique key."); return false; }
     return window.confirm("Change "+label+"?\n\nThis changes the unique key used by upload matching, duplicate checks, comments/history lookup, and reports.\n\nOld "+label+": "+(oldVal||"(blank)")+"\nNew "+label+": "+newVal+"\n\nContinue?");
   };
+  const validateReworkActualDate=(style,field,val)=>{
+    // Re-send actual must belong to the CURRENT rejection branch.
+    // If user accidentally enters a date before the rejection date, it was being saved but ignored by active-branch logic,
+    // which looked like "actual not registering". Block it with a clear message instead.
+    try{
+      if(!style||!field||!val||!STAGE_KEYS.includes(field)) return true;
+      const appr=APPR_OF_SEND[field];
+      if(!appr) return true;
+      const rejVal=style.rejects&&style.rejects[appr];
+      const approvalDone=style.actuals&&style.actuals[appr];
+      const approvalSkipped=style.skips&&style.skips[appr];
+      if(!rejVal||approvalDone||approvalSkipped) return true;
+      const d=parse(val);
+      const r=parse(rejVal);
+      if(!d||!r) return true;
+      if(dateSerial(d) < dateSerial(r)){
+        const sendLabel=((STAGES.find(x=>x.key===field)||{}).label||field).replace(' Send','');
+        const apprLabel=(STAGES.find(x=>x.key===appr)||{}).label||'approval';
+        window.alert(`${sendLabel} re-send actual cannot be before the current rejection date.\n\n${apprLabel} rejected: ${fmt(r)}\nYou entered actual: ${fmt(d)}\n\nEnter the real re-send actual date on/after the rejection date, or use the ↻ corner for revised planning.`);
+        return false;
+      }
+      return true;
+    }catch(e){ return true; }
+  };
+
   const confirmIdentityBatchChanges=(changes)=>{
     const planned=[];
     Object.entries(changes||{}).forEach(([id,ch])=>{
@@ -997,6 +1022,7 @@ function MerchTracker({ me, onSignOut }){
     maybePinEditedRow(id);
     const isStage=STAGE_KEYS.includes(field);
     const willTrackResend=isStage&&shouldTrackResend(curStyle,field,val);
+    if(willTrackResend && val && !validateReworkActualDate(curStyle,field,val)) return;
     if(willTrackResend){
       const appr=APPR_OF_SEND[field];
       const round=activeRejectRound(curStyle,field,appr)||1;
@@ -1443,7 +1469,17 @@ function MerchTracker({ me, onSignOut }){
     if(rawReworkOrRejectedCell(id,col)) return true;
     return !!(r && (r.rework || r.rejected) && !r.skipped && !r.autoClosed);
   };
-  const preferredDateMode=(id,col,requested="actual")=> (requested==="actual" && prefersRevisedDateEntry(id,col)) ? "rev" : requested;
+  // Normal cell entry must open ACTUAL. Revised planning is now only via the ↻ corner button.
+  // This prevents operators from accidentally changing revised commitments when they meant to enter actual re-send / re-approval.
+  const preferredDateMode=(id,col,requested="actual")=> requested;
+  const shouldForceRoundActualEntry=(id,col)=>{
+    if(!isStageCol(col)) return false;
+    const s=styles.find(x=>x.id===id);
+    if(!s) return false;
+    const linkedRejected=linkedApprovalRejectedOpen(s,col);
+    const selfRejected=!!(REJECTABLE.includes(col)&&s.rejects&&s.rejects[col]&&!(s.skips&&s.skips[col])&&!(s.actuals&&s.actuals[col]));
+    return !!(linkedRejected||selfRejected||isResendEntrySlot(s,col));
+  };
   const linkedApprovalRejectedOpen=(s,col)=>{
     if(!s||!isStageCol(col)) return false;
     const apprK=APPR_OF_SEND[col];
@@ -1470,6 +1506,7 @@ function MerchTracker({ me, onSignOut }){
     const curS=styles.find(x=>x.id===editing.id);
     const effectiveMode=(editing.mode==="actual" && !editing.forceActual) ? preferredDateMode(editing.id,editing.col,"actual") : editing.mode;
     const isExplicitResendActual=(effectiveMode==="actual" && editing.forceActual && isStageCol(editing.col) && isResendEntrySlot(curS,editing.col));
+    if(isExplicitResendActual && val && !validateReworkActualDate(curS,editing.col,val)) return;
     if(val===null){
       // Blank explicit re-send actual clears only the latest re-send actual; it never deletes the original first-send actual.
       if(isExplicitResendActual){ clearLatestResendActual(editing.id,editing.col); return; }
@@ -1483,7 +1520,7 @@ function MerchTracker({ me, onSignOut }){
     setEditing(null); setCalOpen(false);
   };
   const dateEditor=(id,col,mode)=>{ const s=styles.find(x=>x.id===id); const forceActual=!!(editing&&editing.id===id&&editing.col===col&&editing.forceActual); const effectiveMode=(mode==="actual"&&!forceActual)?preferredDateMode(id,col,"actual"):mode; const _cmp=computed.find(x=>x.s.id===id); const _stR=_cmp&&(_cmp.c.stages||[]).find(x=>x.key===col); const planFb=_stR?(_stR.rev||_stR.plan):null; const isResend=(effectiveMode==="actual"&&forceActual&&isStageCol(col)&&isResendEntrySlot(s,col)); const realStored= effectiveMode==="rev"?(isStageCol(col)?currentRoundRevisedValue(s,col):(s&&s.revs&&s.revs[col])):effectiveMode==="reject"?(s&&s.rejects&&s.rejects[col]):(isStageCol(col)?(s&&s.actuals[col]):(s&&s[col])); const stored=isResend?latestResendActualValue(s,col):realStored; const baseLabel=col==="ordRec"?"Order Date":col==="delivery"?"Delivery Date":((STAGES.find(x=>x.key===col)||{}).label||col); const linkedRejectCtx=linkedApprovalRejectedOpen(s,col); const rejectedApprovalCtx=!!(REJECTABLE.includes(col)&&s&&s.rejects&&s.rejects[col]&&!(s.skips&&s.skips[col])&&!(s.actuals&&s.actuals[col])); const roundCtx=isStageCol(col)&&(rawReworkOrRejectedCell(id,col)||linkedRejectCtx||rejectedApprovalCtx||(effectiveMode==="rev"&&activeRoundForCell(s,col)>0)||isResend); const activeRound=roundCtx?activeRoundForCell(s,col):0; const colLabel=roundCtx&&APPR_OF_SEND[col]?baseLabel.replace(" Send","")+" RE-SEND "+(activeRound||1):roundCtx&&REJECTABLE.includes(col)?baseLabel.replace(" Appr","")+" RE-APPR "+(activeRound||1):baseLabel; const modeLabel=effectiveMode==="rev"?(roundCtx?"REVISED":"REVISED"):effectiveMode==="reject"?"REJECTED":(isResend?"ACTUAL":"ACTUAL"); const mc=effectiveMode==="rev"?"var(--accent)":effectiveMode==="reject"?"var(--danger)":"var(--info)"; const isRoundRev=effectiveMode==="rev"&&roundCtx; return (<span onClick={e=>e.stopPropagation()} style={{ position:"absolute", top:1, left:1, zIndex:80, display:"flex", flexDirection:"column", gap:1, background:"var(--surface)", border:"1px solid "+mc, padding:"2px 4px", boxShadow:"2px 2px 0 rgba(0,0,0,0.18)" }}><span style={{ fontSize:8, fontWeight:700, color:mc, textTransform:"uppercase", letterSpacing:0.3, whiteSpace:"nowrap" }}>{colLabel} · {modeLabel}</span>{isRoundRev&&<span style={{ fontSize:8, color:"var(--revised)", fontWeight:800, whiteSpace:"nowrap" }}>actual stays active · editing revised commitment</span>}{isResend&&realStored&&<span style={{ fontSize:8, color:"#b4531a", fontWeight:700, whiteSpace:"nowrap" }}>first sent kept: {fmt(parse(realStored))}</span>}<span style={{ display:"flex", alignItems:"center", gap:2, position:"relative" }}><input autoFocus onFocus={e=>{ if((e.target.value||"").length>2) e.target.select(); }} value={editVal} placeholder={isRoundRev?"revised resend/re-approval date":(isResend?"actual re-send/re-approval date":"dd/mm/yyyy")} onChange={e=>setEditVal(e.target.value.replace(/[^0-9\/\-. ]/g,""))} onKeyDown={e=>{ e.stopPropagation(); if(e.key==="Enter") commitDate(); else if(e.key==="Escape"){ setEditing(null); setCalOpen(false); } }} onBlur={()=>{ if(!calOpen) commitDate(); }} style={{ width:isResend?96:80, fontFamily:"inherit", fontSize:11, border:"none", outline:"none" }}/>{stored && <button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); if(isResend) clearLatestResendActual(id,col); else if(effectiveMode==="rev") setRev(id,col,null); else if(effectiveMode==="reject") setReject(id,col,null); else setField(id,col,null); setEditing(null); setCalOpen(false); }} title={"Clear "+modeLabel.toLowerCase()+" date"} style={{ border:"1px solid var(--line-2)", background:"var(--surface)", cursor:"pointer", padding:"0 4px", fontSize:10, lineHeight:"16px" }}>clear</button>}<button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); setCalOpen(o=>!o); }} title="calendar" style={{ border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:0, fontSize:12 }}>📅</button>{calOpen && <CalPopup label={colLabel+" · "+modeLabel} value={stored} fallback={planFb} onClose={()=>setCalOpen(false)} onPick={(d)=>{ if(effectiveMode==="rev") setRev(id,col,d); else if(effectiveMode==="reject") setReject(id,col,d); else setField(id,col,d); setEditing(null); setCalOpen(false); }}/>}</span></span>); };
-    const startEdit=(id,col,initialChar)=>{ if(!isEditableCol(col)) return; if(!canEdit(role,col,"actual")) return; if(isDateCol(col)){ beginDate(id,col,preferredDateMode(id,col,"actual")); return; } if(peerLockBlocks(id,col)) return; const s=styles.find(x=>x.id===id); setEditing({id,col,mode:"text"}); if(col==="qty") setEditVal(initialChar??String(s.qty)); else if(col==="__style") setEditVal(initialChar??s.styleNo); else setEditVal(initialChar??(s[col]||"")); };
+    const startEdit=(id,col,initialChar)=>{ if(!isEditableCol(col)) return; if(!canEdit(role,col,"actual")) return; if(isDateCol(col)){ beginDate(id,col,"actual",initialChar,shouldForceRoundActualEntry(id,col)); return; } if(peerLockBlocks(id,col)) return; const s=styles.find(x=>x.id===id); setEditing({id,col,mode:"text"}); if(col==="qty") setEditVal(initialChar??String(s.qty)); else if(col==="__style") setEditVal(initialChar??s.styleNo); else setEditVal(initialChar??(s[col]||"")); };
   const commitText=(overrideVal)=>{ if(!editing) return false; const f=editing.col==="__style"?"styleNo":editing.col; const raw=overrideVal!=null?overrideVal:editVal; if(editing.mode==="text"||editing.mode===undefined){ if(!isDateCol(editing.col)) setField(editing.id,f,raw); } setEditing(null); return true; };
   const finishEditing=()=>{ if(!editing) return; if(editing.mode==="actual"||editing.mode==="rev"||editing.mode==="reject") commitDate(); else commitText(); };
 
@@ -1668,7 +1705,7 @@ function MerchTracker({ me, onSignOut }){
     else if(e.key==="Enter"||e.key==="F2"){ e.preventDefault(); startEdit(sel.id,sel.col); }
     else if(e.key==="Delete"||e.key==="Backspace"){ if(focus) clearRange(); else clearCellByContext(sel.id,sel.col); e.preventDefault(); }
     else if(e.key==="Escape"){ clearSelection(); }
-    else if(e.key.length===1&&!e.metaKey&&!e.ctrlKey){ if(isDateCol(sel.col)&&/[0-9]/.test(e.key)){ beginDate(sel.id,sel.col,preferredDateMode(sel.id,sel.col,"actual"),e.key); e.preventDefault(); } else if(sel.col==="qty"&&/[0-9]/.test(e.key)){ startEdit(sel.id,"qty",e.key); e.preventDefault(); } else if(sel.col==="__style"||TEXT_COLS.includes(sel.col)){ startEdit(sel.id,sel.col,e.key); e.preventDefault(); } }
+    else if(e.key.length===1&&!e.metaKey&&!e.ctrlKey){ if(isDateCol(sel.col)&&/[0-9]/.test(e.key)){ beginDate(sel.id,sel.col,"actual",e.key,shouldForceRoundActualEntry(sel.id,sel.col)); e.preventDefault(); } else if(sel.col==="qty"&&/[0-9]/.test(e.key)){ startEdit(sel.id,"qty",e.key); e.preventDefault(); } else if(sel.col==="__style"||TEXT_COLS.includes(sel.col)){ startEdit(sel.id,sel.col,e.key); e.preventDefault(); } }
   };
   const jumpToEnter=(id,stageKey)=>{ const col=stageKey||"__style"; setSel({id,col}); setFocus(null); requestAnimationFrame(()=>setTimeout(()=>scrollToCell(id,col),40)); }; // jump + select only — centers target in grid; double-click / F2 to edit
 
@@ -2160,8 +2197,8 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
                   const activeReworkPlanning=!!(cs && !cs.actual && !cs.skipped && !cs.autoClosed && linkedApprovalRejectedOpen(s,st.key));
                   const bg=bgFor(s.id,st.key,(cs&&cs.skipped)?"var(--tint-waive)":(cs&&cs.rejected)?"var(--tint-reject)":(activeReworkPlanning||cs&&cs.rework)?"var(--tint-rework)":(cs&&cs.actual&&cs.histReject?"var(--tint-histrej)":(isNext?"var(--tint-next)":"var(--surface)")));
                   return (
-                    <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} onDoubleClick={(e)=>{ e.stopPropagation(); const mode=preferredDateMode(s.id,st.key,"actual"); if(mode==="rev" ? canRev : editable) beginDate(s.id,st.key,mode); }}
-                      style={{ border:"1px solid var(--line-1)", padding:0, position:"relative", overflow:(editing&&editing.id===s.id&&editing.col===st.key)?"visible":"hidden", background:bg, boxShadow:ringFor(s.id,st.key)||(isNext?"inset 0 0 0 2px var(--accent)":null), cursor:(preferredDateMode(s.id,st.key,"actual")==="rev"?canRev:editable)?"cell":"default", ...activeCellStyle(s.id,st.key) }}>
+                    <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} onDoubleClick={(e)=>{ e.stopPropagation(); if(editable) beginDate(s.id,st.key,"actual",undefined,shouldForceRoundActualEntry(s.id,st.key)); }}
+                      style={{ border:"1px solid var(--line-1)", padding:0, position:"relative", overflow:(editing&&editing.id===s.id&&editing.col===st.key)?"visible":"hidden", background:bg, boxShadow:ringFor(s.id,st.key)||(isNext?"inset 0 0 0 2px var(--accent)":null), cursor:editable?"cell":"default", ...activeCellStyle(s.id,st.key) }}>
                       <div className="mt-stage-cell-body" style={{ minHeight:Math.max(34,rowH-4), padding:"12px 30px 11px 30px", fontSize:11.2, color:cs.actual?"var(--ink)":"var(--muted-6)" }}>
                         {showAux && cs.plan && <span style={{ display:"block", fontSize:8, color:"#bcb6a8", lineHeight:1.3 }}>auto {fmt(cs.plan)}{cs.rev?` · rev ${fmt(cs.rev)}`:""}</span>}
                         {cs.autoClosed ? (
