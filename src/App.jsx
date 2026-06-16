@@ -2655,7 +2655,8 @@ function FilterMenu({ values, allowed, onSet, onClose }){
   const initialAllowed=Array.isArray(rawAllowed)?rawAllowed.map(norm).filter(v=>v && v!==FILTER_NONE):null;
   const [pending,setPending]=useState(()=> new Set(isNoneSelected?[]:(initialAllowed||allValues).map(norm)) );
   useEffect(()=>{ setPending(new Set(isNoneSelected?[]:(initialAllowed||allValues).map(norm))); },[allowed]);
-  const shown=allValues.filter(v=>filterNorm(v).includes(filterNorm(q)));
+  const menuFilterNorm=(v)=>String(v==null?"":v).replace(/\s+/g," ").trim().toLowerCase();
+  const shown=allValues.filter(v=>menuFilterNorm(v).includes(menuFilterNorm(q)));
   const filterIsActive=Array.isArray(rawAllowed);
   const selectedCount=pending.size;
   const apply=()=>{
