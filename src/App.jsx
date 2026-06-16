@@ -176,15 +176,17 @@ const latestTrackedResendDate=(s,k,rejectDate,resendMap)=>{
   const arr=Array.isArray(resendMap&&resendMap[resendHistoryKey(s,k)])?resendMap[resendHistoryKey(s,k)].map(normalizeResendEntry).filter(Boolean):[];
   // Important: do not infer a resend only because the visible actual date is after the rejection date.
   // A valid resend is one explicitly recorded by the resend editor / Fill Date resend path, not the first stored actual.
-  let best=null;
+  // Use the latest recorded event by history order, not the maximum date. This allows correcting a wrong resend actual
+  // to an earlier date without the old/wrong later date continuing to win calculations.
+  let latest=null;
   arr.forEach((x,i)=>{
     const src=String((x&&x.source)||"").toLowerCase();
-    const isFirst=src.includes("first send") || (i===0 && arr.length>1);
+    const isFirst=src.includes("first send") || (i===0 && arr.length>1 && !src.includes("stage_events"));
     if(isFirst) return;
     const d=parse(x&&x.newVal);
-    if(d && d>rejectDate && (!best || d>best)) best=d;
+    if(d && d>rejectDate) latest=d;
   });
-  return best;
+  return latest;
 };
 const isRepeatStyleNoDev=(s)=>!s.fitReq && !s.printReq && !s.labDipReq && !s.ppNeeded;
 const stageApplies=(s,st)=>{
@@ -675,7 +677,7 @@ function MerchTracker({ me, onSignOut }){
   const hydrateOfflineCache=()=>{ try{ const raw=localStorage.getItem("mt_offline_snapshot_v1"); if(!raw) return; const snap=JSON.parse(raw); if(!snap||!Array.isArray(snap.styles)||!snap.styles.length) return; setStyles(snap.styles); if(snap.cfg) setCfg({ ...DEFAULT_CFG, ...snap.cfg, leads:{...DEFAULT_CFG.leads,...(snap.cfg.leads||{})}, stageOwners:{...DEFAULT_CFG.stageOwners,...(snap.cfg.stageOwners||{})}, rework:{...DEFAULT_CFG.rework,...(snap.cfg.rework||{})}, upcoming:{...DEFAULT_CFG.upcoming,...(snap.cfg.upcoming||{})}, escalationRules:Array.isArray(snap.cfg.escalationRules)&&snap.cfg.escalationRules.length?snap.cfg.escalationRules:DEFAULT_ESCALATION_RULES.map(x=>({...x})) }); if(snap.fills) setFills(snap.fills); if(snap.notes) setNotes(snap.notes); logAppError("offline cache",`showing cached tracker while Supabase refreshes · ${snap.styles.length} styles`); }catch(e){} };
   const writeOfflineCache=(payload)=>{ try{ localStorage.setItem("mt_offline_snapshot_v1", JSON.stringify({ ...payload, at:new Date().toISOString() })); }catch(e){} };
   // LOAD everything from Supabase (also used by the Sync button)
-  const loadShared=async()=>{ hydrateOfflineCache(); try{
+  const loadShared=async(opts={})=>{ const useCache=opts.useCache!==false; if(useCache) hydrateOfflineCache(); try{
     // Supabase caps a single select() at 1000 rows. With 100+ styles x 13 stages, stage_dates was being silently truncated, so cells beyond row 1000 rendered blank even though the data was in the DB. Fetch EVERY row in pages.
     const fetchAll=async(table)=>{ let out=[], from=0; const size=1000; for(let i=0;i<100;i++){ const { data, error }=await supabase.from(table).select("*").range(from, from+size-1); if(error){ logAppError("load "+table,error); break; } if(!data||!data.length) break; out=out.concat(data); if(data.length<size) break; from+=size; } return out; };
     const styData = await fetchAll("styles"); styData.sort((a,b)=>(a.id||0)-(b.id||0));
@@ -790,8 +792,21 @@ function MerchTracker({ me, onSignOut }){
   useEffect(()=>{ if(!loadedRef.current) return; const t=setTimeout(()=>{ supabase.from("app_settings").upsert({ id:"stage_resends", data:resends||{} }).then(()=>{}).catch(()=>{}); },700); return ()=>clearTimeout(t); },[resends]);
   useEffect(()=>{ if(!loadedRef.current) return; const t=setTimeout(()=>{ supabase.from("app_settings").upsert({ id:"stage_revisions", data:revHistory||{} }).then(()=>{}).catch(()=>{}); },700); return ()=>clearTimeout(t); },[revHistory]);
   const [remoteChanged,setRemoteChanged]=useState(false); // another user wrote data
+  const [syncBusy,setSyncBusy]=useState(false); // manual pull/reload status; never performs undo
   const flash=()=>{ setSaved(true); clearTimeout(savedTimer.current); savedTimer.current=setTimeout(()=>setSaved(false),1200); };
   const logAppError=(area,err,extra)=>{ const msg=(err&&err.message)?err.message:String(err||""); const row={ id:Date.now()+Math.random(), at:new Date().toISOString(), area, msg, extra:extra||"" }; setErrorLog(p=>[row,...p].slice(0,100)); console.error(area,err); };
+  const manualSync=async()=>{
+    if(syncBusy) return;
+    if(hasUnsavedLocalChanges() && !window.confirm("You have unsaved local edits. Sync will pull the latest cloud data and may replace local unsaved changes. Continue?")) return;
+    setSyncBusy(true);
+    try{
+      await loadShared({ useCache:false });
+      setRemoteChanged(false);
+      setFuture([]);
+      flash();
+    }catch(e){ logAppError("manual sync failed",e); }
+    finally{ setSyncBusy(false); }
+  };
   const eventStyleId=(id)=>String(id==null?"":id);
   const stageEventsFor=(styleId,stageKey,linkedStageKey)=> (stageEvents||[]).filter(e=>String(e.style_id)===eventStyleId(styleId) && (!stageKey || e.stage_key===stageKey) && (!linkedStageKey || e.linked_stage_key===linkedStageKey));
   const maxEventRound=(styleId,stageKey,linkedStageKey,eventType)=>{
@@ -1002,10 +1017,26 @@ function MerchTracker({ me, onSignOut }){
     const ws=XLSX.utils.json_to_sheet(data); const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,sheet); XLSX.writeFile(wb,name+"_"+iso(TODAY)+".xlsx"); }catch(e){ logAppError("export failed",e); alert("Export failed: "+(e.message||e)); } };
   const bulkVisibleSummary=()=>{ const vis=rows.map(r=>r.s); const buyers=[...new Set(vis.map(s=>s.buyer||s.brand||"—").filter(Boolean))].slice(0,5); const owners=[...new Set(vis.map(s=>s.owner||"—").filter(Boolean))].slice(0,6); const sample=vis.slice(0,8).map(s=>`${s.orderNo||"—"} · ${s.styleNo||"—"}`); return { count:vis.length, buyers, owners, sample, more:Math.max(0,vis.length-sample.length) }; };
   const openBulkConfirm=(payload)=>{ const ids=rows.map(r=>r.s.id); if(!ids.length){ alert("No visible styles to update."); return; } const summary=bulkVisibleSummary(); setBulkConfirm({ ...payload, ids, summary }); };
-  const applyBulkConfirm=()=>{ const bc=bulkConfirm; if(!bc) return; const ids=new Set(bc.ids||[]); if(!ids.size){ setBulkConfirm(null); return; } pushHistory();
+  const applyBulkConfirm=async()=>{ const bc=bulkConfirm; if(!bc) return; const ids=new Set(bc.ids||[]); const idList=[...ids]; if(!ids.size){ setBulkConfirm(null); return; } pushHistory();
     try{ supabase.from("audit_log").insert({ style_id:null, style_no:"", col:"Bulk Action", field:"bulk action", old_val:`${ids.size} visible styles`, new_val:bc.title||bc.actionText||bc.kind||"Bulk action", actor_id:me.id, actor_name:me.name||me.email }).then(()=>{}).catch(()=>{}); }catch(e){}
-    if(bc.kind==="appendRemark"){ const note=String(bc.note||"").trim(); setStyles(prev=>prev.map(s=>ids.has(s.id)?{...s,remarks:[s.remarks,note].filter(Boolean).join(" | ")}:s)); }
-    else { const clean=Object.fromEntries(Object.entries(bc.patch||{}).filter(([_,v])=>v!==undefined)); setStyles(prev=>prev.map(s=>ids.has(s.id)?{...s,...clean}:s)); }
+    if(bc.kind==="appendRemark"){
+      const note=String(bc.note||"").trim();
+      setStyles(prev=>prev.map(s=>ids.has(s.id)?{...s,remarks:[s.remarks,note].filter(Boolean).join(" | ")}:s));
+    } else {
+      const clean=Object.fromEntries(Object.entries(bc.patch||{}).filter(([_,v])=>v!==undefined));
+      setStyles(prev=>prev.map(s=>ids.has(s.id)?{...s,...clean}:s));
+      // Archive/restore and other bulk patches should not rely only on the debounce save.
+      // Persist immediately so restore works even if the row disappears from the current Archive slice.
+      try{
+        if(Object.keys(clean).length){
+          const { error }=await supabase.from("styles").update(clean).in("id",idList);
+          if(error) throw error;
+          savedRef.current.sty={...(savedRef.current.sty||{})};
+          stylesRef.current.forEach(st=>{ if(ids.has(st.id)){ const ns={...st,...clean}; savedRef.current.sty[st.id]=JSON.stringify(styleToRow(ns)); } });
+        }
+      }catch(e){ logAppError("bulk patch save failed",e); alert("Bulk update saved locally but cloud save failed: "+(e.message||e)); }
+    }
+    if(bc.kind==="patch" && bc.patch && bc.patch.archived===false){ setArchiveView("active"); }
     flash(); setBulkConfirm(null); setBulkActionsOpen(false);
   };
   const archiveFiltered=(val)=>{ const label=val?"Archive visible styles":"Restore visible styles"; openBulkConfirm({ title:label, kind:"patch", patch:{ archived:val }, impact:val?"Archived styles will be hidden from the active sheet. This is reversible from Archive view.":"Restored styles will return to the active sheet.", actionText:val?"Archive styles":"Restore styles", danger:val }); };
@@ -1021,8 +1052,67 @@ function MerchTracker({ me, onSignOut }){
   // Live recompute guard: dashboards/management/export must never read stale computed TNA.
   // The old cache only checked the style object reference; stage/date edits and realtime patches can leave nested data looking unchanged to a reference check.
   // This signature includes actual/revised/reject/skip dates and style master fields, so Lab Dip Approval etc. refresh every live report immediately.
-  const stylesComputeKey=useMemo(()=>styles.map(s=>styleComputeSignature(s)+"::resends="+JSON.stringify(resends&&Object.fromEntries(Object.entries(resends||{}).filter(([k])=>String(k).startsWith(String(s.id)+":"))))).join("||"),[styles,resends]);
-  const computed=useMemo(()=>{ const t=perfNow(); const cache=computeCacheRef.current; const liveIds=new Set(); let hits=0, recomputed=0; const out=styles.map(s=>{ liveIds.add(s.id); const resendSig=JSON.stringify(resends&&Object.fromEntries(Object.entries(resends||{}).filter(([k])=>String(k).startsWith(String(s.id)+":")))); const sig=styleComputeSignature(s)+"::resends="+resendSig; const old=cache.get(s.id); if(old && old.sig===sig && old.cfgKey===cfgComputeKey){ hits++; return old.out; } const c=computeStyle(s,cfg,resends); const item={s,c,idx:buildSearchIndex(s,c)}; cache.set(s.id,{ sig, cfgKey:cfgComputeKey, out:item }); recomputed++; return item; }); for(const id of cache.keys()){ if(!liveIds.has(id)) cache.delete(id); } const ms=Math.round((perfNow()-t)*10)/10; const hist=pushPerfSample(perfRef.current.samples,ms); perfRef.current.computeMs=ms; perfRef.current.samples=hist.samples; perfRef.current.p95Ms=hist.p95; perfRef.current.styles=styles.length; perfRef.current.cacheHits=hits; perfRef.current.recomputed=recomputed; return out; },[styles,stylesComputeKey,cfg,cfgComputeKey]);
+  const effectiveResends=useMemo(()=>{
+    const out={};
+    Object.entries(resends||{}).forEach(([k,v])=>{ out[k]=Array.isArray(v)?v.slice():[]; });
+    const evs=(stageEvents||[]).slice().sort((a,b)=>new Date(a.created_at||0)-new Date(b.created_at||0));
+    evs.forEach(e=>{
+      if(!e||!e.style_id||!e.stage_key) return;
+      const key=String(e.style_id)+":"+e.stage_key;
+      const typ=String(e.event_type||"").toLowerCase();
+      if(typ==="resend_actual"){
+        const val=e.new_value || e.event_date || "";
+        if(!val) return;
+        const arr=out[key]?out[key].slice():[];
+        arr.push({ at:e.created_at||"", source:"stage_events resend_actual", roundNo:Number(e.round_no)||0, oldVal:e.old_value||"", newVal:val, stage:e.stage_key, styleId:e.style_id, styleNo:e.style_no||"", orderNo:e.order_no||"" });
+        out[key]=arr;
+      } else if(typ==="clear_resend_actual"){
+        const arr=out[key]?out[key].slice():[];
+        for(let i=arr.length-1;i>=0;i--){
+          const x=normalizeResendEntry(arr[i]);
+          const src=String((x&&x.source)||"").toLowerCase();
+          if(src.includes("first send")) continue;
+          arr.splice(i,1); break;
+        }
+        out[key]=arr;
+      }
+    });
+    return out;
+  },[resends,stageEvents]);
+  const latestResendActualValue=(s,field)=>{
+    if(!s||!field) return "";
+    const appr=APPR_OF_SEND[field];
+    const rej=appr&&s.rejects?parse(s.rejects[appr]):null;
+    const arr=Array.isArray(effectiveResends&&effectiveResends[resendHistoryKey(s,field)])?effectiveResends[resendHistoryKey(s,field)].map(normalizeResendEntry).filter(Boolean):[];
+    let latest="";
+    arr.forEach((x,i)=>{
+      const src=String((x&&x.source)||"").toLowerCase();
+      const isFirst=src.includes("first send") || (i===0 && arr.length>1 && !src.includes("stage_events"));
+      if(isFirst) return;
+      const d=parse(x&&x.newVal);
+      if(d && (!rej || d>rej)) latest=x.newVal||"";
+    });
+    return latest;
+  };
+  const clearLatestResendActual=(id,field)=>{
+    const st=styles.find(x=>x.id===id);
+    if(!st||!field) return;
+    const appr=APPR_OF_SEND[field];
+    const latest=latestResendActualValue(st,field);
+    if(!latest){ setEditing(null); setCalOpen(false); return; }
+    if(!window.confirm(`Clear latest ${roundLabelFor(st,field,"RE-SEND")} actual date?\n\nFirst send actual stays as history.`)) return;
+    const round=activeRejectRound(st,field,appr)||1;
+    insertStageEvent(st,field,appr,"clear_resend_actual",round,null,latest,null,`Cleared ${roundLabelFor(st,field,"RE-SEND")} actual`);
+    setResends(prev=>{
+      const key=st.id+":"+field;
+      const arr=Array.isArray(prev&&prev[key])?prev[key].slice():[];
+      for(let i=arr.length-1;i>=0;i--){ const x=normalizeResendEntry(arr[i]); const src=String((x&&x.source)||"").toLowerCase(); if(src.includes("first send")) continue; arr.splice(i,1); break; }
+      return {...(prev||{}),[key]:arr};
+    });
+    flash(); setEditing(null); setCalOpen(false);
+  };
+  const stylesComputeKey=useMemo(()=>styles.map(s=>styleComputeSignature(s)+"::resends="+JSON.stringify(effectiveResends&&Object.fromEntries(Object.entries(effectiveResends||{}).filter(([k])=>String(k).startsWith(String(s.id)+":"))))).join("||"),[styles,effectiveResends]);
+  const computed=useMemo(()=>{ const t=perfNow(); const cache=computeCacheRef.current; const liveIds=new Set(); let hits=0, recomputed=0; const out=styles.map(s=>{ liveIds.add(s.id); const resendSig=JSON.stringify(effectiveResends&&Object.fromEntries(Object.entries(effectiveResends||{}).filter(([k])=>String(k).startsWith(String(s.id)+":")))); const sig=styleComputeSignature(s)+"::resends="+resendSig; const old=cache.get(s.id); if(old && old.sig===sig && old.cfgKey===cfgComputeKey){ hits++; return old.out; } const c=computeStyle(s,cfg,effectiveResends); const item={s,c,idx:buildSearchIndex(s,c)}; cache.set(s.id,{ sig, cfgKey:cfgComputeKey, out:item }); recomputed++; return item; }); for(const id of cache.keys()){ if(!liveIds.has(id)) cache.delete(id); } const ms=Math.round((perfNow()-t)*10)/10; const hist=pushPerfSample(perfRef.current.samples,ms); perfRef.current.computeMs=ms; perfRef.current.samples=hist.samples; perfRef.current.p95Ms=hist.p95; perfRef.current.styles=styles.length; perfRef.current.cacheHits=hits; perfRef.current.recomputed=recomputed; return out; },[styles,stylesComputeKey,cfg,cfgComputeKey,effectiveResends]);
   // Live/report source: archived styles stay available in Tracker Archive view, but are excluded from all live reports by default.
   const activeComputed=useMemo(()=>computed.filter(({s})=>!s.archived),[computed]);
   const chaseOwnerOptions=useMemo(()=>["All", ...Array.from(new Set([...STAGES.map(st=>(cfg.stageOwners&&cfg.stageOwners[st.key])||DEFAULT_STAGE_OWNERS[st.key]||st.owner), ...CHASE_LABELS])).filter(Boolean)], [cfg]);
@@ -1254,7 +1344,7 @@ function MerchTracker({ me, onSignOut }){
     const isResend=(effectiveMode==="actual"&&forceActual&&isStageCol(col)&&isResendEntrySlot(s,col));
     const isReworkPlanning=(effectiveMode==="rev"&&isStageCol(col)&&prefersRevisedDateEntry(id,col));
     // For rework planning, NEVER pull first actual into the editor. Use revised commitment only.
-    const cur= isResend?null:(effectiveMode==="rev"?(s&&s.revs&&s.revs[col]):effectiveMode==="reject"?(s&&s.rejects&&s.rejects[col]):(isStageCol(col)?(s&&s.actuals[col]):(s&&s[col])));
+    const cur= isResend?latestResendActualValue(s,col):(effectiveMode==="rev"?(s&&s.revs&&s.revs[col]):effectiveMode==="reject"?(s&&s.rejects&&s.rejects[col]):(isStageCol(col)?(s&&s.actuals[col]):(s&&s[col])));
     setEditVal(initialChar!=null?initialChar:(cur?fmtTyped(cur):""));
   };
   const commitDate=()=>{
@@ -1266,8 +1356,8 @@ function MerchTracker({ me, onSignOut }){
     const effectiveMode=(editing.mode==="actual" && !editing.forceActual) ? preferredDateMode(editing.id,editing.col,"actual") : editing.mode;
     const isExplicitResendActual=(effectiveMode==="actual" && editing.forceActual && isStageCol(editing.col) && isResendEntrySlot(curS,editing.col));
     if(val===null){
-      // Blank explicit re-send actual should not delete the original first-send actual.
-      if(isExplicitResendActual){ setEditing(null); setCalOpen(false); return; }
+      // Blank explicit re-send actual clears only the latest re-send actual; it never deletes the original first-send actual.
+      if(isExplicitResendActual){ clearLatestResendActual(editing.id,editing.col); return; }
       const st=curS;
       const had= effectiveMode==="rev"?(st&&st.revs&&st.revs[editing.col]):effectiveMode==="reject"?(st&&st.rejects&&st.rejects[editing.col]):(isStageCol(editing.col)?(st&&st.actuals&&st.actuals[editing.col]):(st&&st[editing.col]));
       if(had && !window.confirm("Delete this saved date? You can re-enter it later.")){ setEditing(null); setCalOpen(false); return; }
@@ -1277,7 +1367,7 @@ function MerchTracker({ me, onSignOut }){
     else setField(editing.id,editing.col,val);
     setEditing(null); setCalOpen(false);
   };
-  const dateEditor=(id,col,mode)=>{ const s=styles.find(x=>x.id===id); const forceActual=!!(editing&&editing.id===id&&editing.col===col&&editing.forceActual); const effectiveMode=(mode==="actual"&&!forceActual)?preferredDateMode(id,col,"actual"):mode; const _cmp=computed.find(x=>x.s.id===id); const _stR=_cmp&&(_cmp.c.stages||[]).find(x=>x.key===col); const planFb=_stR?(_stR.rev||_stR.plan):null; const isResend=(effectiveMode==="actual"&&forceActual&&isStageCol(col)&&isResendEntrySlot(s,col)); const realStored= effectiveMode==="rev"?(s&&s.revs&&s.revs[col]):effectiveMode==="reject"?(s&&s.rejects&&s.rejects[col]):(isStageCol(col)?(s&&s.actuals[col]):(s&&s[col])); const stored=isResend?null:realStored; const baseLabel=col==="ordRec"?"Order Date":col==="delivery"?"Delivery Date":((STAGES.find(x=>x.key===col)||{}).label||col); const planningRework=isStageCol(col)&&prefersRevisedDateEntry(id,col); const activeRound=planningRework?activeRoundForCell(s,col):0; const colLabel=planningRework&&APPR_OF_SEND[col]?baseLabel.replace(" Send","")+" RE-SEND "+(activeRound||1):planningRework&&REJECTABLE.includes(col)?baseLabel.replace(" Appr","")+" RE-APPR "+(activeRound||1):baseLabel; const modeLabel=effectiveMode==="rev"?(planningRework?"REVISED":"REVISED"):effectiveMode==="reject"?"REJECTED":(isResend?("RESEND "+(activeRoundForCell(s,col)||1)+" ACTUAL"):"ACTUAL"); const mc=effectiveMode==="rev"?"var(--accent)":effectiveMode==="reject"?"var(--danger)":"var(--info)"; return (<span onClick={e=>e.stopPropagation()} style={{ position:"absolute", top:1, left:1, zIndex:80, display:"flex", flexDirection:"column", gap:1, background:"var(--surface)", border:"1px solid "+mc, padding:"2px 4px", boxShadow:"2px 2px 0 rgba(0,0,0,0.18)" }}><span style={{ fontSize:8, fontWeight:700, color:mc, textTransform:"uppercase", letterSpacing:0.3, whiteSpace:"nowrap" }}>{colLabel} · {modeLabel}</span>{effectiveMode==="rev"&&prefersRevisedDateEntry(id,col)&&<span style={{ fontSize:8, color:"var(--revised)", fontWeight:800, whiteSpace:"nowrap" }}>first actual is history · editing revised date</span>}{isResend&&realStored&&<span style={{ fontSize:8, color:"#b4531a", fontWeight:700, whiteSpace:"nowrap" }}>first sent kept: {fmt(parse(realStored))}</span>}<span style={{ display:"flex", alignItems:"center", gap:2, position:"relative" }}><input autoFocus onFocus={e=>{ if((e.target.value||"").length>2) e.target.select(); }} value={editVal} placeholder={effectiveMode==="rev"&&prefersRevisedDateEntry(id,col)?"revised resend date":(isResend?"actual re-send date":"dd/mm/yyyy")} onChange={e=>setEditVal(e.target.value.replace(/[^0-9\/\-. ]/g,""))} onKeyDown={e=>{ e.stopPropagation(); if(e.key==="Enter") commitDate(); else if(e.key==="Escape"){ setEditing(null); setCalOpen(false); } }} onBlur={()=>{ if(!calOpen) commitDate(); }} style={{ width:isResend?96:80, fontFamily:"inherit", fontSize:11, border:"none", outline:"none" }}/>{stored && <button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); if(effectiveMode==="rev") setRev(id,col,null); else if(effectiveMode==="reject") setReject(id,col,null); else setField(id,col,null); setEditing(null); setCalOpen(false); }} title={"Clear "+modeLabel.toLowerCase()+" date"} style={{ border:"1px solid var(--line-2)", background:"var(--surface)", cursor:"pointer", padding:"0 4px", fontSize:10, lineHeight:"16px" }}>clear</button>}<button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); setCalOpen(o=>!o); }} title="calendar" style={{ border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:0, fontSize:12 }}>📅</button>{calOpen && <CalPopup label={colLabel+" · "+modeLabel} value={stored} fallback={planFb} onClose={()=>setCalOpen(false)} onPick={(d)=>{ if(effectiveMode==="rev") setRev(id,col,d); else if(effectiveMode==="reject") setReject(id,col,d); else setField(id,col,d); setEditing(null); setCalOpen(false); }}/>}</span></span>); };
+  const dateEditor=(id,col,mode)=>{ const s=styles.find(x=>x.id===id); const forceActual=!!(editing&&editing.id===id&&editing.col===col&&editing.forceActual); const effectiveMode=(mode==="actual"&&!forceActual)?preferredDateMode(id,col,"actual"):mode; const _cmp=computed.find(x=>x.s.id===id); const _stR=_cmp&&(_cmp.c.stages||[]).find(x=>x.key===col); const planFb=_stR?(_stR.rev||_stR.plan):null; const isResend=(effectiveMode==="actual"&&forceActual&&isStageCol(col)&&isResendEntrySlot(s,col)); const realStored= effectiveMode==="rev"?(s&&s.revs&&s.revs[col]):effectiveMode==="reject"?(s&&s.rejects&&s.rejects[col]):(isStageCol(col)?(s&&s.actuals[col]):(s&&s[col])); const stored=isResend?latestResendActualValue(s,col):realStored; const baseLabel=col==="ordRec"?"Order Date":col==="delivery"?"Delivery Date":((STAGES.find(x=>x.key===col)||{}).label||col); const planningRework=isStageCol(col)&&prefersRevisedDateEntry(id,col); const activeRound=planningRework?activeRoundForCell(s,col):0; const colLabel=planningRework&&APPR_OF_SEND[col]?baseLabel.replace(" Send","")+" RE-SEND "+(activeRound||1):planningRework&&REJECTABLE.includes(col)?baseLabel.replace(" Appr","")+" RE-APPR "+(activeRound||1):baseLabel; const modeLabel=effectiveMode==="rev"?(planningRework?"REVISED":"REVISED"):effectiveMode==="reject"?"REJECTED":(isResend?("RESEND "+(activeRoundForCell(s,col)||1)+" ACTUAL"):"ACTUAL"); const mc=effectiveMode==="rev"?"var(--accent)":effectiveMode==="reject"?"var(--danger)":"var(--info)"; return (<span onClick={e=>e.stopPropagation()} style={{ position:"absolute", top:1, left:1, zIndex:80, display:"flex", flexDirection:"column", gap:1, background:"var(--surface)", border:"1px solid "+mc, padding:"2px 4px", boxShadow:"2px 2px 0 rgba(0,0,0,0.18)" }}><span style={{ fontSize:8, fontWeight:700, color:mc, textTransform:"uppercase", letterSpacing:0.3, whiteSpace:"nowrap" }}>{colLabel} · {modeLabel}</span>{effectiveMode==="rev"&&prefersRevisedDateEntry(id,col)&&<span style={{ fontSize:8, color:"var(--revised)", fontWeight:800, whiteSpace:"nowrap" }}>first actual is history · editing revised date</span>}{isResend&&realStored&&<span style={{ fontSize:8, color:"#b4531a", fontWeight:700, whiteSpace:"nowrap" }}>first sent kept: {fmt(parse(realStored))}</span>}<span style={{ display:"flex", alignItems:"center", gap:2, position:"relative" }}><input autoFocus onFocus={e=>{ if((e.target.value||"").length>2) e.target.select(); }} value={editVal} placeholder={effectiveMode==="rev"&&prefersRevisedDateEntry(id,col)?"revised resend date":(isResend?"actual re-send date":"dd/mm/yyyy")} onChange={e=>setEditVal(e.target.value.replace(/[^0-9\/\-. ]/g,""))} onKeyDown={e=>{ e.stopPropagation(); if(e.key==="Enter") commitDate(); else if(e.key==="Escape"){ setEditing(null); setCalOpen(false); } }} onBlur={()=>{ if(!calOpen) commitDate(); }} style={{ width:isResend?96:80, fontFamily:"inherit", fontSize:11, border:"none", outline:"none" }}/>{stored && <button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); if(isResend) clearLatestResendActual(id,col); else if(effectiveMode==="rev") setRev(id,col,null); else if(effectiveMode==="reject") setReject(id,col,null); else setField(id,col,null); setEditing(null); setCalOpen(false); }} title={"Clear "+modeLabel.toLowerCase()+" date"} style={{ border:"1px solid var(--line-2)", background:"var(--surface)", cursor:"pointer", padding:"0 4px", fontSize:10, lineHeight:"16px" }}>clear</button>}<button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); setCalOpen(o=>!o); }} title="calendar" style={{ border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:0, fontSize:12 }}>📅</button>{calOpen && <CalPopup label={colLabel+" · "+modeLabel} value={stored} fallback={planFb} onClose={()=>setCalOpen(false)} onPick={(d)=>{ if(effectiveMode==="rev") setRev(id,col,d); else if(effectiveMode==="reject") setReject(id,col,d); else setField(id,col,d); setEditing(null); setCalOpen(false); }}/>}</span></span>); };
     const startEdit=(id,col,initialChar)=>{ if(!isEditableCol(col)) return; if(!canEdit(role,col,"actual")) return; if(isDateCol(col)){ beginDate(id,col,preferredDateMode(id,col,"actual")); return; } if(peerLockBlocks(id,col)) return; const s=styles.find(x=>x.id===id); setEditing({id,col,mode:"text"}); if(col==="qty") setEditVal(initialChar??String(s.qty)); else if(col==="__style") setEditVal(initialChar??s.styleNo); else setEditVal(initialChar??(s[col]||"")); };
   const commitText=(overrideVal)=>{ if(!editing) return false; const f=editing.col==="__style"?"styleNo":editing.col; const raw=overrideVal!=null?overrideVal:editVal; if(editing.mode==="text"||editing.mode===undefined){ if(!isDateCol(editing.col)) setField(editing.id,f,raw); } setEditing(null); return true; };
   const finishEditing=()=>{ if(!editing) return; if(editing.mode==="actual"||editing.mode==="rev"||editing.mode==="reject") commitDate(); else commitText(); };
@@ -1842,7 +1932,7 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
           <button onClick={(e)=>{ e.stopPropagation(); undo(); }} disabled={!past.length} title="Undo (Ctrl/Cmd+Z)" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 9px", cursor:past.length?"pointer":"not-allowed", border:"none", borderRight:"1px solid var(--ink)", background:"var(--surface)", opacity:past.length?1:0.4 }}>↶</button>
           <button onClick={(e)=>{ e.stopPropagation(); redo(); }} disabled={!future.length} title="Redo (Ctrl/Cmd+Shift+Z)" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 9px", cursor:future.length?"pointer":"not-allowed", border:"none", background:"var(--surface)", opacity:future.length?1:0.4 }}>↷</button>
         </div>
-        <button onClick={(e)=>{ e.stopPropagation(); setRemoteChanged(false); loadShared(); }} title="reload shared data (pull latest edits)" style={{ fontFamily:"inherit", fontSize:11, fontWeight:remoteChanged?700:400, padding:"6px 11px", cursor:"pointer", border:"1px solid var(--ink)", background:remoteChanged?"var(--accent)":"var(--surface)", display:"flex", alignItems:"center", gap:6 }}><RotateCcw size={13}/> {remoteChanged?"Sync · new changes":"Sync"}</button>
+        <button onClick={(e)=>{ e.stopPropagation(); manualSync(); }} disabled={syncBusy} title="Pull latest cloud data only. This does not undo or redo local history." style={{ fontFamily:"inherit", fontSize:11, fontWeight:remoteChanged?800:700, padding:"6px 11px", cursor:syncBusy?"wait":"pointer", border:"1px solid var(--ink)", background:remoteChanged?"var(--accent)":"var(--surface)", display:"flex", alignItems:"center", gap:6, opacity:syncBusy?0.75:1 }}><span style={{ fontSize:13, lineHeight:1 }}>⇣</span> {syncBusy?"Pulling…":(remoteChanged?"Pull latest · new changes":"Pull latest")}</button>
         </div>
         <span style={{ fontSize:10, color:"var(--muted-1)", marginLeft:"auto" }}>{sort.col?<>sorted by <b>{sort.col==="__style"?"Style":(INFO_COLS.find(c=>c.key===sort.col)?.label||STAGES.find(s=>s.key===sort.col)?.label||(sort.col==="remarks"?"Remarks":sort.col))}</b> {sort.dir>0?"↑":"↓"}</>:"drag / Shift-click / Shift-arrows = range · Ctrl/Cmd+Shift+↓ = select down · Ctrl/Cmd+A = all visible"}</span>
       </div>
@@ -1969,17 +2059,17 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
                         ) : (activeReworkPlanning||cs.rework) ? (
                           <span title={`First send/resend actual kept in history: ${fmt(cs.storedActual||cs.actual)||"—"} · Rejected: ${fmt(cs.reject)||"—"}`} style={{ display:"flex", flexDirection:"column", lineHeight:1.18, gap:2, maxWidth:"100%" }}>
                             <span style={{ fontSize:8.5, color:cs.rev?"var(--revised)":"#b03020", fontWeight:900, display:"flex", alignItems:"center", gap:3, whiteSpace:"nowrap" }}><X size={8}/>{cs.rev?`${roundLabelFor(s,st.key,"RE-SEND")} REV`:`${roundLabelFor(s,st.key,"RE-SEND")} DUE`} {fmt(cs.rev||cs.plan)}</span>
-                            <span style={{ fontSize:8, color:"#7a560f", fontWeight:750, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{cs.reject?`rej ${fmt(cs.reject)} · `:""}send actual kept in history</span>
-                            {canRev && <button title="set revised date for the active re-send round" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"rev"); }} style={{ alignSelf:"flex-start", border:"1px solid var(--revised)", background:"rgba(255,253,248,0.86)", color:"var(--revised)", borderRadius:6, padding:"2px 5px", fontFamily:"inherit", fontSize:8, fontWeight:850, cursor:"pointer", minWidth:0, minHeight:0 }}>{`revise ${roundLabelFor(s,st.key,"RE-SEND")}`}</button>}
-                            {editable && <button title="enter actual date for the active re-send round (keeps first send in history)" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"actual",undefined,true); }} style={{ alignSelf:"flex-start", border:"none", background:"transparent", padding:"2px 0", margin:0, fontFamily:"inherit", fontSize:8.5, color:"var(--accent)", fontWeight:850, whiteSpace:"nowrap", cursor:"pointer", minWidth:0, minHeight:0 }}>{`▸ enter actual ${roundLabelFor(s,st.key,"RE-SEND")}`}</button>}
+                            <span style={{ fontSize:8, color:"#7a560f", fontWeight:750, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{cs.reject?`rej ${fmt(cs.reject)} · `:""}first send history only</span>
+                            {canRev && <span style={{ fontSize:8, color:"var(--muted-2)", fontWeight:750, whiteSpace:"nowrap" }}>use ↻ corner for revised re-send date</span>}
+                            {editable && <button title="enter or edit actual date for the active re-send round (keeps first send in history)" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"actual",undefined,true); }} style={{ alignSelf:"flex-start", border:"1px solid var(--accent)", background:"rgba(255,244,227,0.92)", borderRadius:6, padding:"3px 6px", margin:0, fontFamily:"inherit", fontSize:8.5, color:"var(--accent)", fontWeight:900, whiteSpace:"nowrap", cursor:"pointer", minWidth:0, minHeight:0 }}>{`ENTER ACTUAL ${roundLabelFor(s,st.key,"RE-SEND")}`}</button>}
                           </span>
                         ) : cs.actual ? (()=>{ const rh=resends&&resends[s.id+":"+st.key]; const cnt=Array.isArray(rh)?Math.max(0,rh.length-1):0; return <span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}><span style={{ display:"flex", alignItems:"center", gap:4 }}><Check size={11} color={OWNER_COLOR[(cfg.stageOwners&&cfg.stageOwners[st.key])||DEFAULT_STAGE_OWNERS[st.key]||st.owner]}/>{fmt(cs.actual)}</span>{cnt>0 && <span title={(rh||[]).map(d=>fmt(parse(typeof d==="string"?d:(d&&d.newVal)))).join(" → ")} style={{ fontSize:8, color:"#b4531a", fontWeight:800 }}>↻ resend #{cnt}</span>}{cs.histReject && <span style={{ fontSize:8, color:"#b03020", fontWeight:700 }}>↻ after REJ {fmt(cs.histReject)}</span>}</span>; })() : cs.rejected ? (
                           <span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}>
                             <span style={{ fontSize:9, color:"#b03020", fontWeight:700, display:"flex", alignItems:"center", gap:3 }}><X size={9}/>REJECTED</span>
                             <span style={{ fontSize:9, color:"#b03020" }}>rej {fmt(cs.reject)}</span>
-                            <span style={{ fontSize:9, color:hasRev?"var(--revised)":"#7a560f" }}>re-appr → {fmt(cs.rev||cs.plan)}</span>
-                            {canRev && <span style={{ display:"flex", gap:5, alignItems:"center", flexWrap:"wrap" }}><button title="set revised re-approval date" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"rev"); }} style={{ border:"1px solid var(--revised)", background:"rgba(255,253,248,0.86)", color:"var(--revised)", borderRadius:6, padding:"2px 5px", fontFamily:"inherit", fontSize:8, fontWeight:850, cursor:"pointer", minWidth:0, minHeight:0 }}>revise re-appr</button>{cs.rev && <button title="clear revised re-approval date" onClick={(e)=>{ e.stopPropagation(); if(window.confirm("Delete revised re-approval date? Rejection history will stay.")) setRev(s.id,st.key,null); }} style={{ border:"1px solid var(--line-2)", background:"rgba(255,253,248,0.86)", color:"var(--muted-4)", borderRadius:6, padding:"2px 5px", fontFamily:"inherit", fontSize:8, fontWeight:850, cursor:"pointer", minWidth:0, minHeight:0 }}>clear rev</button>}</span>}
-                            {editable && <button title="enter actual re-approval date" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"actual",undefined,true); }} style={{ alignSelf:"flex-start", border:"none", background:"transparent", padding:"2px 0", margin:0, fontFamily:"inherit", fontSize:8.5, color:"var(--accent)", fontWeight:850, whiteSpace:"nowrap", cursor:"pointer", minWidth:0, minHeight:0 }}>▸ enter actual re-approval</button>}
+                            <span style={{ fontSize:9, color:hasRev?"var(--revised)":"#7a560f" }}>{roundLabelFor(s,st.key,"RE-APPR")} due → {fmt(cs.rev||cs.plan)}</span>
+                            {canRev && <span style={{ fontSize:8, color:"var(--muted-2)", fontWeight:750, whiteSpace:"nowrap" }}>use ↻ corner for revised re-approval date</span>}
+                            {editable && <button title="enter actual re-approval date" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"actual",undefined,true); }} style={{ alignSelf:"flex-start", border:"1px solid var(--accent)", background:"rgba(255,244,227,0.92)", borderRadius:6, padding:"3px 6px", margin:0, fontFamily:"inherit", fontSize:8.5, color:"var(--accent)", fontWeight:900, whiteSpace:"nowrap", cursor:"pointer", minWidth:0, minHeight:0 }}>{`ENTER ACTUAL ${roundLabelFor(s,st.key,"RE-APPR")}`}</button>}
                           </span>
                         ) : (
                           <span style={{ display:"flex", flexDirection:"column", lineHeight:1.2 }}>
@@ -1988,7 +2078,7 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
                           </span>
                         )}
                       </div>
-                      {canRev && !cs.skipped && !cs.autoClosed && (!cs.actual || cs.rework) && (<button className="mt-stage-corner-btn" title="set revised plan date" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"rev"); }} style={{ position:"absolute", top:3, right:3, border:"1px solid transparent", background:"rgba(255,253,248,0.86)", borderRadius:8, cursor:"pointer", padding:5, lineHeight:1, display:"flex", alignItems:"center", justifyContent:"center" }}><RotateCcw size={12} color="var(--revised)"/></button>)}
+                      {canRev && !cs.skipped && !cs.autoClosed && (!cs.actual || cs.rework || activeReworkPlanning || cs.rejected) && (<button className="mt-stage-corner-btn" title={(activeReworkPlanning||cs.rework)?"set revised date for active re-send round":(cs.rejected?"set revised date for active re-approval round":"set revised plan date")} onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"rev"); }} style={{ position:"absolute", top:3, right:3, border:"1px solid transparent", background:"rgba(255,253,248,0.86)", borderRadius:8, cursor:"pointer", padding:5, lineHeight:1, display:"flex", alignItems:"center", justifyContent:"center" }}><RotateCcw size={12} color="var(--revised)"/></button>)}
                       {canRej && !cs.skipped && !cs.autoClosed && !cs.actual && REJECTABLE.includes(st.key) && (<button className="mt-stage-corner-btn" title={cs.rejected?"clear rejection (remove rework)":"mark REJECTED (log rejection date)"} onClick={(e)=>{ e.stopPropagation(); if(cs.rejected){ if(window.confirm(`Clear the rejection on "${st.label}" for ${s.styleNo}? This removes the rework flag.`)) setReject(s.id,st.key,null); } else beginDate(s.id,st.key,"reject"); }} style={{ position:"absolute", top:3, left:3, border:"1px solid transparent", background:cs.rejected?"#b03020":"rgba(255,253,248,0.86)", borderRadius:8, cursor:"pointer", padding:5, lineHeight:1, display:"flex", alignItems:"center", justifyContent:"center" }}><X size={cs.rejected?10:12} color={cs.rejected?"var(--surface)":"#b03020"}/></button>)}
                       {canSkp && !cs.autoClosed && SKIPPABLE_STAGES.includes(st.key) && (cs.skipped || !cs.actual || cs.rework || cs.rejected) && (<button className="mt-stage-skip-btn" title={cs.skipped?"un-skip (restore this activity)":"skip this activity (waive — counts as resolved, not done)"} onClick={(e)=>{ e.stopPropagation(); if(cs.skipped){ if(window.confirm(`Un-skip "${st.label}" for ${s.styleNo}? This restores the activity.`)) setSkip(s.id,st.key,null); } else if(window.confirm(`Skip / waive "${st.label}" for ${s.styleNo}?\n\nIt will count as RESOLVED (not done) and drop off the to-do. You can un-skip later.`)){ setSkip(s.id,st.key,iso(TODAY)); } }} style={{ position:"absolute", bottom:2, right:2, border:"1px solid transparent", background:cs.skipped?"#8a6d3b":"rgba(255,253,248,0.72)", borderRadius:6, cursor:"pointer", padding:5, lineHeight:1, display:"flex", alignItems:"center", justifyContent:"center" }}><SkipForward size={cs.skipped?10:13} color={cs.skipped?"var(--surface)":"#b8a98a"}/></button>)}
                       {cs.rework && canRej && (<button className="mt-stage-corner-btn" title="clear rework (un-reject the approval)" onClick={(e)=>{ e.stopPropagation(); if(window.confirm(`Clear the rework on "${st.label}" for ${s.styleNo}? This un-rejects the approval.`)) setReject(s.id, APPR_OF_SEND[st.key], null); }} style={{ position:"absolute", top:3, left:3, border:"1px solid transparent", background:"#b03020", borderRadius:8, cursor:"pointer", padding:5, lineHeight:1, display:"flex", alignItems:"center", justifyContent:"center" }}><X size={10} color="var(--surface)"/></button>)}
@@ -3190,28 +3280,49 @@ function UpdateBanner(){
     </div>, document.body);
 }
 
-function AuthShell({ children }){ return (<div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"var(--bg)", fontFamily:"'JetBrains Mono',monospace", padding:20 }}><div style={{ width:360, maxWidth:"100%", background:"var(--surface)", border:"2px solid var(--ink)", boxShadow:"8px 8px 0 var(--ink)", padding:26 }}>{children}</div></div>); }
+function AuthShell({ children }){
+  return (<div style={{ minHeight:"100vh", background:"linear-gradient(135deg,#f7f3ea 0%,#fffaf1 52%,#efe6d7 100%)", fontFamily:"'JetBrains Mono',monospace", padding:24, display:"flex", alignItems:"center", justifyContent:"center" }}>
+    <div style={{ width:980, maxWidth:"100%", minHeight:560, display:"grid", gridTemplateColumns:"1.05fr 0.95fr", background:"var(--surface)", border:"1px solid var(--ink)", boxShadow:"10px 10px 0 rgba(31,31,29,0.92)", borderRadius:18, overflow:"hidden" }}>
+      <div style={{ padding:38, background:"linear-gradient(180deg,#fffaf1 0%,#f3eadf 100%)", borderRight:"1px solid var(--line-2)", position:"relative" }}>
+        <div style={{ fontFamily:"'Archivo',sans-serif", fontSize:13, fontWeight:800, letterSpacing:1.8, color:"var(--accent)", textTransform:"uppercase", marginBottom:10 }}>Kothari Sports & Apparels</div>
+        <div style={{ fontFamily:"'Archivo',sans-serif", fontSize:38, lineHeight:1.02, fontWeight:800, color:"var(--ink)", marginBottom:12 }}>Merch Tracker</div>
+        <div style={{ fontSize:12, color:"var(--muted-3)", lineHeight:1.6, maxWidth:430, marginBottom:26 }}>Pre-production TNA command center for styles, approvals, rework, fabric, PP, production file release and management reporting.</div>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:24 }}>
+          {[['TNA','Date discipline'],['TO-DO','Daily chase list'],['REWORK','Resend rounds'],['REPORTS','Management clarity']].map(([a,b])=><div key={a} style={{ background:"rgba(255,253,248,0.72)", border:"1px solid var(--line-2)", borderRadius:14, padding:14 }}><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:18, color:"var(--ink)" }}>{a}</div><div style={{ fontSize:10, color:"var(--muted-2)", marginTop:4 }}>{b}</div></div>)}
+        </div>
+        <div style={{ position:"absolute", left:38, right:38, bottom:32, border:"1px dashed var(--line-2)", borderRadius:14, padding:14, color:"var(--muted-3)", fontSize:11, lineHeight:1.55, background:"rgba(255,253,248,0.48)" }}>
+          Dates are base data. Revisions, rejections, skips and re-send rounds are tracked for audit, To-Do, dashboards and exports.
+        </div>
+      </div>
+      <div style={{ padding:38, display:"flex", alignItems:"center", justifyContent:"center" }}>
+        <div style={{ width:380, maxWidth:"100%" }}>{children}</div>
+      </div>
+    </div>
+  </div>);
+}
 
 function LoginScreen(){
   const [email,setEmail]=useState(""); const [pw,setPw]=useState(""); const [mode,setMode]=useState("in"); const [msg,setMsg]=useState(""); const [busy,setBusy]=useState(false); const [remember,setRemember]=useState(true);
   const submit=async()=>{ if(!email.trim()||!pw){ setMsg("Enter email and password."); return; } setMsg(""); setBusy(true);
     const stamp=()=>{ try{ localStorage.setItem("mt_login_at", String(Date.now())); localStorage.setItem("mt_remember", remember?"1":"0"); }catch(x){} };
     try{ if(mode==="in"){ const { error }=await supabase.auth.signInWithPassword({ email:email.trim(), password:pw }); if(error) throw error; stamp(); }
-      else { const { error,data }=await supabase.auth.signUp({ email:email.trim(), password:pw }); if(error) throw error; if(data.session){ stamp(); } if(!data.session){ setMsg("Account created. If sign-in doesn't happen automatically, check your email to confirm, then sign in."); setMode("in"); } } }
+      else { const { error,data }=await supabase.auth.signUp({ email:email.trim(), password:pw }); if(error) throw error; if(data.session){ stamp(); } if(!data.session){ setMsg("Account created. If sign-in does not happen automatically, check your email to confirm, then sign in."); setMode("in"); } } }
     catch(e){ setMsg(e.message||String(e)); } setBusy(false); };
-  const inp={ width:"100%", fontFamily:"inherit", fontSize:13, padding:"9px 10px", border:"1px solid var(--ink)", marginBottom:10, boxSizing:"border-box" };
+  const inp={ width:"100%", fontFamily:"inherit", fontSize:13, padding:"12px 13px", border:"1px solid var(--line-2)", borderRadius:10, marginBottom:12, boxSizing:"border-box", background:"var(--surface)", outline:"none" };
   return (<AuthShell>
-    <div style={{ fontFamily:"'JetBrains Mono',monospace", fontSize:10, letterSpacing:1.5, color:"var(--accent)", fontWeight:700, marginBottom:6 }}>KOTHARI SPORTS & APPARELS</div>
-    <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:22, marginBottom:2 }}>Merch Tracker</div>
-    <div style={{ fontSize:11, color:"var(--muted-2)", marginBottom:18 }}>{mode==="in"?"Sign in to your account":"Create your account"}</div>
+    <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:28, color:"var(--ink)", marginBottom:4 }}>{mode==="in"?"Welcome back":"Create access"}</div>
+    <div style={{ fontSize:12, color:"var(--muted-2)", marginBottom:22 }}>{mode==="in"?"Sign in to continue to the live TNA tracker.":"Create an account. Management can approve your role after signup."}</div>
     <form onSubmit={e=>{ e.preventDefault(); submit(); }}>
-    <input style={inp} type="email" name="email" autoComplete="username" placeholder="email" value={email} onChange={e=>setEmail(e.target.value)}/>
-    <input style={inp} type="password" name="password" autoComplete={mode==="in"?"current-password":"new-password"} placeholder="password" value={pw} onChange={e=>setPw(e.target.value)}/>
-    <label style={{ display:"flex", alignItems:"center", gap:7, fontSize:11, color:"var(--muted-4)", marginBottom:12, cursor:"pointer" }}><input type="checkbox" checked={remember} onChange={e=>setRemember(e.target.checked)}/>Keep me signed in <span style={{ color:"var(--muted-1)" }}>(else sign out after 12h)</span></label>
-    <button type="submit" disabled={busy} style={{ width:"100%", fontFamily:"inherit", fontSize:13, fontWeight:700, padding:"10px", cursor:busy?"wait":"pointer", border:"1px solid var(--ink)", background:"var(--ink)", color:"var(--bg)", marginBottom:10 }}>{busy?"…":(mode==="in"?"Sign in":"Create account")}</button>
+      <label style={{ display:"block", fontSize:10, fontWeight:800, color:"var(--muted-3)", textTransform:"uppercase", letterSpacing:0.8, marginBottom:5 }}>Email</label>
+      <input style={inp} type="email" name="email" autoComplete="username" placeholder="name@company.com" value={email} onChange={e=>setEmail(e.target.value)}/>
+      <label style={{ display:"block", fontSize:10, fontWeight:800, color:"var(--muted-3)", textTransform:"uppercase", letterSpacing:0.8, marginBottom:5 }}>Password</label>
+      <input style={inp} type="password" name="password" autoComplete={mode==="in"?"current-password":"new-password"} placeholder="••••••••" value={pw} onChange={e=>setPw(e.target.value)}/>
+      <label style={{ display:"flex", alignItems:"center", gap:9, fontSize:11, color:"var(--muted-4)", margin:"4px 0 16px", cursor:"pointer" }}><input type="checkbox" checked={remember} onChange={e=>setRemember(e.target.checked)}/>Keep me signed in <span style={{ color:"var(--muted-1)" }}>(otherwise 12h)</span></label>
+      <button type="submit" disabled={busy} style={{ width:"100%", fontFamily:"inherit", fontSize:13, fontWeight:800, padding:"12px", cursor:busy?"wait":"pointer", border:"1px solid var(--ink)", borderRadius:10, background:"var(--ink)", color:"var(--bg)", marginBottom:12, boxShadow:"0 2px 0 rgba(31,31,29,0.16)" }}>{busy?"Signing…":(mode==="in"?"Sign in":"Create account")}</button>
     </form>
-    <div style={{ fontSize:11, textAlign:"center" }}><span style={{ color:"var(--muted-2)" }}>{mode==="in"?"New here? ":"Have an account? "}</span><button type="button" onClick={()=>{ setMode(mode==="in"?"up":"in"); setMsg(""); }} style={{ border:"none", background:"transparent", color:"var(--accent)", cursor:"pointer", fontFamily:"inherit", fontSize:11, fontWeight:700 }}>{mode==="in"?"Create account":"Sign in"}</button></div>
-    {msg && <div style={{ fontSize:11, color:"var(--danger)", marginTop:12, lineHeight:1.4 }}>{msg}</div>}
+    <div style={{ fontSize:11, textAlign:"center", color:"var(--muted-2)" }}>{mode==="in"?"New here? ":"Have an account? "}<button type="button" onClick={()=>{ setMode(mode==="in"?"up":"in"); setMsg(""); }} style={{ border:"none", background:"transparent", color:"var(--accent)", cursor:"pointer", fontFamily:"inherit", fontSize:11, fontWeight:800 }}>{mode==="in"?"Create account":"Sign in"}</button></div>
+    {msg && <div style={{ fontSize:11, color:"var(--danger)", marginTop:14, lineHeight:1.45, border:"1px solid var(--tint-late)", background:"#fff4f1", borderRadius:10, padding:10 }}>{msg}</div>}
+    <div style={{ marginTop:22, paddingTop:14, borderTop:"1px solid var(--line-3)", fontSize:10, color:"var(--muted-1)", lineHeight:1.5 }}>Secure Supabase login · access controlled by user role · changes are audited after login.</div>
   </AuthShell>);
 }
 
