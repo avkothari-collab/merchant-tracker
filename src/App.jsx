@@ -616,6 +616,7 @@ function MerchTracker({ me, onSignOut }){
   const [fills,setFills]=useState({});
   const [notes,setNotes]=useState({});
   const [resends,setResends]=useState({}); // styleId:stage -> ordered send/re-send actual dates for rejected/rework loops
+  const [stageEvents,setStageEvents]=useState([]); // durable reject/revise/resend/skip round events from public.stage_events
   const [revHistory,setRevHistory]=useState({}); // styleId:stage -> ordered revised-plan versions for commitment history
   const stylesRef=useRef(styles);
   const fillsRef=useRef(fills);
@@ -681,6 +682,8 @@ function MerchTracker({ me, onSignOut }){
     if(!styData.length){ logAppError("load styles","no styles loaded"); return; }
     const sdData = await fetchAll("stage_dates");
     const cmData = await fetchAll("cell_meta");
+    const seData = await fetchAll("stage_events");
+    setStageEvents((seData||[]).sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0)));
     const byId={}; sdData.forEach(r=>{ const e=(byId[r.style_id]=byId[r.style_id]||{actuals:{},revs:{},rejects:{},skips:{}}); if(r.actual_date) e.actuals[r.stage]=r.actual_date; if(r.revised_date) e.revs[r.stage]=r.revised_date; if(r.reject_date) e.rejects[r.stage]=r.reject_date; if(r.skip_date) e.skips[r.stage]=r.skip_date; });
     const appStyles=styData.map(row=>rowToStyle(row,byId));
     setStyles(appStyles);
@@ -727,6 +730,7 @@ function MerchTracker({ me, onSignOut }){
     .on("postgres_changes",{ event:"*", schema:"public", table:"stage_dates" },(p)=>{ const del=p.eventType==="DELETE"; const n=(p.new&&Object.keys(p.new).length)?p.new:p.old; if(!n||!n.style_id){ setRemoteChanged(true); return; } const sid=n.style_id, stg=n.stage, key=sid+":"+stg; const row=JSON.stringify({ style_id:sid, stage:stg, revised_date:n.revised_date||null, actual_date:n.actual_date||null, reject_date:n.reject_date||null, skip_date:n.skip_date||null }); if(!del && savedRef.current.stg[key]===row) return; const ed=editingRef.current; if(ed&&ed.id===sid&&ed.col===stg){ setRemoteChanged(true); return; } if(del) delete savedRef.current.stg[key]; else savedRef.current.stg[key]=row; remotePatchRef.current=true; setStyles(prev=>{ let found=false; const next=prev.map(s=>{ if(s.id!==sid) return s; found=true; const ns={...s, actuals:{...s.actuals}, revs:{...(s.revs||{})}, rejects:{...(s.rejects||{})}, skips:{...(s.skips||{})} }; if(del){ delete ns.actuals[stg]; delete ns.revs[stg]; delete ns.rejects[stg]; delete ns.skips[stg]; } else { if(n.actual_date) ns.actuals[stg]=n.actual_date; else delete ns.actuals[stg]; if(n.revised_date) ns.revs[stg]=n.revised_date; else delete ns.revs[stg]; if(n.reject_date) ns.rejects[stg]=n.reject_date; else delete ns.rejects[stg]; if(n.skip_date) ns.skips[stg]=n.skip_date; else delete ns.skips[stg]; } return ns; }); if(!found){ setRemoteChanged(true); return prev; } return next; }); setTimeout(()=>{ remotePatchRef.current=false; },0); })
     .on("postgres_changes",{ event:"*", schema:"public", table:"styles" },(p)=>{ const del=p.eventType==="DELETE"; const n=(p.new&&p.new.id)?p.new:p.old; if(!n||!n.id){ setRemoteChanged(true); return; } const sid=n.id; if(del){ delete savedRef.current.sty[sid]; remotePatchRef.current=true; setStyles(prev=>prev.filter(s=>s.id!==sid)); setTimeout(()=>{ remotePatchRef.current=false; },0); return; } if(savedRef.current.sty[sid]===JSON.stringify(n)) return; const ed=editingRef.current; if(ed&&ed.id===sid){ setRemoteChanged(true); return; } savedRef.current.sty[sid]=JSON.stringify(n); remotePatchRef.current=true; setStyles(prev=>{ const idx=prev.findIndex(s=>s.id===sid); if(idx===-1) return [...prev, rowToStyle(n,{})]; const cur=prev[idx]; const merged={ ...rowToStyle(n,{}), actuals:cur.actuals, revs:cur.revs, rejects:cur.rejects, skips:cur.skips }; const copy=prev.slice(); copy[idx]=merged; return copy; }); setTimeout(()=>{ remotePatchRef.current=false; },0); })
     .on("postgres_changes",{ event:"*", schema:"public", table:"cell_meta" },(p)=>{ const del=p.eventType==="DELETE"; const n=(p.new&&Object.keys(p.new).length)?p.new:p.old; if(!n||!n.style_id||!n.col){ setRemoteChanged(true); return; } const key=n.style_id+":"+n.col; const row={ style_id:n.style_id, col:n.col, fill:(!del&&n.fill)?n.fill:null, note:(!del&&n.note)?n.note:null }; const j=JSON.stringify(row); if(!del && savedRef.current.meta[key]===j) return; if(del) delete savedRef.current.meta[key]; else savedRef.current.meta[key]=j; remotePatchRef.current=true; setFills(prev=>{ const nx={...prev}; if(!del&&n.fill) nx[key]=n.fill; else delete nx[key]; return nx; }); setNotes(prev=>{ const nx={...prev}; if(!del&&n.note) nx[key]=n.note; else delete nx[key]; return nx; }); setTimeout(()=>{ remotePatchRef.current=false; },0); })
+    .on("postgres_changes",{ event:"*", schema:"public", table:"stage_events" },(p)=>{ const del=p.eventType==="DELETE"; const n=(p.new&&p.new.id)?p.new:p.old; if(!n||!n.id) return; setStageEvents(prev=>{ let arr=(prev||[]).filter(x=>x.id!==n.id); if(!del) arr=[p.new,...arr]; arr.sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0)); return arr.slice(0,5000); }); })
     .subscribe();
     return ()=>{ try{ supabase.removeChannel(ch); }catch(e){} }; },[]);
   // SAVE everything to Supabase shortly after any change (debounced)
@@ -788,6 +792,54 @@ function MerchTracker({ me, onSignOut }){
   const [remoteChanged,setRemoteChanged]=useState(false); // another user wrote data
   const flash=()=>{ setSaved(true); clearTimeout(savedTimer.current); savedTimer.current=setTimeout(()=>setSaved(false),1200); };
   const logAppError=(area,err,extra)=>{ const msg=(err&&err.message)?err.message:String(err||""); const row={ id:Date.now()+Math.random(), at:new Date().toISOString(), area, msg, extra:extra||"" }; setErrorLog(p=>[row,...p].slice(0,100)); console.error(area,err); };
+  const eventStyleId=(id)=>String(id==null?"":id);
+  const stageEventsFor=(styleId,stageKey,linkedStageKey)=> (stageEvents||[]).filter(e=>String(e.style_id)===eventStyleId(styleId) && (!stageKey || e.stage_key===stageKey) && (!linkedStageKey || e.linked_stage_key===linkedStageKey));
+  const maxEventRound=(styleId,stageKey,linkedStageKey,eventType)=>{
+    const arr=stageEventsFor(styleId,stageKey,linkedStageKey).filter(e=>!eventType || e.event_type===eventType);
+    return arr.reduce((m,e)=>Math.max(m,Number(e.round_no)||0),0);
+  };
+  const activeRejectRound=(style,sendStage,approvalStage)=>{
+    if(!style||!approvalStage) return 0;
+    const maxRej=maxEventRound(style.id,approvalStage,sendStage,"rejected");
+    if(maxRej>0) return maxRej;
+    // Backward-compatible fallback for styles rejected before stage_events existed.
+    return (style.rejects&&style.rejects[approvalStage] && !(style.actuals&&style.actuals[approvalStage]) && !(style.skips&&style.skips[approvalStage])) ? 1 : 0;
+  };
+  const activeRoundForCell=(style,stageKey)=>{
+    if(!style||!stageKey) return 0;
+    const appr=APPR_OF_SEND[stageKey];
+    if(appr) return activeRejectRound(style,stageKey,appr);
+    const send=SEND_FOR_APPR[stageKey];
+    if(send) return activeRejectRound(style,send,stageKey);
+    return 0;
+  };
+  const roundLabelFor=(style,stageKey,kind)=>{
+    const n=activeRoundForCell(style,stageKey)||1;
+    const base=kind || (APPR_OF_SEND[stageKey]?"RE-SEND":(SEND_FOR_APPR[stageKey]?"RE-APPR":"ROUND"));
+    return `${base} ${n}`;
+  };
+  const insertStageEvent=(style,stageKey,linkedStageKey,eventType,roundNo,eventDate,oldValue,newValue,note)=>{
+    try{
+      if(!style||!stageKey||!eventType) return;
+      const row={
+        style_id:eventStyleId(style.id),
+        order_no:style.orderNo||"",
+        style_no:style.styleNo||"",
+        stage_key:stageKey,
+        linked_stage_key:linkedStageKey||null,
+        event_type:eventType,
+        round_no:Math.max(0,Number(roundNo)||0),
+        event_date:eventDate||null,
+        old_value:oldValue==null?null:String(oldValue),
+        new_value:newValue==null?null:String(newValue),
+        note:note||null,
+        created_by:me&&me.id?me.id:null,
+        created_by_email:(me&&me.email)||""
+      };
+      setStageEvents(prev=>[{...row,id:"local-"+Date.now()+"-"+Math.random(),created_at:new Date().toISOString()},...(prev||[])].slice(0,5000));
+      supabase.from("stage_events").insert(row).then(({data,error})=>{ if(error) logAppError("stage_events insert",error); }).catch(e=>logAppError("stage_events insert",e));
+    }catch(e){ logAppError("stage_events insert",e); }
+  };
   const SEND_STAGE_KEYS=Object.keys(APPR_OF_SEND);
   const shouldTrackResend=(s,field,val)=>{ const appr=APPR_OF_SEND[field]; const old=s&&s.actuals&&s.actuals[field]; if(!s||!appr||!old||!val||old===val) return false; return !!((s.rejects&&s.rejects[appr]) && !(s.actuals&&s.actuals[appr])); };
   const isResendEntrySlot=(s,field)=>{ const appr=APPR_OF_SEND[field]; const old=s&&s.actuals&&s.actuals[field]; return !!(s&&appr&&old&&(s.rejects&&s.rejects[appr])&&!(s.actuals&&s.actuals[appr])); };
@@ -847,10 +899,62 @@ function MerchTracker({ me, onSignOut }){
     const preview=planned.slice(0,6).map(p=>`${p.st.styleNo||p.st.orderNo||"row"}: ${identityFieldName(p.field)} ${p.oldVal||"(blank)"} → ${p.newVal}`).join("\n");
     return window.confirm("You are changing "+planned.length+" protected Order No / Style No value(s).\n\n"+preview+(planned.length>6?"\n…":"")+"\n\nThese fields form the unique key. Continue?");
   };
-  const setField=(id,field,val)=>{ const curStyle=styles.find(x=>x.id===id); if(!confirmIdentityChange(curStyle,field,val)) return; maybePinEditedRow(id); if(STAGE_KEYS.includes(field)&&shouldTrackResend(curStyle,field,val)) recordResendActual(curStyle,field,val,"single"); pushHistory(); if(STAGE_KEYS.includes(field)){ const ck=id+":"+field+":actual"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); } setStyles(prev=>prev.map(s=>{ if(s.id!==id) return s; if(STAGE_KEYS.includes(field)) return { ...s, actuals:{ ...s.actuals, [field]: val||undefined } }; if(field==="qty") return { ...s, qty:Number(val)||0 }; if(field==="__style") return { ...s, styleNo:val }; return { ...s, [field]:val }; })); flash(); };
-  const setRev=(id,key,val)=>{ const curStyle=styles.find(x=>x.id===id); recordRevisionHistory(curStyle,key,val,"single"); pushHistory(); const ck=id+":"+key+":revised"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); setStyles(prev=>prev.map(s=> s.id===id?{...s,revs:{...(s.revs||{}),[key]:val||undefined}}:s)); flash(); };
-  const setReject=(id,key,val)=>{ pushHistory(); const ck=id+":"+key+":reject"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); setStyles(prev=>prev.map(s=> s.id===id?{...s,rejects:{...(s.rejects||{}),[key]:val||undefined}}:s)); flash(); };
-  const setSkip=(id,key,val)=>{ pushHistory(); const ap=APPR_OF_SEND[key]; [key,...(ap?[ap]:[])].forEach(kk=>{ const ck=id+":"+kk+":skip"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); }); setStyles(prev=>prev.map(s=>{ if(s.id!==id) return s; const skips={...(s.skips||{})}; if(val){ skips[key]=val; if(ap) skips[ap]=val; } else { skips[key]=undefined; if(ap) skips[ap]=undefined; } return {...s,skips}; })); flash(); };
+  const setField=(id,field,val)=>{
+    const curStyle=styles.find(x=>x.id===id);
+    if(!confirmIdentityChange(curStyle,field,val)) return;
+    maybePinEditedRow(id);
+    const isStage=STAGE_KEYS.includes(field);
+    const willTrackResend=isStage&&shouldTrackResend(curStyle,field,val);
+    if(willTrackResend){
+      const appr=APPR_OF_SEND[field];
+      const round=activeRejectRound(curStyle,field,appr)||1;
+      const old=(curStyle&&curStyle.actuals&&curStyle.actuals[field])||"";
+      insertStageEvent(curStyle,field,appr,"resend_actual",round,val||null,old||null,val||null,`Re-send ${round} actual${val?" entered":" cleared"}`);
+      recordResendActual(curStyle,field,val,"single");
+    } else if(isStage && curStyle){
+      const old=(curStyle.actuals&&curStyle.actuals[field])||"";
+      if(old!==val) insertStageEvent(curStyle,field,null,val?"actual":"clear_actual",0,val||null,old||null,val||null,val?"First/normal actual entered":"Actual date cleared");
+    }
+    pushHistory();
+    if(isStage){ const ck=id+":"+field+":actual"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); }
+    setStyles(prev=>prev.map(s=>{ if(s.id!==id) return s; if(isStage) return { ...s, actuals:{ ...s.actuals, [field]: val||undefined } }; if(field==="qty") return { ...s, qty:Number(val)||0 }; if(field==="__style") return { ...s, styleNo:val }; return { ...s, [field]:val }; })); flash(); };
+  const setRev=(id,key,val)=>{
+    const curStyle=styles.find(x=>x.id===id);
+    recordRevisionHistory(curStyle,key,val,"single");
+    if(curStyle&&STAGE_KEYS.includes(key)){
+      const old=(curStyle.revs&&curStyle.revs[key])||"";
+      const appr=APPR_OF_SEND[key];
+      const send=SEND_FOR_APPR[key];
+      const round=appr?activeRejectRound(curStyle,key,appr):(send?activeRejectRound(curStyle,send,key):0);
+      const eventType=val?"revised":"clear_revised";
+      const linked=appr||send||null;
+      const note=round?`${appr?"Re-send":"Re-approval"} ${round} revised date${val?" set":" cleared"}`:(val?"Revised date set":"Revised date cleared");
+      if(old!==val) insertStageEvent(curStyle,key,linked,eventType,round||0,val||null,old||null,val||null,note);
+    }
+    pushHistory(); const ck=id+":"+key+":revised"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); setStyles(prev=>prev.map(s=> s.id===id?{...s,revs:{...(s.revs||{}),[key]:val||undefined}}:s)); flash(); };
+  const setReject=(id,key,val)=>{
+    const curStyle=styles.find(x=>x.id===id);
+    if(curStyle&&STAGE_KEYS.includes(key)){
+      const old=(curStyle.rejects&&curStyle.rejects[key])||"";
+      const send=SEND_FOR_APPR[key]||null;
+      let round=0;
+      if(send){
+        const maxRej=maxEventRound(curStyle.id,key,send,"rejected");
+        round=val?(old?(maxRej||1):(maxRej+1||1)):(maxRej||1);
+      }
+      const eventType=val?"rejected":"clear_rejected";
+      if(old!==val) insertStageEvent(curStyle,key,send,eventType,round,val||null,old||null,val||null,send?`${(STAGES.find(x=>x.key===key)||{}).label||key} rejection round ${round}${val?"":" cleared"}`:(val?"Rejected":"Rejection cleared"));
+    }
+    pushHistory(); const ck=id+":"+key+":reject"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); setStyles(prev=>prev.map(s=> s.id===id?{...s,rejects:{...(s.rejects||{}),[key]:val||undefined}}:s)); flash(); };
+  const setSkip=(id,key,val)=>{
+    const curStyle=styles.find(x=>x.id===id);
+    if(curStyle&&STAGE_KEYS.includes(key)){
+      const appr=APPR_OF_SEND[key]; const send=SEND_FOR_APPR[key];
+      const linked=appr||send||null;
+      const round=appr?activeRejectRound(curStyle,key,appr):(send?activeRejectRound(curStyle,send,key):0);
+      insertStageEvent(curStyle,key,linked,val?"skip":"clear_skip",round||0,val||null,(curStyle.skips&&curStyle.skips[key])||null,val||null,val?"Stage skipped/waived":"Stage un-skipped");
+    }
+    pushHistory(); const ap=APPR_OF_SEND[key]; [key,...(ap?[ap]:[])].forEach(kk=>{ const ck=id+":"+kk+":skip"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); }); setStyles(prev=>prev.map(s=>{ if(s.id!==id) return s; const skips={...(s.skips||{})}; if(val){ skips[key]=val; if(ap) skips[ap]=val; } else { skips[key]=undefined; if(ap) skips[ap]=undefined; } return {...s,skips}; })); flash(); };
   const toggleFlag=(id,flag)=>{ pushHistory(); setStyles(prev=>prev.map(s=>s.id===id?{...s,[flag]:!s[flag]}:s)); flash(); };
   const [bulkOpen,setBulkOpen]=useState(false);
   const [bulkActionsOpen,setBulkActionsOpen]=useState(false);
@@ -1173,7 +1277,7 @@ function MerchTracker({ me, onSignOut }){
     else setField(editing.id,editing.col,val);
     setEditing(null); setCalOpen(false);
   };
-  const dateEditor=(id,col,mode)=>{ const s=styles.find(x=>x.id===id); const forceActual=!!(editing&&editing.id===id&&editing.col===col&&editing.forceActual); const effectiveMode=(mode==="actual"&&!forceActual)?preferredDateMode(id,col,"actual"):mode; const _cmp=computed.find(x=>x.s.id===id); const _stR=_cmp&&(_cmp.c.stages||[]).find(x=>x.key===col); const planFb=_stR?(_stR.rev||_stR.plan):null; const isResend=(effectiveMode==="actual"&&forceActual&&isStageCol(col)&&isResendEntrySlot(s,col)); const realStored= effectiveMode==="rev"?(s&&s.revs&&s.revs[col]):effectiveMode==="reject"?(s&&s.rejects&&s.rejects[col]):(isStageCol(col)?(s&&s.actuals[col]):(s&&s[col])); const stored=isResend?null:realStored; const baseLabel=col==="ordRec"?"Order Date":col==="delivery"?"Delivery Date":((STAGES.find(x=>x.key===col)||{}).label||col); const planningRework=isStageCol(col)&&prefersRevisedDateEntry(id,col); const colLabel=planningRework&&APPR_OF_SEND[col]?baseLabel.replace(" Send","")+" RE-SEND":planningRework&&REJECTABLE.includes(col)?baseLabel.replace(" Appr","")+" RE-APPR":baseLabel; const modeLabel=effectiveMode==="rev"?(planningRework?"REVISED":"REVISED"):effectiveMode==="reject"?"REJECTED":(isResend?"RESEND ACTUAL":"ACTUAL"); const mc=effectiveMode==="rev"?"var(--accent)":effectiveMode==="reject"?"var(--danger)":"var(--info)"; return (<span onClick={e=>e.stopPropagation()} style={{ position:"absolute", top:1, left:1, zIndex:80, display:"flex", flexDirection:"column", gap:1, background:"var(--surface)", border:"1px solid "+mc, padding:"2px 4px", boxShadow:"2px 2px 0 rgba(0,0,0,0.18)" }}><span style={{ fontSize:8, fontWeight:700, color:mc, textTransform:"uppercase", letterSpacing:0.3, whiteSpace:"nowrap" }}>{colLabel} · {modeLabel}</span>{effectiveMode==="rev"&&prefersRevisedDateEntry(id,col)&&<span style={{ fontSize:8, color:"var(--revised)", fontWeight:800, whiteSpace:"nowrap" }}>first actual is history · editing revised date</span>}{isResend&&realStored&&<span style={{ fontSize:8, color:"#b4531a", fontWeight:700, whiteSpace:"nowrap" }}>first sent kept: {fmt(parse(realStored))}</span>}<span style={{ display:"flex", alignItems:"center", gap:2, position:"relative" }}><input autoFocus onFocus={e=>{ if((e.target.value||"").length>2) e.target.select(); }} value={editVal} placeholder={effectiveMode==="rev"&&prefersRevisedDateEntry(id,col)?"revised resend date":(isResend?"actual re-send date":"dd/mm/yyyy")} onChange={e=>setEditVal(e.target.value.replace(/[^0-9\/\-. ]/g,""))} onKeyDown={e=>{ e.stopPropagation(); if(e.key==="Enter") commitDate(); else if(e.key==="Escape"){ setEditing(null); setCalOpen(false); } }} onBlur={()=>{ if(!calOpen) commitDate(); }} style={{ width:isResend?96:80, fontFamily:"inherit", fontSize:11, border:"none", outline:"none" }}/>{stored && <button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); if(effectiveMode==="rev") setRev(id,col,null); else if(effectiveMode==="reject") setReject(id,col,null); else setField(id,col,null); setEditing(null); setCalOpen(false); }} title={"Clear "+modeLabel.toLowerCase()+" date"} style={{ border:"1px solid var(--line-2)", background:"var(--surface)", cursor:"pointer", padding:"0 4px", fontSize:10, lineHeight:"16px" }}>clear</button>}<button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); setCalOpen(o=>!o); }} title="calendar" style={{ border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:0, fontSize:12 }}>📅</button>{calOpen && <CalPopup label={colLabel+" · "+modeLabel} value={stored} fallback={planFb} onClose={()=>setCalOpen(false)} onPick={(d)=>{ if(effectiveMode==="rev") setRev(id,col,d); else if(effectiveMode==="reject") setReject(id,col,d); else setField(id,col,d); setEditing(null); setCalOpen(false); }}/>}</span></span>); };
+  const dateEditor=(id,col,mode)=>{ const s=styles.find(x=>x.id===id); const forceActual=!!(editing&&editing.id===id&&editing.col===col&&editing.forceActual); const effectiveMode=(mode==="actual"&&!forceActual)?preferredDateMode(id,col,"actual"):mode; const _cmp=computed.find(x=>x.s.id===id); const _stR=_cmp&&(_cmp.c.stages||[]).find(x=>x.key===col); const planFb=_stR?(_stR.rev||_stR.plan):null; const isResend=(effectiveMode==="actual"&&forceActual&&isStageCol(col)&&isResendEntrySlot(s,col)); const realStored= effectiveMode==="rev"?(s&&s.revs&&s.revs[col]):effectiveMode==="reject"?(s&&s.rejects&&s.rejects[col]):(isStageCol(col)?(s&&s.actuals[col]):(s&&s[col])); const stored=isResend?null:realStored; const baseLabel=col==="ordRec"?"Order Date":col==="delivery"?"Delivery Date":((STAGES.find(x=>x.key===col)||{}).label||col); const planningRework=isStageCol(col)&&prefersRevisedDateEntry(id,col); const activeRound=planningRework?activeRoundForCell(s,col):0; const colLabel=planningRework&&APPR_OF_SEND[col]?baseLabel.replace(" Send","")+" RE-SEND "+(activeRound||1):planningRework&&REJECTABLE.includes(col)?baseLabel.replace(" Appr","")+" RE-APPR "+(activeRound||1):baseLabel; const modeLabel=effectiveMode==="rev"?(planningRework?"REVISED":"REVISED"):effectiveMode==="reject"?"REJECTED":(isResend?("RESEND "+(activeRoundForCell(s,col)||1)+" ACTUAL"):"ACTUAL"); const mc=effectiveMode==="rev"?"var(--accent)":effectiveMode==="reject"?"var(--danger)":"var(--info)"; return (<span onClick={e=>e.stopPropagation()} style={{ position:"absolute", top:1, left:1, zIndex:80, display:"flex", flexDirection:"column", gap:1, background:"var(--surface)", border:"1px solid "+mc, padding:"2px 4px", boxShadow:"2px 2px 0 rgba(0,0,0,0.18)" }}><span style={{ fontSize:8, fontWeight:700, color:mc, textTransform:"uppercase", letterSpacing:0.3, whiteSpace:"nowrap" }}>{colLabel} · {modeLabel}</span>{effectiveMode==="rev"&&prefersRevisedDateEntry(id,col)&&<span style={{ fontSize:8, color:"var(--revised)", fontWeight:800, whiteSpace:"nowrap" }}>first actual is history · editing revised date</span>}{isResend&&realStored&&<span style={{ fontSize:8, color:"#b4531a", fontWeight:700, whiteSpace:"nowrap" }}>first sent kept: {fmt(parse(realStored))}</span>}<span style={{ display:"flex", alignItems:"center", gap:2, position:"relative" }}><input autoFocus onFocus={e=>{ if((e.target.value||"").length>2) e.target.select(); }} value={editVal} placeholder={effectiveMode==="rev"&&prefersRevisedDateEntry(id,col)?"revised resend date":(isResend?"actual re-send date":"dd/mm/yyyy")} onChange={e=>setEditVal(e.target.value.replace(/[^0-9\/\-. ]/g,""))} onKeyDown={e=>{ e.stopPropagation(); if(e.key==="Enter") commitDate(); else if(e.key==="Escape"){ setEditing(null); setCalOpen(false); } }} onBlur={()=>{ if(!calOpen) commitDate(); }} style={{ width:isResend?96:80, fontFamily:"inherit", fontSize:11, border:"none", outline:"none" }}/>{stored && <button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); if(effectiveMode==="rev") setRev(id,col,null); else if(effectiveMode==="reject") setReject(id,col,null); else setField(id,col,null); setEditing(null); setCalOpen(false); }} title={"Clear "+modeLabel.toLowerCase()+" date"} style={{ border:"1px solid var(--line-2)", background:"var(--surface)", cursor:"pointer", padding:"0 4px", fontSize:10, lineHeight:"16px" }}>clear</button>}<button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); setCalOpen(o=>!o); }} title="calendar" style={{ border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:0, fontSize:12 }}>📅</button>{calOpen && <CalPopup label={colLabel+" · "+modeLabel} value={stored} fallback={planFb} onClose={()=>setCalOpen(false)} onPick={(d)=>{ if(effectiveMode==="rev") setRev(id,col,d); else if(effectiveMode==="reject") setReject(id,col,d); else setField(id,col,d); setEditing(null); setCalOpen(false); }}/>}</span></span>); };
     const startEdit=(id,col,initialChar)=>{ if(!isEditableCol(col)) return; if(!canEdit(role,col,"actual")) return; if(isDateCol(col)){ beginDate(id,col,preferredDateMode(id,col,"actual")); return; } if(peerLockBlocks(id,col)) return; const s=styles.find(x=>x.id===id); setEditing({id,col,mode:"text"}); if(col==="qty") setEditVal(initialChar??String(s.qty)); else if(col==="__style") setEditVal(initialChar??s.styleNo); else setEditVal(initialChar??(s[col]||"")); };
   const commitText=(overrideVal)=>{ if(!editing) return false; const f=editing.col==="__style"?"styleNo":editing.col; const raw=overrideVal!=null?overrideVal:editVal; if(editing.mode==="text"||editing.mode===undefined){ if(!isDateCol(editing.col)) setField(editing.id,f,raw); } setEditing(null); return true; };
   const finishEditing=()=>{ if(!editing) return; if(editing.mode==="actual"||editing.mode==="rev"||editing.mode==="reject") commitDate(); else commitText(); };
@@ -1864,10 +1968,10 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
                           </span>
                         ) : (activeReworkPlanning||cs.rework) ? (
                           <span title={`First send/resend actual kept in history: ${fmt(cs.storedActual||cs.actual)||"—"} · Rejected: ${fmt(cs.reject)||"—"}`} style={{ display:"flex", flexDirection:"column", lineHeight:1.18, gap:2, maxWidth:"100%" }}>
-                            <span style={{ fontSize:8.5, color:cs.rev?"var(--revised)":"#b03020", fontWeight:900, display:"flex", alignItems:"center", gap:3, whiteSpace:"nowrap" }}><X size={8}/>{cs.rev?"RE-SEND REV":"RE-SEND DUE"} {fmt(cs.rev||cs.plan)}</span>
+                            <span style={{ fontSize:8.5, color:cs.rev?"var(--revised)":"#b03020", fontWeight:900, display:"flex", alignItems:"center", gap:3, whiteSpace:"nowrap" }}><X size={8}/>{cs.rev?`${roundLabelFor(s,st.key,"RE-SEND")} REV`:`${roundLabelFor(s,st.key,"RE-SEND")} DUE`} {fmt(cs.rev||cs.plan)}</span>
                             <span style={{ fontSize:8, color:"#7a560f", fontWeight:750, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{cs.reject?`rej ${fmt(cs.reject)} · `:""}send actual kept in history</span>
-                            {canRev && <button title="set revised re-send date" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"rev"); }} style={{ alignSelf:"flex-start", border:"1px solid var(--revised)", background:"rgba(255,253,248,0.86)", color:"var(--revised)", borderRadius:6, padding:"2px 5px", fontFamily:"inherit", fontSize:8, fontWeight:850, cursor:"pointer", minWidth:0, minHeight:0 }}>revise date</button>}
-                            {editable && <button title="enter actual re-send date (keeps first send in history)" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"actual",undefined,true); }} style={{ alignSelf:"flex-start", border:"none", background:"transparent", padding:"2px 0", margin:0, fontFamily:"inherit", fontSize:8.5, color:"var(--accent)", fontWeight:850, whiteSpace:"nowrap", cursor:"pointer", minWidth:0, minHeight:0 }}>▸ enter actual re-send</button>}
+                            {canRev && <button title="set revised date for the active re-send round" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"rev"); }} style={{ alignSelf:"flex-start", border:"1px solid var(--revised)", background:"rgba(255,253,248,0.86)", color:"var(--revised)", borderRadius:6, padding:"2px 5px", fontFamily:"inherit", fontSize:8, fontWeight:850, cursor:"pointer", minWidth:0, minHeight:0 }}>{`revise ${roundLabelFor(s,st.key,"RE-SEND")}`}</button>}
+                            {editable && <button title="enter actual date for the active re-send round (keeps first send in history)" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"actual",undefined,true); }} style={{ alignSelf:"flex-start", border:"none", background:"transparent", padding:"2px 0", margin:0, fontFamily:"inherit", fontSize:8.5, color:"var(--accent)", fontWeight:850, whiteSpace:"nowrap", cursor:"pointer", minWidth:0, minHeight:0 }}>{`▸ enter actual ${roundLabelFor(s,st.key,"RE-SEND")}`}</button>}
                           </span>
                         ) : cs.actual ? (()=>{ const rh=resends&&resends[s.id+":"+st.key]; const cnt=Array.isArray(rh)?Math.max(0,rh.length-1):0; return <span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}><span style={{ display:"flex", alignItems:"center", gap:4 }}><Check size={11} color={OWNER_COLOR[(cfg.stageOwners&&cfg.stageOwners[st.key])||DEFAULT_STAGE_OWNERS[st.key]||st.owner]}/>{fmt(cs.actual)}</span>{cnt>0 && <span title={(rh||[]).map(d=>fmt(parse(typeof d==="string"?d:(d&&d.newVal)))).join(" → ")} style={{ fontSize:8, color:"#b4531a", fontWeight:800 }}>↻ resend #{cnt}</span>}{cs.histReject && <span style={{ fontSize:8, color:"#b03020", fontWeight:700 }}>↻ after REJ {fmt(cs.histReject)}</span>}</span>; })() : cs.rejected ? (
                           <span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}>
