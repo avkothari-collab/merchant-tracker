@@ -1052,7 +1052,20 @@ function MerchTracker({ me, onSignOut }){
   const selectedStyle=sel?styles.find(x=>x.id===sel.id):null;
   const selectedColLabel=sel?(sel.col==="__style"?"Style No":(INFO_COLS.find(c=>c.key===sel.col)?.label||STAGES.find(s=>s.key===sel.col)?.label||sel.col)):"";
   const selectedCellKey=sel?`${sel.id}:${sel.col}`:"";
-  const selectedDisplayValue=()=>{ if(!sel||!selectedStyle) return ""; const v=getVal(selectedStyle,sel.col); return isDateCol(sel.col)&&v?fmtTyped(v):String(v??""); };
+  const selectedDisplayValue=()=>{
+    if(!sel||!selectedStyle) return "";
+    if(isStageCol(sel.col)){
+      const cmp=computed.find(x=>x.s.id===sel.id);
+      const r=cmp&&cmp.c&&Array.isArray(cmp.c.stages)?cmp.c.stages.find(x=>x.key===sel.col):null;
+      // In rejected/rework cells the old first actual is history, not the editable/display value.
+      // Show the revised commitment in the entry bar, or blank if no revised commitment exists.
+      if(r && (r.rework || r.rejected) && !r.skipped && !r.autoClosed){
+        return r.rev ? fmtTyped(iso(r.rev)) : "";
+      }
+    }
+    const v=getVal(selectedStyle,sel.col);
+    return isDateCol(sel.col)&&v?fmtTyped(v):String(v??"");
+  };
   const entrySuggestion=useMemo(()=> sel&&entryTouched ? suggestionFor(sel.col,entryVal,sel.id) : "", [sel,entryTouched,entryVal,rows,navCols]);
   const editSuggestion=useMemo(()=> editing&&editing.mode==="text" ? suggestionFor(editing.col,editVal,editing.id) : "", [editing,editVal,rows,navCols]);
   useEffect(()=>{
@@ -1092,9 +1105,37 @@ function MerchTracker({ me, onSignOut }){
   const activeStageRow=(id,col)=>{ const cmp=computed.find(x=>x.s.id===id); return cmp&&cmp.c&&Array.isArray(cmp.c.stages)?cmp.c.stages.find(x=>x.key===col):null; };
   const prefersRevisedDateEntry=(id,col)=>{ const r=isStageCol(col)?activeStageRow(id,col):null; return !!(r && (r.rework || r.rejected) && !r.skipped && !r.autoClosed); };
   const preferredDateMode=(id,col,requested="actual")=> (requested==="actual" && prefersRevisedDateEntry(id,col)) ? "rev" : requested;
-  const beginDate=(id,col,mode,initialChar)=>{ if(!canEdit(role,col,mode)) return; if(peerLockBlocks(id,col)) return; setSel({id,col}); setFocus(null); setEditing({id,col,mode}); setCalOpen(false); const s=styles.find(x=>x.id===id); const isResend=(mode==="actual"&&isStageCol(col)&&isResendEntrySlot(s,col)); const cur= isResend?null:(mode==="rev"?(s&&s.revs&&s.revs[col]):mode==="reject"?(s&&s.rejects&&s.rejects[col]):(isStageCol(col)?(s&&s.actuals[col]):(s&&s[col]))); setEditVal(initialChar!=null?initialChar:(cur?fmtTyped(cur):"")); };
-  const commitDate=()=>{ if(!editing) return; const r=parseTyped(editVal); if(r===false){ window.alert('"'+editVal+'" isn\u2019t a valid date. Type it as dd/mm/yyyy (e.g. 26/05/2026), or clear the box to leave it empty.'); return; } if(r!==false){ const val=r===""?null:r; const curS=styles.find(x=>x.id===editing.id); const isResendBlank=(editing.mode==="actual"&&isStageCol(editing.col)&&isResendEntrySlot(curS,editing.col)); if(val===null){ if(isResendBlank){ setEditing(null); setCalOpen(false); return; } const s=curS; const had= editing.mode==="rev"?(s&&s.revs&&s.revs[editing.col]):editing.mode==="reject"?(s&&s.rejects&&s.rejects[editing.col]):(isStageCol(editing.col)?(s&&s.actuals&&s.actuals[editing.col]):(s&&s[editing.col])); if(had && !window.confirm("Delete this saved date? You can re-enter it later.")){ setEditing(null); setCalOpen(false); return; } } if(editing.mode==="rev") setRev(editing.id,editing.col,val); else if(editing.mode==="reject") setReject(editing.id,editing.col,val); else setField(editing.id,editing.col,val); } setEditing(null); setCalOpen(false); };
-  const dateEditor=(id,col,mode)=>{ const s=styles.find(x=>x.id===id); const _cmp=computed.find(x=>x.s.id===id); const _stR=_cmp&&(_cmp.c.stages||[]).find(x=>x.key===col); const planFb=_stR?(_stR.rev||_stR.plan):null; const isResend=(mode==="actual"&&isStageCol(col)&&isResendEntrySlot(s,col)); const realStored= mode==="rev"?(s&&s.revs&&s.revs[col]):mode==="reject"?(s&&s.rejects&&s.rejects[col]):(isStageCol(col)?(s&&s.actuals[col]):(s&&s[col])); const stored=isResend?null:realStored; const colLabel=col==="ordRec"?"Order Date":col==="delivery"?"Delivery Date":((STAGES.find(x=>x.key===col)||{}).label||col); const modeLabel=mode==="rev"?"REVISED":mode==="reject"?"REJECTED":(isResend?"RESEND ACTUAL":"ACTUAL"); const mc=mode==="rev"?"var(--accent)":mode==="reject"?"var(--danger)":"var(--info)"; return (<span onClick={e=>e.stopPropagation()} style={{ position:"absolute", top:1, left:1, zIndex:80, display:"flex", flexDirection:"column", gap:1, background:"var(--surface)", border:"1px solid "+mc, padding:"2px 4px", boxShadow:"2px 2px 0 rgba(0,0,0,0.18)" }}><span style={{ fontSize:8, fontWeight:700, color:mc, textTransform:"uppercase", letterSpacing:0.3, whiteSpace:"nowrap" }}>{colLabel} · {modeLabel}</span>{mode==="rev"&&prefersRevisedDateEntry(id,col)&&<span style={{ fontSize:8, color:"var(--revised)", fontWeight:800, whiteSpace:"nowrap" }}>revised only · first actual stays history</span>}{isResend&&realStored&&<span style={{ fontSize:8, color:"#b4531a", fontWeight:700, whiteSpace:"nowrap" }}>first sent kept: {fmt(parse(realStored))}</span>}<span style={{ display:"flex", alignItems:"center", gap:2, position:"relative" }}><input autoFocus onFocus={e=>{ if((e.target.value||"").length>2) e.target.select(); }} value={editVal} placeholder={isResend?"new resend date":"dd/mm/yyyy"} onChange={e=>setEditVal(e.target.value.replace(/[^0-9\/\-. ]/g,""))} onKeyDown={e=>{ e.stopPropagation(); if(e.key==="Enter") commitDate(); else if(e.key==="Escape"){ setEditing(null); setCalOpen(false); } }} onBlur={()=>{ if(!calOpen) commitDate(); }} style={{ width:isResend?96:80, fontFamily:"inherit", fontSize:11, border:"none", outline:"none" }}/>{stored && <button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); if(mode==="rev") setRev(id,col,null); else if(mode==="reject") setReject(id,col,null); else setField(id,col,null); setEditing(null); setCalOpen(false); }} title={"Clear "+modeLabel.toLowerCase()+" date"} style={{ border:"1px solid var(--line-2)", background:"var(--surface)", cursor:"pointer", padding:"0 4px", fontSize:10, lineHeight:"16px" }}>clear</button>}<button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); setCalOpen(o=>!o); }} title="calendar" style={{ border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:0, fontSize:12 }}>📅</button>{calOpen && <CalPopup label={colLabel+" · "+modeLabel} value={stored} fallback={planFb} onClose={()=>setCalOpen(false)} onPick={(d)=>{ if(mode==="rev") setRev(id,col,d); else if(mode==="reject") setReject(id,col,d); else setField(id,col,d); setEditing(null); setCalOpen(false); }}/>}</span></span>); };
+  const beginDate=(id,col,mode,initialChar,forceActual=false)=>{
+    const effectiveMode = (mode==="actual" && !forceActual) ? preferredDateMode(id,col,"actual") : mode;
+    if(!canEdit(role,col,effectiveMode)) return;
+    if(peerLockBlocks(id,col)) return;
+    setSel({id,col}); setFocus(null); setEditing({id,col,mode:effectiveMode,forceActual}); setCalOpen(false);
+    const s=styles.find(x=>x.id===id);
+    const isResend=(effectiveMode==="actual"&&forceActual&&isStageCol(col)&&isResendEntrySlot(s,col));
+    const cur= isResend?null:(effectiveMode==="rev"?(s&&s.revs&&s.revs[col]):effectiveMode==="reject"?(s&&s.rejects&&s.rejects[col]):(isStageCol(col)?(s&&s.actuals[col]):(s&&s[col])));
+    setEditVal(initialChar!=null?initialChar:(cur?fmtTyped(cur):""));
+  };
+  const commitDate=()=>{
+    if(!editing) return;
+    const r=parseTyped(editVal);
+    if(r===false){ window.alert('"'+editVal+'" isn’t a valid date. Type it as dd/mm/yyyy (e.g. 26/05/2026), or clear the box to leave it empty.'); return; }
+    const val=r===""?null:r;
+    const curS=styles.find(x=>x.id===editing.id);
+    const effectiveMode=(editing.mode==="actual" && !editing.forceActual) ? preferredDateMode(editing.id,editing.col,"actual") : editing.mode;
+    const isExplicitResendActual=(effectiveMode==="actual" && editing.forceActual && isStageCol(editing.col) && isResendEntrySlot(curS,editing.col));
+    if(val===null){
+      // Blank explicit re-send actual should not delete the original first-send actual.
+      if(isExplicitResendActual){ setEditing(null); setCalOpen(false); return; }
+      const st=curS;
+      const had= effectiveMode==="rev"?(st&&st.revs&&st.revs[editing.col]):effectiveMode==="reject"?(st&&st.rejects&&st.rejects[editing.col]):(isStageCol(editing.col)?(st&&st.actuals&&st.actuals[editing.col]):(st&&st[editing.col]));
+      if(had && !window.confirm("Delete this saved date? You can re-enter it later.")){ setEditing(null); setCalOpen(false); return; }
+    }
+    if(effectiveMode==="rev") setRev(editing.id,editing.col,val);
+    else if(effectiveMode==="reject") setReject(editing.id,editing.col,val);
+    else setField(editing.id,editing.col,val);
+    setEditing(null); setCalOpen(false);
+  };
+  const dateEditor=(id,col,mode)=>{ const s=styles.find(x=>x.id===id); const forceActual=!!(editing&&editing.id===id&&editing.col===col&&editing.forceActual); const effectiveMode=(mode==="actual"&&!forceActual)?preferredDateMode(id,col,"actual"):mode; const _cmp=computed.find(x=>x.s.id===id); const _stR=_cmp&&(_cmp.c.stages||[]).find(x=>x.key===col); const planFb=_stR?(_stR.rev||_stR.plan):null; const isResend=(effectiveMode==="actual"&&forceActual&&isStageCol(col)&&isResendEntrySlot(s,col)); const realStored= effectiveMode==="rev"?(s&&s.revs&&s.revs[col]):effectiveMode==="reject"?(s&&s.rejects&&s.rejects[col]):(isStageCol(col)?(s&&s.actuals[col]):(s&&s[col])); const stored=isResend?null:realStored; const colLabel=col==="ordRec"?"Order Date":col==="delivery"?"Delivery Date":((STAGES.find(x=>x.key===col)||{}).label||col); const modeLabel=effectiveMode==="rev"?(isStageCol(col)&&prefersRevisedDateEntry(id,col)?"REVISED RE-SEND":"REVISED"):effectiveMode==="reject"?"REJECTED":(isResend?"RESEND ACTUAL":"ACTUAL"); const mc=effectiveMode==="rev"?"var(--accent)":effectiveMode==="reject"?"var(--danger)":"var(--info)"; return (<span onClick={e=>e.stopPropagation()} style={{ position:"absolute", top:1, left:1, zIndex:80, display:"flex", flexDirection:"column", gap:1, background:"var(--surface)", border:"1px solid "+mc, padding:"2px 4px", boxShadow:"2px 2px 0 rgba(0,0,0,0.18)" }}><span style={{ fontSize:8, fontWeight:700, color:mc, textTransform:"uppercase", letterSpacing:0.3, whiteSpace:"nowrap" }}>{colLabel} · {modeLabel}</span>{effectiveMode==="rev"&&prefersRevisedDateEntry(id,col)&&<span style={{ fontSize:8, color:"var(--revised)", fontWeight:800, whiteSpace:"nowrap" }}>revised only · first actual stays history</span>}{isResend&&realStored&&<span style={{ fontSize:8, color:"#b4531a", fontWeight:700, whiteSpace:"nowrap" }}>first sent kept: {fmt(parse(realStored))}</span>}<span style={{ display:"flex", alignItems:"center", gap:2, position:"relative" }}><input autoFocus onFocus={e=>{ if((e.target.value||"").length>2) e.target.select(); }} value={editVal} placeholder={effectiveMode==="rev"&&prefersRevisedDateEntry(id,col)?"revised resend date":(isResend?"actual re-send date":"dd/mm/yyyy")} onChange={e=>setEditVal(e.target.value.replace(/[^0-9\/\-. ]/g,""))} onKeyDown={e=>{ e.stopPropagation(); if(e.key==="Enter") commitDate(); else if(e.key==="Escape"){ setEditing(null); setCalOpen(false); } }} onBlur={()=>{ if(!calOpen) commitDate(); }} style={{ width:isResend?96:80, fontFamily:"inherit", fontSize:11, border:"none", outline:"none" }}/>{stored && <button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); if(effectiveMode==="rev") setRev(id,col,null); else if(effectiveMode==="reject") setReject(id,col,null); else setField(id,col,null); setEditing(null); setCalOpen(false); }} title={"Clear "+modeLabel.toLowerCase()+" date"} style={{ border:"1px solid var(--line-2)", background:"var(--surface)", cursor:"pointer", padding:"0 4px", fontSize:10, lineHeight:"16px" }}>clear</button>}<button onMouseDown={e=>e.preventDefault()} onClick={e=>{ e.stopPropagation(); setCalOpen(o=>!o); }} title="calendar" style={{ border:"none", background:"transparent", cursor:"pointer", padding:0, lineHeight:0, fontSize:12 }}>📅</button>{calOpen && <CalPopup label={colLabel+" · "+modeLabel} value={stored} fallback={planFb} onClose={()=>setCalOpen(false)} onPick={(d)=>{ if(effectiveMode==="rev") setRev(id,col,d); else if(effectiveMode==="reject") setReject(id,col,d); else setField(id,col,d); setEditing(null); setCalOpen(false); }}/>}</span></span>); };
     const startEdit=(id,col,initialChar)=>{ if(!isEditableCol(col)) return; if(!canEdit(role,col,"actual")) return; if(isDateCol(col)){ beginDate(id,col,preferredDateMode(id,col,"actual")); return; } if(peerLockBlocks(id,col)) return; const s=styles.find(x=>x.id===id); setEditing({id,col,mode:"text"}); if(col==="qty") setEditVal(initialChar??String(s.qty)); else if(col==="__style") setEditVal(initialChar??s.styleNo); else setEditVal(initialChar??(s[col]||"")); };
   const commitText=(overrideVal)=>{ if(!editing) return false; const f=editing.col==="__style"?"styleNo":editing.col; const raw=overrideVal!=null?overrideVal:editVal; if(editing.mode==="text"||editing.mode===undefined){ if(!isDateCol(editing.col)) setField(editing.id,f,raw); } setEditing(null); return true; };
   const finishEditing=()=>{ if(!editing) return; if(editing.mode==="actual"||editing.mode==="rev"||editing.mode==="reject") commitDate(); else commitText(); };
@@ -1210,7 +1251,19 @@ function MerchTracker({ me, onSignOut }){
   // batch write a {id:{col:val}} change map into styles
   const writeChanges=(changes)=>{ if(!confirmIdentityBatchChanges(changes)) return; Object.keys(changes||{}).forEach(id=>maybePinEditedRow(id)); Object.entries(changes).forEach(([id,ch])=>Object.entries(ch).forEach(([col,val])=>{ if(STAGE_KEYS.includes(col)){ const ck=id+":"+col+":actual"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); } })); setStyles(prev=>prev.map(s=>{ const ch=changes[s.id]; if(!ch) return s; let ns={...s, actuals:{...s.actuals}, revs:{...(s.revs||{})}}; Object.entries(ch).forEach(([col,val])=>{ if(STAGE_KEYS.includes(col)) ns.actuals[col]=val||undefined; else if(col==="qty") ns.qty=Number(val)||0; else if(col==="__style") ns.styleNo=val; else ns[col]=val; }); return ns; })); flash(); };
   const coerce=(col,raw)=>{ if(raw==null) return ""; const v=String(raw).trim(); if(isDateCol(col)){ const pt=parseTyped(v); if(pt!==false) return pt; const d=new Date(v); return isNaN(d)?"":iso(d); } return v; };
-  const clearRange=()=>{ const cells=selectedCells(); if(!cells.length) return; pushHistory(); const ch={}; cells.forEach(cell=>{ if(canPasteCell(cell.s,cell.col)) (ch[cell.id]=ch[cell.id]||{})[cell.col]= STAGE_KEYS.includes(cell.col)?null:(cell.col==="qty"?0:""); }); writeChanges(ch); };
+  const clearRange=()=>{
+    const cells=selectedCells(); if(!cells.length) return; pushHistory(); const ch={};
+    cells.forEach(cell=>{
+      if(!canPasteCell(cell.s,cell.col)) return;
+      const r=isStageCol(cell.col)?activeStageRow(cell.id,cell.col):null;
+      if(r && (r.rework||r.rejected) && !r.skipped && !r.autoClosed){
+        if(cell.s.revs&&cell.s.revs[cell.col]) setRev(cell.id,cell.col,null);
+        return;
+      }
+      (ch[cell.id]=ch[cell.id]||{})[cell.col]= STAGE_KEYS.includes(cell.col)?null:(cell.col==="qty"?0:"");
+    });
+    if(Object.keys(ch).length) writeChanges(ch);
+  };
   const applyFillHandle=()=>{ if(!fillFrom||!fillTo) return; const aR=rowIndex(fillFrom.id), aC=colIndex(fillFrom.col), tR=rowIndex(fillTo.id), tC=colIndex(fillTo.col); const r1=Math.min(aR,tR), r2=Math.max(aR,tR), c1=Math.min(aC,tC), c2=Math.max(aC,tC); const srcRow=rows[aR]; if(!srcRow) return; pushHistory(); const ch={}; for(let r=r1;r<=r2;r++){ for(let cc=c1;cc<=c2;cc++){ const row=rows[r]; const col=navCols[cc]; if(!row) continue; if(r===aR&&cc===aC) continue; const srcVal=getVal(srcRow.s, navCols[cc]); if(canPasteCell(row.s,col)) (ch[row.s.id]=ch[row.s.id]||{})[col]=srcVal; } } writeChanges(ch); };
   const headerTextFor=(col)=>String(col==="__style"?"Style No":(INFO_COLS.find(x=>x.key===col)?.label||STAGES.find(x=>x.key===col)?.label||col));
   const headerFitWidth=(col)=>{
@@ -1235,6 +1288,19 @@ function MerchTracker({ me, onSignOut }){
     const minW=col==="__style"?STYLE_W:70;
     setColW(p=>({ ...p, [col]:Math.max(minW, Math.min(520, Math.max(contentFitWidth(col), headerFitWidth(col)))) }));
   };
+  const clearCellByContext=(id,col)=>{
+    const s=styles.find(x=>x.id===id);
+    if(!s||!canPasteCell(s,col)) return;
+    // In rejected/rework cells, Delete/Backspace should clear the revised commitment first, never the old first-send actual.
+    const r=isStageCol(col)?activeStageRow(id,col):null;
+    if(r && (r.rework||r.rejected) && !r.skipped && !r.autoClosed){
+      if(s.revs&&s.revs[col]){
+        if(window.confirm("Delete the revised commitment date? The first actual/history date will be kept.")) setRev(id,col,null);
+      }
+      return;
+    }
+    setField(id,col, STAGE_KEYS.includes(col)?null:(col==="qty"?0:""));
+  };
   const onKeyDown=(e)=>{ const _tt=e.target&&e.target.tagName; if(_tt==="INPUT"||_tt==="SELECT"||_tt==="TEXTAREA"||(e.target&&e.target.isContentEditable)) return;
     if((e.ctrlKey||e.metaKey)&&(e.key==="z"||e.key==="Z")){ e.preventDefault(); if(e.shiftKey) redo(); else undo(); return; }
     if((e.ctrlKey||e.metaKey)&&(e.key==="y"||e.key==="Y")){ e.preventDefault(); redo(); return; }
@@ -1253,7 +1319,7 @@ function MerchTracker({ me, onSignOut }){
       else moveAnchor(dr,dc);
     }
     else if(e.key==="Enter"||e.key==="F2"){ e.preventDefault(); startEdit(sel.id,sel.col); }
-    else if(e.key==="Delete"||e.key==="Backspace"){ if(focus) clearRange(); else if(canPasteCell(styles.find(x=>x.id===sel.id),sel.col)) setField(sel.id,sel.col, STAGE_KEYS.includes(sel.col)?null:(sel.col==="qty"?0:"")); e.preventDefault(); }
+    else if(e.key==="Delete"||e.key==="Backspace"){ if(focus) clearRange(); else clearCellByContext(sel.id,sel.col); e.preventDefault(); }
     else if(e.key==="Escape"){ clearSelection(); }
     else if(e.key.length===1&&!e.metaKey&&!e.ctrlKey){ if(isDateCol(sel.col)&&/[0-9]/.test(e.key)){ beginDate(sel.id,sel.col,preferredDateMode(sel.id,sel.col,"actual"),e.key); e.preventDefault(); } else if(sel.col==="qty"&&/[0-9]/.test(e.key)){ startEdit(sel.id,"qty",e.key); e.preventDefault(); } else if(sel.col==="__style"||TEXT_COLS.includes(sel.col)){ startEdit(sel.id,sel.col,e.key); e.preventDefault(); } }
   };
@@ -1761,14 +1827,16 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
                           <span title={`Old send: ${fmt(cs.storedActual)||"—"} · Rejected: ${fmt(cs.reject)||"—"} · Resend due: ${fmt(cs.rev||cs.plan)||"—"}`} style={{ display:"flex", flexDirection:"column", lineHeight:1.18, gap:2, maxWidth:"100%" }}>
                             <span style={{ fontSize:8.5, color:cs.rev?"var(--revised)":"#b03020", fontWeight:900, display:"flex", alignItems:"center", gap:3, whiteSpace:"nowrap" }}><X size={8}/>{cs.rev?"RE-SEND REV":"RE-SEND DUE"} {fmt(cs.rev||cs.plan)}</span>
                             <span style={{ fontSize:8, color:"#7a560f", fontWeight:750, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{cs.storedActual?`old actual ${fmt(cs.storedActual)}`:"old actual —"}{cs.reject?` · rej ${fmt(cs.reject)}`:""}</span>
-                            {editable && <button title="enter actual re-send date (keeps first send in history)" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"actual"); }} style={{ alignSelf:"flex-start", border:"none", background:"transparent", padding:0, margin:0, fontFamily:"inherit", fontSize:8.5, color:"var(--accent)", fontWeight:850, whiteSpace:"nowrap", cursor:"pointer", minWidth:0, minHeight:0 }}>▸ enter re-send actual</button>}
+                            {canRev && <span style={{ display:"flex", gap:5, alignItems:"center", flexWrap:"wrap" }}><button title="set revised re-send date" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"rev"); }} style={{ border:"1px solid var(--revised)", background:"rgba(255,253,248,0.86)", color:"var(--revised)", borderRadius:6, padding:"2px 5px", fontFamily:"inherit", fontSize:8, fontWeight:850, cursor:"pointer", minWidth:0, minHeight:0 }}>revise re-send</button>{cs.rev && <button title="clear revised re-send date" onClick={(e)=>{ e.stopPropagation(); if(window.confirm("Delete revised re-send date? First send actual/history will stay.")) setRev(s.id,st.key,null); }} style={{ border:"1px solid var(--line-2)", background:"rgba(255,253,248,0.86)", color:"var(--muted-4)", borderRadius:6, padding:"2px 5px", fontFamily:"inherit", fontSize:8, fontWeight:850, cursor:"pointer", minWidth:0, minHeight:0 }}>clear rev</button>}</span>}
+                            {editable && <button title="enter actual re-send date (keeps first send in history)" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"actual",undefined,true); }} style={{ alignSelf:"flex-start", border:"none", background:"transparent", padding:"2px 0", margin:0, fontFamily:"inherit", fontSize:8.5, color:"var(--accent)", fontWeight:850, whiteSpace:"nowrap", cursor:"pointer", minWidth:0, minHeight:0 }}>▸ enter actual re-send</button>}
                           </span>
                         ) : cs.actual ? (()=>{ const rh=resends&&resends[s.id+":"+st.key]; const cnt=Array.isArray(rh)?Math.max(0,rh.length-1):0; return <span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}><span style={{ display:"flex", alignItems:"center", gap:4 }}><Check size={11} color={OWNER_COLOR[(cfg.stageOwners&&cfg.stageOwners[st.key])||DEFAULT_STAGE_OWNERS[st.key]||st.owner]}/>{fmt(cs.actual)}</span>{cnt>0 && <span title={(rh||[]).map(d=>fmt(parse(typeof d==="string"?d:(d&&d.newVal)))).join(" → ")} style={{ fontSize:8, color:"#b4531a", fontWeight:800 }}>↻ resend #{cnt}</span>}{cs.histReject && <span style={{ fontSize:8, color:"#b03020", fontWeight:700 }}>↻ after REJ {fmt(cs.histReject)}</span>}</span>; })() : cs.rejected ? (
                           <span style={{ display:"flex", flexDirection:"column", lineHeight:1.25 }}>
                             <span style={{ fontSize:9, color:"#b03020", fontWeight:700, display:"flex", alignItems:"center", gap:3 }}><X size={9}/>REJECTED</span>
                             <span style={{ fontSize:9, color:"#b03020" }}>rej {fmt(cs.reject)}</span>
                             <span style={{ fontSize:9, color:hasRev?"var(--revised)":"#7a560f" }}>re-appr → {fmt(cs.rev||cs.plan)}</span>
-                            {editable && <button title="enter actual re-approval date" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"actual"); }} style={{ alignSelf:"flex-start", border:"none", background:"transparent", padding:0, margin:0, fontFamily:"inherit", fontSize:8.5, color:"var(--accent)", fontWeight:850, whiteSpace:"nowrap", cursor:"pointer", minWidth:0, minHeight:0 }}>▸ enter re-approval actual</button>}
+                            {canRev && <span style={{ display:"flex", gap:5, alignItems:"center", flexWrap:"wrap" }}><button title="set revised re-approval date" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"rev"); }} style={{ border:"1px solid var(--revised)", background:"rgba(255,253,248,0.86)", color:"var(--revised)", borderRadius:6, padding:"2px 5px", fontFamily:"inherit", fontSize:8, fontWeight:850, cursor:"pointer", minWidth:0, minHeight:0 }}>revise re-appr</button>{cs.rev && <button title="clear revised re-approval date" onClick={(e)=>{ e.stopPropagation(); if(window.confirm("Delete revised re-approval date? Rejection history will stay.")) setRev(s.id,st.key,null); }} style={{ border:"1px solid var(--line-2)", background:"rgba(255,253,248,0.86)", color:"var(--muted-4)", borderRadius:6, padding:"2px 5px", fontFamily:"inherit", fontSize:8, fontWeight:850, cursor:"pointer", minWidth:0, minHeight:0 }}>clear rev</button>}</span>}
+                            {editable && <button title="enter actual re-approval date" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"actual",undefined,true); }} style={{ alignSelf:"flex-start", border:"none", background:"transparent", padding:"2px 0", margin:0, fontFamily:"inherit", fontSize:8.5, color:"var(--accent)", fontWeight:850, whiteSpace:"nowrap", cursor:"pointer", minWidth:0, minHeight:0 }}>▸ enter actual re-approval</button>}
                           </span>
                         ) : (
                           <span style={{ display:"flex", flexDirection:"column", lineHeight:1.2 }}>
