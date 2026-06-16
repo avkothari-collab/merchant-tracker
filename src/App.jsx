@@ -1112,13 +1112,17 @@ function MerchTracker({ me, onSignOut }){
     if(!st) return false;
     const skipped=!!(st.skips&&st.skips[col]);
     if(skipped) return false;
-    // Send/make stages: linked approval rejected and no real tracked resend actual yet means this cell is a re-send planning cell.
+    // Send/make stages: while the linked approval is rejected and not resolved,
+    // normal cell editing is ALWAYS re-send planning (REVISED), never first-send/resend actual.
+    // Actual resend is only through the explicit "enter actual re-send" action.
+    // Do not switch back to ACTUAL just because resend history exists; accidental resend history
+    // was exactly what made old/actual dates appear in the editor.
     const apprK=APPR_OF_SEND[col];
     if(apprK){
       const rej=st.rejects&&st.rejects[apprK];
       const apprActual=st.actuals&&st.actuals[apprK];
       const apprSkip=st.skips&&st.skips[apprK];
-      if(rej && !apprActual && !apprSkip && !latestTrackedResendDate(st,col,parse(rej),resends)) return true;
+      if(rej && !apprActual && !apprSkip) return true;
     }
     // Approval stages: rejected approval without actual/skip means this cell is a revised re-approval planning cell.
     if(REJECTABLE.includes(col) && st.rejects&&st.rejects[col] && !(st.actuals&&st.actuals[col]) && !(st.skips&&st.skips[col])) return true;
@@ -1131,6 +1135,12 @@ function MerchTracker({ me, onSignOut }){
     return !!(r && (r.rework || r.rejected) && !r.skipped && !r.autoClosed);
   };
   const preferredDateMode=(id,col,requested="actual")=> (requested==="actual" && prefersRevisedDateEntry(id,col)) ? "rev" : requested;
+  const linkedApprovalRejectedOpen=(s,col)=>{
+    if(!s||!isStageCol(col)) return false;
+    const apprK=APPR_OF_SEND[col];
+    if(!apprK) return false;
+    return !!(s.rejects&&s.rejects[apprK] && !(s.actuals&&s.actuals[apprK]) && !(s.skips&&s.skips[apprK]));
+  };
   const beginDate=(id,col,mode,initialChar,forceActual=false)=>{
     const effectiveMode = (mode==="actual" && !forceActual) ? preferredDateMode(id,col,"actual") : mode;
     if(!canEdit(role,col,effectiveMode)) return;
@@ -1321,7 +1331,7 @@ function MerchTracker({ me, onSignOut }){
     if(!s||!canPasteCell(s,col)) return;
     // In rejected/rework cells, Delete/Backspace should clear the revised commitment first, never the old first-send actual.
     const r=isStageCol(col)?activeStageRow(id,col):null;
-    if(r && (r.rework||r.rejected) && !r.skipped && !r.autoClosed){
+    if((r && (r.rework||r.rejected) && !r.skipped && !r.autoClosed) || rawReworkOrRejectedCell(id,col)){
       if(s.revs&&s.revs[col]){
         if(window.confirm("Delete the revised commitment date? The first actual/history date will be kept.")) setRev(id,col,null);
       }
@@ -1838,10 +1848,11 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
                   const hasRev=cs&&cs.rev&&!cs.done;
                   const rvh=[];
                   const revCnt=Array.isArray(rvh)?rvh.length:0;
-                  const bg=bgFor(s.id,st.key,(cs&&cs.skipped)?"var(--tint-waive)":(cs&&cs.rejected)?"var(--tint-reject)":(cs&&cs.rework)?"var(--tint-rework)":(cs&&cs.actual&&cs.histReject?"var(--tint-histrej)":(isNext?"var(--tint-next)":"var(--surface)")));
+                  const activeReworkPlanning=!!(cs && !cs.skipped && !cs.autoClosed && linkedApprovalRejectedOpen(s,st.key));
+                  const bg=bgFor(s.id,st.key,(cs&&cs.skipped)?"var(--tint-waive)":(cs&&cs.rejected)?"var(--tint-reject)":(activeReworkPlanning||cs&&cs.rework)?"var(--tint-rework)":(cs&&cs.actual&&cs.histReject?"var(--tint-histrej)":(isNext?"var(--tint-next)":"var(--surface)")));
                   return (
                     <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} onDoubleClick={(e)=>{ e.stopPropagation(); const mode=preferredDateMode(s.id,st.key,"actual"); if(mode==="rev" ? canRev : editable) beginDate(s.id,st.key,mode); }}
-                      style={{ border:"1px solid var(--line-1)", padding:0, position:"relative", overflow:(editing&&editing.id===s.id&&editing.col===st.key)?"visible":"hidden", background:bg, boxShadow:ringFor(s.id,st.key)||(isNext?"inset 0 0 0 2px var(--accent)":null), cursor:editable?"cell":"default", ...activeCellStyle(s.id,st.key) }}>
+                      style={{ border:"1px solid var(--line-1)", padding:0, position:"relative", overflow:(editing&&editing.id===s.id&&editing.col===st.key)?"visible":"hidden", background:bg, boxShadow:ringFor(s.id,st.key)||(isNext?"inset 0 0 0 2px var(--accent)":null), cursor:(preferredDateMode(s.id,st.key,"actual")==="rev"?canRev:editable)?"cell":"default", ...activeCellStyle(s.id,st.key) }}>
                       <div className="mt-stage-cell-body" style={{ minHeight:Math.max(34,rowH-4), padding:"12px 30px 11px 30px", fontSize:11.2, color:cs.actual?"var(--ink)":"var(--muted-6)" }}>
                         {showAux && cs.plan && <span style={{ display:"block", fontSize:8, color:"#bcb6a8", lineHeight:1.3 }}>auto {fmt(cs.plan)}{cs.rev?` · rev ${fmt(cs.rev)}`:""}</span>}
                         {cs.autoClosed ? (
@@ -1851,10 +1862,10 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
                             <span style={{ fontSize:9, color:"#8a6d3b", fontWeight:700, display:"flex", alignItems:"center", gap:3 }}><SkipForward size={9}/>SKIPPED</span>
                             <span style={{ fontSize:8, color:"var(--on-dark-2)" }}>{fmt(cs.skip)}</span>{(cs.skippedWasRework||cs.skippedWasRejected) && <span style={{ fontSize:8, color:"#b4531a", fontWeight:800 }}>kept rework status</span>}
                           </span>
-                        ) : cs.rework ? (
-                          <span title={`First send kept in history: ${fmt(cs.storedActual)||"—"} · Rejected: ${fmt(cs.reject)||"—"}`} style={{ display:"flex", flexDirection:"column", lineHeight:1.18, gap:2, maxWidth:"100%" }}>
+                        ) : (activeReworkPlanning||cs.rework) ? (
+                          <span title={`First send/resend actual kept in history: ${fmt(cs.storedActual||cs.actual)||"—"} · Rejected: ${fmt(cs.reject)||"—"}`} style={{ display:"flex", flexDirection:"column", lineHeight:1.18, gap:2, maxWidth:"100%" }}>
                             <span style={{ fontSize:8.5, color:cs.rev?"var(--revised)":"#b03020", fontWeight:900, display:"flex", alignItems:"center", gap:3, whiteSpace:"nowrap" }}><X size={8}/>{cs.rev?"RE-SEND REV":"RE-SEND DUE"} {fmt(cs.rev||cs.plan)}</span>
-                            <span style={{ fontSize:8, color:"#7a560f", fontWeight:750, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{cs.reject?`rej ${fmt(cs.reject)} · `:""}first send history</span>
+                            <span style={{ fontSize:8, color:"#7a560f", fontWeight:750, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{cs.reject?`rej ${fmt(cs.reject)} · `:""}send actual kept in history</span>
                             {canRev && <button title="set revised re-send date" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"rev"); }} style={{ alignSelf:"flex-start", border:"1px solid var(--revised)", background:"rgba(255,253,248,0.86)", color:"var(--revised)", borderRadius:6, padding:"2px 5px", fontFamily:"inherit", fontSize:8, fontWeight:850, cursor:"pointer", minWidth:0, minHeight:0 }}>revise date</button>}
                             {editable && <button title="enter actual re-send date (keeps first send in history)" onClick={(e)=>{ e.stopPropagation(); beginDate(s.id,st.key,"actual",undefined,true); }} style={{ alignSelf:"flex-start", border:"none", background:"transparent", padding:"2px 0", margin:0, fontFamily:"inherit", fontSize:8.5, color:"var(--accent)", fontWeight:850, whiteSpace:"nowrap", cursor:"pointer", minWidth:0, minHeight:0 }}>▸ enter actual re-send</button>}
                           </span>
