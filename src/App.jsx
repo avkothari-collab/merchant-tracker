@@ -5,7 +5,6 @@ import { createPortal } from "react-dom";
 import { supabase } from "./supabaseClient";
 
 /* MERCH TRACKER — v31: P95 / large-sheet optimization pass */
-
 const FONT = `@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;800&family=JetBrains+Mono:wght@400;500;700&display=swap');`;
 const THEME_CSS = `
 :root, [data-theme="paper"] {
@@ -184,10 +183,16 @@ const APPR_OF_SEND={ fitSend:"fitAppr", artwork:"artAppr", strikeOff:"soAppr", l
 const SEND_FOR_APPR=Object.fromEntries(Object.entries(APPR_OF_SEND).map(([send,appr])=>[appr,send]));
 const stageReviewLabel=(style,r)=>{
   if(!r) return "";
-  if(r.rework) return `${r.label} rework / resend`;
-  if(r.reapproval) return `${r.label} re-approval`;
-  if(r.rejected) return `${r.label} rejected`;
-  return r.label;
+  // IMPORTANT: stage key is the truth for filters, cards, drilldowns and To-Do rows.
+  // r.label can become stale/derived during rework/approval transformations, so never let
+  // display text override the canonical stage key. This was causing Activity = S/O Appr
+  // cards to calculate correctly while the visible To-Do table still displayed Strike-off,
+  // Lab Dip or Artwork labels.
+  const base = stageLabelFromKeyGlobal(r.key) || r.label || r.key || "";
+  if(r.rework) return `${base} rework / resend`;
+  if(r.reapproval) return `${base} re-approval`;
+  if(r.rejected) return `${base} rejected`;
+  return base;
 };
 const REWORK_DAYS={ fitSend:4, artwork:2, strikeOff:3, labDip:7, ppSample:4 }; // working days added on rejection (redo+resend)
 const resendHistoryKey=(s,k)=>s&&s.id!=null?`${s.id}:${k}`:"";
@@ -605,7 +610,9 @@ function MerchTracker({ me, onSignOut }){
   const [sharedViews,setSharedViews]=useState(DEFAULT_NAMED_TRACKER_VIEWS);
   const [activeNamedView,setActiveNamedView]=useState("");
   const [archiveView,setArchiveView]=useState(PF.archiveView||"active");
-  const [activityFilter,setActivityFilter]=useState(PF.activityFilter||null);
+  const [activityFilter,setActivityFilter]=useState(()=>stageKeyFromAnyGlobal(PF.activityFilter)||null);
+  const setTrackerActivityFilter=(v)=>setActivityFilter(stageKeyFromAnyGlobal(v)||null);
+  const activityFilterKey=stageKeyFromAnyGlobal(activityFilter)||null;
   const [followFilter,setFollowFilter]=useState(PF.followFilter||false);
   const [viewSnap,setViewSnap]=useState(null); // saved tracker view before a drill, for one-click restore
   const scrollWrapRef=useRef(null);
@@ -1358,7 +1365,7 @@ function MerchTracker({ me, onSignOut }){
     return out;
   },[activeComputed,cfg,stageEvents]);
   const [todoFilter,setTodoFilter]=useState(PF.todoFilter||{});
-  useEffect(()=>{ try{ localStorage.setItem("mt_trackfilters", JSON.stringify({ search, searchCol, statusFilter, ownerFilter, archiveView, activityFilter, colFilters, tab, todoFilter, followFilter, savedView })); }catch(e){} },[search,searchCol,statusFilter,ownerFilter,archiveView,activityFilter,colFilters,tab,todoFilter,followFilter,savedView]);
+  useEffect(()=>{ try{ localStorage.setItem("mt_trackfilters", JSON.stringify({ search, searchCol, statusFilter, ownerFilter, archiveView, activityFilter:activityFilterKey, colFilters, tab, todoFilter, followFilter, savedView })); }catch(e){} },[search,searchCol,statusFilter,ownerFilter,archiveView,activityFilter,colFilters,tab,todoFilter,followFilter,savedView]);
   useEffect(()=>{ try{ localStorage.setItem("mt_column_view",columnView); }catch(e){} },[columnView]);
   useEffect(()=>{ try{ localStorage.setItem("mt_freeze_n",String(freezeN)); }catch(e){} },[freezeN]);
   const valueFor=(s,cc,col)=>{
@@ -1398,18 +1405,18 @@ function MerchTracker({ me, onSignOut }){
     // Hard reset: table filters, search, saved/drill filters, sort, hidden stale dropdown state.
     // This is deliberately not merged with old filter state; it replaces it.
     setStatusFilter("All"); setOwnerFilter("All"); setSearch(""); setSearchCol("auto"); setColFilters({});
-    setActivityFilter(null); setSavedView(""); setFollowFilter(false); setArchiveView("active"); setActiveNamedView("");
+    setTrackerActivityFilter(null); setSavedView(""); setFollowFilter(false); setArchiveView("active"); setActiveNamedView("");
     setSort({col:null,dir:1}); setFilterCol(null); setFindIdx(-1); setFrMatches([]); setSel(null); setFocus(null);
     try{ localStorage.setItem("mt_trackfilters", JSON.stringify({ search:"", searchCol:"auto", statusFilter:"All", ownerFilter:"All", archiveView:"active", activityFilter:null, colFilters:{}, tab, todoFilter, followFilter:false, savedView:"" })); }catch(e){}
   };
   const snapCurrent=()=>setViewSnap({ statusFilter, ownerFilter, search, searchCol, colFilters, activityFilter, savedView, archiveView, followFilter, sort });
   const clearAllFilters=()=>{ resetFilters(); setViewSnap(null); };
-  const restoreView=()=>{ if(!viewSnap) return; setStatusFilter(viewSnap.statusFilter||"All"); setOwnerFilter(viewSnap.ownerFilter||"All"); setSearch(viewSnap.search||""); setSearchCol(viewSnap.searchCol||"auto"); setColFilters(viewSnap.colFilters||{}); setActivityFilter(viewSnap.activityFilter||null); setSavedView(viewSnap.savedView||""); setArchiveView(viewSnap.archiveView||"active"); setFollowFilter(!!viewSnap.followFilter); setSort(viewSnap.sort||{col:null,dir:1}); setViewSnap(null); };
-  const applyDrill=(spec)=>{ snapCurrent(); setStatusFilter(spec.status||"All"); setOwnerFilter(spec.owner||"All"); setSearch(spec.search||""); setSearchCol("auto"); setColFilters(spec.colFilters||{}); setActivityFilter(spec.activity||null); setSavedView(""); setFilterCol(null); setSort({col:null,dir:1}); setTab("tracker"); };
+  const restoreView=()=>{ if(!viewSnap) return; setStatusFilter(viewSnap.statusFilter||"All"); setOwnerFilter(viewSnap.ownerFilter||"All"); setSearch(viewSnap.search||""); setSearchCol(viewSnap.searchCol||"auto"); setColFilters(viewSnap.colFilters||{}); setTrackerActivityFilter(viewSnap.activityFilter||null); setSavedView(viewSnap.savedView||""); setArchiveView(viewSnap.archiveView||"active"); setFollowFilter(!!viewSnap.followFilter); setSort(viewSnap.sort||{col:null,dir:1}); setViewSnap(null); };
+  const applyDrill=(spec)=>{ snapCurrent(); setStatusFilter(spec.status||"All"); setOwnerFilter(spec.owner||"All"); setSearch(spec.search||""); setSearchCol("auto"); setColFilters(spec.colFilters||{}); setTrackerActivityFilter(spec.activityKey||spec.key||spec.activity||null); setSavedView(""); setFilterCol(null); setSort({col:null,dir:1}); setTab("tracker"); };
   const presetPass=(s,c)=>{ if(!savedView) return true; const front=c.frontier?[...c.frontier]:[]; const has=(keys)=>front.some(k=>keys.includes(k)); const dueSoon=front.some(k=>{ const r=(c.stages||[]).find(x=>x.key===k); const d=r&&(r.rev||r.plan); const n=d?netWorkdays(TODAY,d):999; return d && n>=0 && n<=6; }); const anyRework=(c.stages||[]).some(r=>r.rework||r.rejected); if(savedView==="overdue") return (c.tone==="late"||c.status.startsWith("Overdue")); if(savedView==="dueThisWeek") return !c.released && dueSoon; if(savedView==="buyerPending") return !c.released && front.some(k=>((STAGES.find(x=>x.key===k)||{}).owner)==="Buyer"); if(savedView==="fabricPending") return !c.released && has(["labDip","labAppr","fabricIH"]); if(savedView==="ppPending") return !c.released && has(["ppSample","ppAppr","prodFile"]); if(savedView==="deliveryRisk") return c.tone==="late"||String(c.status).toLowerCase().includes("risk"); if(savedView==="following") return follows.has(s.id); if(savedView==="rework") return anyRework; if(savedView==="released") return c.released; return true; };
   const deferredSearch=useDeferredValue(search);
-  const filterKey=useMemo(()=>JSON.stringify({ search:deferredSearch, searchCol, statusFilter, ownerFilter, archiveView, activityFilter, colFilters, followFilter, savedView, follows:[...follows].sort() }),[deferredSearch,searchCol,statusFilter,ownerFilter,archiveView,activityFilter,colFilters,followFilter,savedView,follows]);
-  const filterIdentity=useMemo(()=>JSON.stringify({ search:deferredSearch, searchCol, statusFilter, ownerFilter, archiveView, activityFilter, colFilters, followFilter, savedView }),[deferredSearch,searchCol,statusFilter,ownerFilter,archiveView,activityFilter,colFilters,followFilter,savedView]);
+  const filterKey=useMemo(()=>JSON.stringify({ search:deferredSearch, searchCol, statusFilter, ownerFilter, archiveView, activityFilter:activityFilterKey, colFilters, followFilter, savedView, follows:[...follows].sort() }),[deferredSearch,searchCol,statusFilter,ownerFilter,archiveView,activityFilter,colFilters,followFilter,savedView,follows]);
+  const filterIdentity=useMemo(()=>JSON.stringify({ search:deferredSearch, searchCol, statusFilter, ownerFilter, archiveView, activityFilter:activityFilterKey, colFilters, followFilter, savedView }),[deferredSearch,searchCol,statusFilter,ownerFilter,archiveView,activityFilter,colFilters,followFilter,savedView]);
   const filtered=useMemo(()=>{
     const t=perfNow();
     const q=String(deferredSearch||"").trim().toLowerCase();
@@ -1420,7 +1427,7 @@ function MerchTracker({ me, onSignOut }){
       const matchS=statusFilter==="All"||(statusFilter==="At Risk"&&(c.tone==="late"||c.tone==="warn"))||(statusFilter==="On Track"&&c.tone==="ok")||(statusFilter==="Released"&&c.released);
       const matchF=cfEntries.every(([col,allowed])=> passCol(s,c,col,allowed));
       const matchO=ownerFilter==="All"||(c.chaseOwners||[]).some(o=>filterNorm(o.owner)===filterNorm(ownerFilter));
-      const matchA=!activityFilter||(c.frontier&&c.frontier.has(activityFilter))||(c.stages||[]).some(r=>r&&r.key===activityFilter&&!r.done);
+      const ak=activityFilterKey; const matchA=!ak||(c.frontier&&c.frontier.has(ak))||(c.stages||[]).some(r=>r&&r.key===ak&&!r.done);
       const matchArch=archiveView==="all"?true:(archiveView==="archived"?!!s.archived:!s.archived);
       const matchFollow=!followFilter||follows.has(s.id);
       return matchQ&&matchS&&matchF&&matchO&&matchA&&matchArch&&matchFollow&&presetPass(s,c);
@@ -1644,13 +1651,13 @@ function MerchTracker({ me, onSignOut }){
   const applyColumnView=(view)=>{ setColumnView(view); setColsOpen(false); if(view==="custom"){ setHidden(new Set()); return; } const all=[...INFO_COLS.map(c=>c.key),...STAGE_KEYS,"remarks"]; const spec=ROLE_VIEW_PRESETS[view]; if(!spec||!spec.show){ setHidden(new Set()); return; } const keep=new Set(spec.show); setHidden(new Set(all.filter(k=>!keep.has(k)))); setFreezeN(1); };
 
   const currentViewState=()=>({
-    search, searchCol, statusFilter, ownerFilter, archiveView, activityFilter, colFilters, savedView, columnView,
+    search, searchCol, statusFilter, ownerFilter, archiveView, activityFilter:activityFilterKey, colFilters, savedView, columnView,
     hidden:[...hidden], sort, freezeN
   });
   const applyTrackerViewState=(state, name="")=>{
     const st=state||{};
     setSearch(st.search||""); setSearchCol(st.searchCol||"auto"); setStatusFilter(st.statusFilter||"All"); setOwnerFilter(st.ownerFilter||"All");
-    setArchiveView(st.archiveView||"active"); setActivityFilter(st.activityFilter||null); setColFilters(st.colFilters||{}); setSavedView(st.savedView||"");
+    setArchiveView(st.archiveView||"active"); setTrackerActivityFilter(st.activityFilter||null); setColFilters(st.colFilters||{}); setSavedView(st.savedView||"");
     if(st.columnView){ setColumnView(st.columnView); }
     if(Array.isArray(st.hidden)) setHidden(new Set(st.hidden)); else if(st.columnView && st.columnView!=="custom") applyColumnView(st.columnView);
     setSort(st.sort&&st.sort.col?st.sort:{ col:null, dir:1 }); setFreezeN(Number(st.freezeN)||1); setActiveNamedView(name||""); setViewSnap(null);
@@ -1868,7 +1875,7 @@ function MerchTracker({ me, onSignOut }){
     const matchS=statusFilter==="All"||(statusFilter==="At Risk"&&(c.tone==="late"||c.tone==="warn"))||(statusFilter==="On Track"&&c.tone==="ok")||(statusFilter==="Released"&&c.released);
     const matchF=Object.entries(colFilters||{}).every(([cc,allowed])=> cc===exceptCol || passCol(s,c,cc,allowed));
     const matchO=ownerFilter==="All"||(c.chaseOwners||[]).some(o=>o.owner===ownerFilter);
-    const matchA=!activityFilter||(c.frontier&&c.frontier.has(activityFilter));
+    const ak=activityFilterKey; const matchA=!ak||(c.frontier&&c.frontier.has(ak))||(c.stages||[]).some(r=>r&&r.key===ak&&!r.done);
     const matchArch=archiveView==="all"?true:(archiveView==="archived"?!!s.archived:!s.archived);
     const matchFollow=!followFilter||follows.has(s.id);
     return matchQ&&matchS&&matchF&&matchO&&matchA&&matchArch&&matchFollow&&presetPass(s,c);
@@ -2148,7 +2155,7 @@ function MerchTracker({ me, onSignOut }){
         <select value={savedView} onChange={e=>{ setSavedView(e.target.value); if(e.target.value==="following") setFollowFilter(false); }} onClick={e=>e.stopPropagation()} title="quick saved operational views" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 8px", cursor:"pointer", border:"1px solid "+(savedView?"var(--accent)":"var(--ink)"), background:savedView?"var(--accent-tint)":"var(--surface)", fontWeight:savedView?700:400 }}>{SAVED_VIEWS.map(([k,l])=><option key={k} value={k}>{l}</option>)}</select>
         <div style={{ display:"flex", border:"1px solid var(--ink)" }}>{["All","At Risk","On Track","Released"].map(f=>(<button key={f} onClick={(e)=>{ e.stopPropagation(); setStatusFilter(f); }} style={{ fontFamily:"inherit", fontSize:11, padding:"6px 11px", cursor:"pointer", border:"none", borderRight:f!=="Released"?"1px solid var(--ink)":"none", background:statusFilter===f?"var(--ink)":"var(--surface)", color:statusFilter===f?"var(--bg)":"var(--ink)" }}>{f}</button>))}</div>
         <div style={{ display:"flex", border:"1px solid var(--ink)" }}>{chaseOwnerOptions.map((f,i)=>(<button key={f} onClick={(e)=>{ e.stopPropagation(); setOwnerFilter(f); }} title="chase label / department" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 9px", cursor:"pointer", border:"none", borderRight:i<chaseOwnerOptions.length-1?"1px solid var(--ink)":"none", background:ownerFilter===f?"#2563a6":"var(--surface)", color:ownerFilter===f?"var(--surface)":"var(--ink)" }}>{f==="All"?"Chase":f}</button>))}</div>
-        <select value={activityFilter||""} onChange={e=>{ setActivityFilter(e.target.value||null); }} onClick={e=>e.stopPropagation()} title="show only styles whose current pending action is this activity" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 8px", cursor:"pointer", border:"1px solid "+(activityFilter?"var(--accent)":"var(--ink)"), background:activityFilter?"var(--accent-tint)":"var(--surface)", fontWeight:activityFilter?700:400 }}><option value="">Activity: all</option>{STAGES.map(st=>(<option key={st.key} value={st.key}>{st.label}</option>))}</select>
+        <select value={activityFilterKey||""} onChange={e=>{ setTrackerActivityFilter(e.target.value||null); }} onClick={e=>e.stopPropagation()} title="show only styles whose current pending action is this activity" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 8px", cursor:"pointer", border:"1px solid "+(activityFilter?"var(--accent)":"var(--ink)"), background:activityFilter?"var(--accent-tint)":"var(--surface)", fontWeight:activityFilter?700:400 }}><option value="">Activity: all</option>{STAGES.map(st=>(<option key={st.key} value={st.key}>{st.label}</option>))}</select>
         <div style={{ display:"flex", border:"1px solid var(--ink)" }}>{[["active","Active"],["all","All"],["archived","Archived"]].map(([v,lab])=>(<button key={v} onClick={(e)=>{ e.stopPropagation(); setArchiveView(v); }} title="archived styles are hidden from the live sheet" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 9px", cursor:"pointer", border:"none", borderRight:v!=="archived"?"1px solid var(--ink)":"none", background:archiveView===v?"#5a6650":"var(--surface)", color:archiveView===v?"var(--surface)":"var(--ink)" }}>{lab}</button>))}</div>
         <button onClick={(e)=>{ e.stopPropagation(); setFollowFilter(v=>!v); }} title="show only styles you follow" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 11px", cursor:"pointer", border:"1px solid var(--ink)", background:followFilter?"var(--accent)":"var(--surface)", color:followFilter?"var(--surface)":"var(--ink)", display:"inline-flex", alignItems:"center", gap:5 }}><Star size={12} fill={followFilter?"var(--surface)":"none"}/> Following</button>
         {canAdmin(role) && archiveView!=="archived" && anyFilter && <button onClick={(e)=>{ e.stopPropagation(); archiveFiltered(true); }} title="archive the styles currently shown (e.g. a finished season)" style={{ fontFamily:"inherit", fontSize:11, padding:"6px 10px", cursor:"pointer", border:"1px solid #5a6650", background:"var(--surface)", color:"#5a6650", fontWeight:700 }}>Archive these ({rows.length})</button>}
@@ -2243,7 +2250,7 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
         if(search) chip("q",(searchCol==="auto"?"search":searchCol)+": "+search, ()=>setSearch(""));
         if(statusFilter!=="All") chip("st","status: "+statusFilter, ()=>setStatusFilter("All"));
         if(ownerFilter!=="All") chip("ow","chase: "+ownerFilter, ()=>setOwnerFilter("All"));
-        if(activityFilter) chip("ac","activity: "+((STAGES.find(x=>x.key===activityFilter)||{}).label||activityFilter), ()=>setActivityFilter(null));
+        if(activityFilterKey) chip("ac","activity: "+((STAGES.find(x=>x.key===activityFilterKey)||{}).label||activityFilterKey), ()=>setTrackerActivityFilter(null));
         if(followFilter) chip("fo","following only", ()=>setFollowFilter(false));
         if(savedView) chip("sv","saved: "+((SAVED_VIEWS.find(x=>x[0]===savedView)||[])[1]||savedView), ()=>setSavedView(""));
         if(activeNamedView) chip("nv","default view: "+activeNamedView, ()=>setActiveNamedView(""));
@@ -2646,55 +2653,67 @@ function FilterMenu({ values, allowed, onSet, onClose }){
   const [q,setQ]=useState("");
   const anchorRef=useRef(null); const [pos,setPos]=useState(null);
   const norm=(v)=>String(v==null?"":v).replace(/\s+/g," ").trim();
-  // Freeze the value list when the popup opens. Earlier the menu rebuilt while users clicked
-  // checkboxes, causing the dropdown to flash/turn white or lose pending selections when the
-  // filtered table recalculated underneath it.
+  const liveNorm=(v)=>String(v==null?"":v).replace(/\s+/g," ").trim().toLowerCase();
+  // Freeze the option list when the popup opens so live filtering never makes the menu flash/turn white.
   const [allValues]=useState(()=>[...new Set((values||[]).map(norm).filter(Boolean))].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true,sensitivity:"base"})));
   const rawAllowed=Array.isArray(allowed)?allowed:null;
   const isNoneSelected=Array.isArray(rawAllowed) && rawAllowed.some(v=>String(v)===FILTER_NONE);
   const initialAllowed=Array.isArray(rawAllowed)?rawAllowed.map(norm).filter(v=>v && v!==FILTER_NONE):null;
   const [pending,setPending]=useState(()=> new Set(isNoneSelected?[]:(initialAllowed||allValues).map(norm)) );
-  useEffect(()=>{ setPending(new Set(isNoneSelected?[]:(initialAllowed||allValues).map(norm))); },[allowed]);
-  const menuFilterNorm=(v)=>String(v==null?"":v).replace(/\s+/g," ").trim().toLowerCase();
-  const shown=allValues.filter(v=>menuFilterNorm(v).includes(menuFilterNorm(q)));
+  const [manualMode,setManualMode]=useState(()=>Array.isArray(rawAllowed));
+  useEffect(()=>{ setPending(new Set(isNoneSelected?[]:(initialAllowed||allValues).map(norm))); setManualMode(Array.isArray(rawAllowed)); },[allowed]);
+  const qNorm=liveNorm(q);
+  const shown=allValues.filter(v=>liveNorm(v).includes(qNorm));
   const filterIsActive=Array.isArray(rawAllowed);
   const selectedCount=pending.size;
-  const apply=()=>{
-    const arr=[...pending];
-    if(arr.length===allValues.length){ onSet(null); onClose&&onClose(); return; }
-    onSet(arr);
-    onClose&&onClose();
+  const sendFilter=(vals)=>{
+    const raw=Array.isArray(vals)?vals:[...vals];
+    const clean=[...new Set(raw.map(norm).filter(Boolean))];
+    if(clean.length===allValues.length){ onSet(null); return; }
+    onSet(clean.length?clean:[FILTER_NONE]);
   };
-  const toggle=(v)=>setPending(cur=>{ const n=new Set(cur); if(n.has(v)) n.delete(v); else n.add(v); return n; });
-  const selectShown=()=>setPending(cur=>{ const n=new Set(cur); shown.forEach(v=>n.add(v)); return n; });
-  const clearShown=()=>setPending(cur=>{ const n=new Set(cur); shown.forEach(v=>n.delete(v)); return n; });
-  const clearFilter=()=>{ onSet(null); onClose&&onClose(); };
-  const none=()=>{ setPending(new Set()); };
+  const liveSearch=(nextQ)=>{
+    setQ(nextQ);
+    const n=liveNorm(nextQ);
+    const matches=allValues.filter(v=>liveNorm(v).includes(n));
+    // Main expected behaviour: typing in a table column filter immediately filters the table.
+    // No Apply button is required. If search is cleared and the user has not manually selected
+    // values in this open menu, the column filter is cleared back to All.
+    if(n){ setManualMode(false); onSet(matches.length?matches:[FILTER_NONE]); }
+    else { setManualMode(false); setPending(new Set(allValues)); onSet(null); }
+  };
+  const apply=()=>{ if(qNorm && !manualMode) sendFilter(shown); else sendFilter(pending); onClose&&onClose(); };
+  const toggle=(v)=>{ setManualMode(true); setPending(cur=>{ const n=new Set(cur); if(n.has(v)) n.delete(v); else n.add(v); sendFilter(n); return n; }); };
+  const selectVals=(vals)=>{ setManualMode(true); const n=new Set(vals.map(norm).filter(Boolean)); setPending(n); sendFilter(n); };
+  const selectShown=()=>selectVals([...new Set([...pending,...shown])]);
+  const clearShown=()=>{ setManualMode(true); setPending(cur=>{ const n=new Set(cur); shown.forEach(v=>n.delete(v)); sendFilter(n); return n; }); };
+  const clearFilter=()=>{ setQ(""); setManualMode(false); setPending(new Set(allValues)); onSet(null); };
+  const none=()=>{ setManualMode(true); const n=new Set(); setPending(n); onSet([FILTER_NONE]); };
   useEffect(()=>{ const a=anchorRef.current; if(!a) return; const r=a.getBoundingClientRect(); const W=260,H=350; let left=r.left-220; if(left+W>window.innerWidth-8) left=window.innerWidth-8-W; if(left<8) left=8; let top=r.bottom+4; if(top+H>window.innerHeight-8) top=Math.max(8,window.innerHeight-8-H); setPos({top,left}); },[]);
   const btn={ fontFamily:"'JetBrains Mono', monospace", fontSize:9, fontWeight:900, padding:"5px 7px", border:"1px solid #1f1f1d", background:"#fffdf8", color:"#1f1f1d", cursor:"pointer" };
   const menu=(
     <div onClick={e=>e.stopPropagation()} style={{ position:"fixed", top:pos?pos.top:-9999, left:pos?pos.left:-9999, zIndex:9999, background:"#fffdf8", color:"#1f1f1d", border:"1px solid #1f1f1d", boxShadow:"4px 4px 0 rgba(31,31,29,.28)", padding:9, width:260, textTransform:"none", letterSpacing:0, fontWeight:400, maxHeight:"82vh", overflowY:"auto" }}>
       <div style={{ fontSize:10, fontWeight:950, marginBottom:6, display:"flex", justifyContent:"space-between", gap:8 }}><span>Column filter</span><button onClick={onClose} style={{...btn,padding:"2px 7px"}}>×</button></div>
-      <input autoFocus value={q} onClick={e=>e.stopPropagation()} onKeyDown={e=>e.stopPropagation()} onChange={e=>setQ(e.target.value)} placeholder="search values…" style={{ width:"100%", fontFamily:"inherit", fontSize:11, padding:"5px 7px", border:"1px solid #8f8577", outline:"none", marginBottom:7, boxSizing:"border-box", background:"#ffffff", color:"#1f1f1d" }}/>
+      <input autoFocus value={q} onClick={e=>e.stopPropagation()} onKeyDown={e=>e.stopPropagation()} onChange={e=>liveSearch(e.target.value)} placeholder="type to filter live…" style={{ width:"100%", fontFamily:"inherit", fontSize:11, padding:"5px 7px", border:"1px solid #8f8577", outline:"none", marginBottom:7, boxSizing:"border-box", background:"#ffffff", color:"#1f1f1d" }}/>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginBottom:7 }}>
         <button onClick={clearFilter} title="remove this column filter" style={{ ...btn, background:!filterIsActive?"#1f1f1d":"#fffdf8", color:!filterIsActive?"#fffdf8":"#1f1f1d" }}>All / clear</button>
-        <button onClick={()=>setPending(new Set(allValues))} disabled={!allValues.length} style={{ ...btn, opacity:allValues.length?1:.5 }}>Select all</button>
-        <button onClick={selectShown} disabled={!shown.length} style={{ ...btn, opacity:shown.length?1:.5 }}>Select matches</button>
+        <button onClick={()=>selectVals(qNorm?shown:allValues)} disabled={!(qNorm?shown.length:allValues.length)} style={{ ...btn, opacity:(qNorm?shown.length:allValues.length)?1:.5 }}>{qNorm?"Select matches":"Select all"}</button>
+        <button onClick={selectShown} disabled={!shown.length} style={{ ...btn, opacity:shown.length?1:.5 }}>Add matches</button>
         <button onClick={clearShown} disabled={!shown.length} style={{ ...btn, opacity:shown.length?1:.5 }}>Uncheck matches</button>
         <button onClick={none} style={{ ...btn, gridColumn:"1 / span 2", background:"#fff2f0", color:"#b82117" }}>Show zero rows</button>
       </div>
-      <div style={{ fontSize:9, color:"#6f6a61", marginBottom:5 }}>{selectedCount} of {allValues.length} selected{q?` · ${shown.length} match search`:""} · changes apply only when you click Apply</div>
+      <div style={{ fontSize:9, color:"#6f6a61", marginBottom:5 }}>{selectedCount} of {allValues.length} selected{q?` · ${shown.length} match search · live ${manualMode?"checked values":"search matches"}`:""} · typing filters live</div>
       <div style={{ maxHeight:190, overflowY:"auto", borderTop:"1px solid #e7dcc2" }}>
         {shown.map(v=>(<label key={v} style={{ display:"flex", alignItems:"center", gap:7, fontSize:10, padding:"4px 0", borderBottom:"1px solid #eee4d2", cursor:"pointer", color:"#1f1f1d" }}>
           <input type="checkbox" checked={pending.has(v)} onChange={()=>toggle(v)} style={{ cursor:"pointer" }}/>
           <span style={{ flex:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{v}</span>
-          <button onClick={(e)=>{ e.preventDefault(); e.stopPropagation(); setPending(new Set([v])); }} title="show only this" style={{ fontSize:8, border:"1px solid #8f8577", background:"#fffdf8", cursor:"pointer", padding:"1px 5px", color:"#1f1f1d" }}>only</button>
+          <button onClick={(e)=>{ e.preventDefault(); e.stopPropagation(); selectVals([v]); }} title="show only this" style={{ fontSize:8, border:"1px solid #8f8577", background:"#fffdf8", cursor:"pointer", padding:"1px 5px", color:"#1f1f1d" }}>only</button>
         </label>))}
         {shown.length===0 && <div style={{ fontSize:10, color:"#6f6a61", padding:"6px 0" }}>No matching values.</div>}
       </div>
       <div style={{ display:"flex", gap:6, marginTop:7 }}>
         <button onClick={clearFilter} style={{ ...btn, flex:1 }}>Clear filter</button>
-        <button onClick={apply} style={{ ...btn, flex:1, background:"#1f1f1d", color:"#fffdf8" }}>Apply</button>
+        <button onClick={apply} style={{ ...btn, flex:1, background:"#1f1f1d", color:"#fffdf8" }}>Done</button>
       </div>
     </div>
   );
@@ -3411,16 +3430,31 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   useEffect(()=>{ setTf(cleanTodoFilter(filter||{})); },[filterSig]);
   const includeEsc=cfg&&cfg.todoEscalationRows!==false;
   const baseItems=items||[];
-  const escalationRows=includeEsc?baseItems.filter(t=>t.overdue&&t.escalationOwner).map(t=>({ ...t, todoType:"Escalation", activity:`Escalate: ${t.activity}`, owner:t.owner, originalActivity:t.activity })) : [];
-  const rawDisplayItems=[...baseItems.map(t=>({ ...t, todoType:"Activity" })), ...escalationRows];
-  const itemGroup=(t)=> (t.isColour || ["fabricIH","labDip","labAppr"].includes(t.key)) ? "fabricLab" : "activity";
-  const displayItems=rawDisplayItems.filter(t=> todoMode==="all" || itemGroup(t)===todoMode);
-  const phaseOf=(t)=>{ const k=t.key||""; if(k==="techpack") return "Pre-Fit"; if(["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"].includes(k)) return "Fit / Print"; if(["labDip","labAppr"].includes(k)) return "Lab Dip"; if(k==="fabricIH") return "Fabric IH"; return "PP / Prod"; };
+  const phaseOf=(t)=>{ const k=t._stageKey||t.key||""; if(k==="techpack") return "Pre-Fit"; if(["fitSend","fitAppr","artwork","artAppr","strikeOff","soAppr"].includes(k)) return "Fit / Print"; if(["labDip","labAppr"].includes(k)) return "Lab Dip"; if(k==="fabricIH") return "Fabric IH"; return "PP / Prod"; };
   const stageLabelOf=(key)=>((STAGES.find(st=>st.key===key)||{}).label)||key||"";
   const norm=(v)=>String(v||"").replace(/^Escalate:\s*/i,"").replace(/\s+/g," ").trim().toLowerCase();
   const stageKeyFromAny=(v)=>stageKeyFromAnyGlobal(v);
-  const activityCanonical=(t)=>String(t&&((t.originalActivity||t.activityLabel||t.activity)||stageLabelOf(t.key)||t.key)||"").replace(/^Escalate:\s*/i,"").replace(/\s+/g," ").trim();
-  const activityKeyOf=(t)=>stageKeyFromAny(t&&t.key)||stageKeyFromAny(t&&t.activityKey)||stageKeyFromAny(activityCanonical(t));
+  const canonicalTodoRow=(t,kind="Activity")=>{
+    const stageKey=stageKeyFromAny(t&&t.key)||stageKeyFromAny(t&&t.activityKey)||stageKeyFromAny(t&&t.originalActivity)||stageKeyFromAny(t&&t.activityLabel)||stageKeyFromAny(t&&t.activity)||String((t&&t.key)||"");
+    const stageLabel=stageLabelOf(stageKey)||String((t&&t.activityLabel)||(t&&t.originalActivity)||(t&&t.activity)||stageKey||"").replace(/^Escalate:\s*/i,"").replace(/\s+/g," ").trim();
+    return {
+      ...(t||{}),
+      todoType: kind,
+      _stageKey: stageKey,
+      _activityLabel: stageLabel,
+      key: stageKey || (t&&t.key) || "",
+      activityKey: stageKey || (t&&t.activityKey) || "",
+      activity: stageLabel,
+      activityLabel: stageLabel,
+      originalActivity: stageLabel
+    };
+  };
+  const escalationRows=includeEsc?baseItems.filter(t=>t.overdue&&t.escalationOwner).map(t=>canonicalTodoRow({ ...t, owner:t.owner },"Escalation")) : [];
+  const rawDisplayItems=[...baseItems.map(t=>canonicalTodoRow(t,"Activity")), ...escalationRows];
+  const itemGroup=(t)=> (t.isColour || ["fabricIH","labDip","labAppr"].includes(t._stageKey||t.key)) ? "fabricLab" : "activity";
+  const displayItems=rawDisplayItems.filter(t=> todoMode==="all" || itemGroup(t)===todoMode);
+  const activityCanonical=(t)=>String(t&&t._activityLabel||"").replace(/^Escalate:\s*/i,"").replace(/\s+/g," ").trim();
+  const activityKeyOf=(t)=>String((t&&t._stageKey)||(t&&t.activityKey)||(t&&t.key)||"");
   const selectedFor=(field)=>arrVal(tf[field]).map(norm).filter(Boolean);
 
   // HARD activity gate for To-Do. This is intentionally strict:
@@ -3440,18 +3474,9 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   const hasActivityGate=selectedActivityRawValues.length>0;
   const activityPass=(t)=>{
     if(!hasActivityGate) return true;
-    const rowKey=String((t&&t.key)||(t&&t.activityKey)||"");
-    const rowActivityKey=String((t&&t.activityKey)||(t&&t.key)||"");
-    // Hard gate first: if we could resolve the selected activity to a stage key, the row must have
-    // that exact stage key. No display-text fallback is allowed in this case; that was how Lab Dip,
-    // Artwork, and Fit Send rows leaked into a Strike-off filter.
-    if(selectedActivityKeySet.size>0){
-      return selectedActivityKeySet.has(rowKey) || selectedActivityKeySet.has(rowActivityKey);
-    }
-    // Fallback only when the selected value cannot be mapped to a known stage key.
-    const rk=activityKeyOf(t)||"";
-    const rowTokens=[stageLabelOf(rk), rk, activityCanonical(t), t.activity, t.originalActivity, t.activityLabel].map(v=>filterToken(v)).filter(Boolean);
-    return rowTokens.some(tok=>selectedActivityTokenSet.has(tok));
+    const rowKey=activityKeyOf(t);
+    if(selectedActivityKeySet.size>0) return selectedActivityKeySet.has(rowKey);
+    return selectedActivityTokenSet.has(filterToken(activityCanonical(t))) || selectedActivityTokenSet.has(filterToken(rowKey));
   };
 
   const matchesAny=(field,candidates)=>{
@@ -3462,6 +3487,7 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   };
   const candidatesFor=(t,field)=>{
     if(field==="phase") return phaseOf(t);
+    if(field==="activity") return [t._activityLabel, t._stageKey].filter(Boolean);
     if(field==="priority") return t.overdue?"Overdue":"Upcoming";
     if(field==="todoType") return t.todoType;
     if(field==="risk") return t.priorityBucket;
@@ -3480,7 +3506,7 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
   const filterFields=["phase","priority","risk","todoType","orderNo","junior","branch","owner","escalationOwner","style","colour","fit","family","brand","fabric","buyer"];
   const passExcept=(t,except)=> (except==="activity" || activityPass(t)) && filterFields.every(field=>field===except || matchesAny(field,candidatesFor(t,field)));
   const pass=(t)=>passExcept(t,null);
-  const distinct=(field)=>{ const vals=new Set(); displayItems.forEach(t=>{ if(!passExcept(t,field)) return; if(field==="priority") vals.add(t.overdue?"Overdue":"Upcoming"); else if(field==="phase") vals.add(phaseOf(t)); else if(field==="key") vals.add(stageLabelOf(t.key)); else if(field==="activity") { const av=stageLabelOf(activityKeyOf(t))||activityCanonical(t); if(av) vals.add(av); } else if(field==="style") { if(t.isColour && t.colour) vals.add(t.colour); else if(t.styleNo) vals.add(t.styleNo); } else if(field==="orderNo" && Array.isArray(t.orderNos)&&t.orderNos.length) t.orderNos.forEach(v=>v&&vals.add(v)); else if(field==="junior" && Array.isArray(t.juniors)&&t.juniors.length) t.juniors.forEach(v=>v&&vals.add(v)); else { const v=t[field]; if(v) vals.add(v); } }); return [...vals].sort((a,b)=>String(a).localeCompare(String(b),undefined,{numeric:true,sensitivity:"base"})); };
+  const distinct=(field)=>{ const vals=new Set(); displayItems.forEach(t=>{ if(!passExcept(t,field)) return; if(field==="priority") vals.add(t.overdue?"Overdue":"Upcoming"); else if(field==="phase") vals.add(phaseOf(t)); else if(field==="key") vals.add(stageLabelOf(activityKeyOf(t))); else if(field==="activity") { const av=t._activityLabel||stageLabelOf(activityKeyOf(t)); if(av) vals.add(av); } else if(field==="style") { if(t.isColour && t.colour) vals.add(t.colour); else if(t.styleNo) vals.add(t.styleNo); } else if(field==="orderNo" && Array.isArray(t.orderNos)&&t.orderNos.length) t.orderNos.forEach(v=>v&&vals.add(v)); else if(field==="junior" && Array.isArray(t.juniors)&&t.juniors.length) t.juniors.forEach(v=>v&&vals.add(v)); else { const v=t[field]; if(v) vals.add(v); } }); return [...vals].sort((a,b)=>String(a).localeCompare(String(b),undefined,{numeric:true,sensitivity:"base"})); };
   const orders=distinct("orderNo"), juniors=distinct("junior"), activities=distinct("activity"), branches=distinct("branch"), owners=distinct("owner"), escOwners=distinct("escalationOwner"), types=distinct("todoType"), priorities=distinct("priority"), risks=distinct("risk"), phases=["Pre-Fit","Fit / Print","Lab Dip","Fabric IH","PP / Prod"], stylesList=distinct("style");
   // Final source for rendered rows. The activity hard gate is applied before and after generic filters.
   const activityScopedDisplayItems=hasActivityGate?displayItems.filter(activityPass):displayItems;
@@ -3563,14 +3589,14 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
       { label:"To-Do Items", data:data, modes:["detailed"] },
   ];
   const copyPlainText=async(txt)=>{ const v=String(txt||""); if(!v) return; try{ await navigator.clipboard.writeText(v); }catch(e){ try{ const ta=document.createElement("textarea"); ta.value=v; ta.setAttribute("readonly",""); ta.style.position="fixed"; ta.style.left="-9999px"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta); }catch(err){} } };
-  const row=(t)=><div key={(t.isColour?"col-":"")+t.id+t.key+(t.colour||"")+(t.orderNo||"")} title="Text is selectable/copyable. Use Copy style to copy only the style number; use Open to jump to Tracker." style={{ minWidth:minTableWidth, display:"grid", gridTemplateColumns:GRID, alignItems:"center", borderLeft:`4px solid ${t.overdue?"var(--danger)":"var(--accent)"}`, borderBottom:"1px solid #eee7da", background:t.isColour?"#fbf8f1":"var(--surface)", cursor:"default", fontFamily:"inherit", minHeight:46, userSelect:"text", WebkitUserSelect:"text" }}>
+  const row=(t)=><div key={(t.isColour?"col-":"")+t.id+t._stageKey+(t.colour||"")+(t.orderNo||"")} title="Text is selectable/copyable. Use Copy style to copy only the style number; use Open to jump to Tracker." style={{ minWidth:minTableWidth, display:"grid", gridTemplateColumns:GRID, alignItems:"center", borderLeft:`4px solid ${t.overdue?"var(--danger)":"var(--accent)"}`, borderBottom:"1px solid #eee7da", background:t.isColour?"#fbf8f1":"var(--surface)", cursor:"default", fontFamily:"inherit", minHeight:46, userSelect:"text", WebkitUserSelect:"text" }}>
     <div style={{ padding:"7px 8px", fontSize:10, fontWeight:800, display:"flex", alignItems:"center", gap:7, color:t.overdue?"var(--danger)":"#7a560f" }}><span style={{ width:8, height:8, borderRadius:"50%", background:t.overdue?"var(--danger)":"var(--accent)", flexShrink:0 }}/>{t.overdue?"Overdue":"Upcoming"}</div>
     <div title={t.priorityReason||""} style={{ padding:"7px 8px", fontSize:10, fontWeight:900, color:String(t.priorityBucket||"").includes("Critical")?"var(--danger)":String(t.priorityBucket||"").includes("Hidden")?"#b45309":"var(--ink)", lineHeight:1.15 }}>{t.priorityBucket||"Daily Chase"}<div style={{ fontSize:8, fontWeight:700, color:"var(--muted-2)", marginTop:2, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{t.priorityReason||""}</div></div>
     <div style={{ padding:"7px 8px", fontSize:9, fontWeight:800, color:t.todoType==="Escalation"?"var(--danger)":"var(--muted-3)" }}>{t.todoType||"Activity"}</div>
     <div style={{ padding:"7px 8px", fontSize:10, color:"var(--muted-4)", fontWeight:800 }}>{t.orderNo||"—"}</div>
     <div style={{ padding:"7px 8px", fontSize:11, fontWeight:800, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{t.isColour?<span style={{ display:"inline-flex", alignItems:"center", gap:6, maxWidth:"100%" }}><span style={{ fontSize:8, fontWeight:900, background:"var(--ink)", color:"var(--bg)", padding:"1px 4px", flexShrink:0 }}>{t.key==="fabricIH"?"FABRIC":"LAB"}</span><span style={{ overflow:"hidden", textOverflow:"ellipsis" }}>{t.colour}</span><span style={{ color:"var(--muted-1)", fontWeight:500, flexShrink:0 }}>×{t.count}</span></span>:t.styleNo}</div>
     <div style={{ padding:"7px 8px", fontSize:10, color:"var(--muted-5)" }}>{t.junior||"—"}</div>
-    <div style={{ padding:"7px 8px", fontSize:10, fontWeight:800, color:"#333", whiteSpace:"normal", lineHeight:1.25 }}>{t.activity}</div>
+    <div style={{ padding:"7px 8px", fontSize:10, fontWeight:800, color:"#333", whiteSpace:"normal", lineHeight:1.25 }}>{t._activityLabel}</div>
     <div style={{ padding:"7px 8px", fontSize:10, color:"var(--muted-3)" }}>{t.branch}</div>
     <div style={{ padding:"7px 8px", fontSize:10, fontWeight:800, color:OWNER_COLOR2[t.owner]||"var(--muted-3)" }}>{t.owner}</div>
     <div style={{ padding:"7px 8px", fontSize:10, fontWeight:900, color:t.escalationOwner?"var(--danger)":"var(--muted-2)" }}>{t.escalationOwner||"—"}</div>
@@ -3582,10 +3608,10 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
     <div style={{ padding:"7px 8px", display:"flex", gap:8, justifyContent:"flex-end" }}>
       {!t.isColour && <button onClick={(e)=>{ e.stopPropagation(); copyPlainText(t.styleNo); }} title="Copy only this Style No to clipboard" style={{ flexShrink:0, fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"4px 9px", cursor:"pointer", border:"1px solid var(--line-2)", borderRadius:8, background:"var(--bg)", color:"var(--ink)", userSelect:"none", WebkitUserSelect:"none" }}>Copy style</button>}
       {t.isColour && <button onClick={(e)=>{ e.stopPropagation(); copyPlainText(t.colour); }} title="Copy this colour/group text to clipboard" style={{ flexShrink:0, fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"4px 9px", cursor:"pointer", border:"1px solid var(--line-2)", borderRadius:8, background:"var(--bg)", color:"var(--ink)", userSelect:"none", WebkitUserSelect:"none" }}>Copy</button>}
-      <button onClick={(e)=>{ e.stopPropagation(); onJump(t.id,t.key); }} title="Open this style/stage in Tracker" style={{ flexShrink:0, fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"4px 9px", cursor:"pointer", border:"1px solid var(--ink)", borderRadius:8, background:"var(--surface)", color:"var(--ink)", userSelect:"none", WebkitUserSelect:"none" }}>Open</button>
+      <button onClick={(e)=>{ e.stopPropagation(); onJump(t.id,t._stageKey||t.key); }} title="Open this style/stage in Tracker" style={{ flexShrink:0, fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"4px 9px", cursor:"pointer", border:"1px solid var(--ink)", borderRadius:8, background:"var(--surface)", color:"var(--ink)", userSelect:"none", WebkitUserSelect:"none" }}>Open</button>
     </div>
   </div>;
-  const activitySummary=Object.values(shown.reduce((acc,t)=>{ const stageKey=activityKeyOf(t)||t.key||""; const k=stageLabelOf(stageKey)||activityCanonical(t)||"(blank)"; const cur=acc[stageKey||k]||(acc[stageKey||k]={ activity:k, activityKey:stageKey, upcoming:0, overdue:0, critical:0, total:0 }); cur.total++; if(t.overdue){ cur.overdue++; if((Number(t.daysLate)||0)>5) cur.critical++; } else cur.upcoming++; return acc; },{})).sort((a,b)=>b.critical-a.critical||b.overdue-a.overdue||b.total-a.total).slice(0,10);
+  const activitySummary=Object.values(shown.reduce((acc,t)=>{ const stageKey=activityKeyOf(t)||""; const k=stageLabelOf(stageKey)||activityCanonical(t)||"(blank)"; const cur=acc[stageKey||k]||(acc[stageKey||k]={ activity:k, activityKey:stageKey, upcoming:0, overdue:0, critical:0, total:0 }); cur.total++; if(t.overdue){ cur.overdue++; if((Number(t.daysLate)||0)>5) cur.critical++; } else cur.upcoming++; return acc; },{})).sort((a,b)=>b.critical-a.critical||b.overdue-a.overdue||b.total-a.total).slice(0,10);
   const cardTone=(title)=> title==="Upcoming"?{ bg:"#fff4d8", bd:"#d58a13", fg:"#8a5200" }:title==="Overdue"?{ bg:"#ffe4dc", bd:"#c5251a", fg:"#b82117" }:title==="Critical"?{ bg:"#ffd4cc", bd:"#9f1712", fg:"#9f1712" }:{ bg:"var(--surface)", bd:"var(--line-2)", fg:"var(--ink)" };
   const card=(title,n,sub,color)=>{ const tone=cardTone(title); return <div style={{ minWidth:165, flex:"1 1 165px", border:`2px solid ${tone.bd}`, borderRadius:14, background:tone.bg, padding:"12px 14px", boxShadow:"var(--card-shadow)" }}><div style={{ fontSize:10.5, textTransform:"uppercase", color:tone.fg, fontWeight:950, letterSpacing:.4 }}>{title}</div><div style={{ fontSize:34, fontFamily:"'Archivo',sans-serif", fontWeight:950, color:color||tone.fg, lineHeight:1.02 }}>{n}</div><div style={{ fontSize:10, color:tone.fg, fontWeight:800, opacity:.85 }}>{sub}</div></div>; };
   return (<div style={{ padding:"16px 22px", maxWidth:"none" }}>
