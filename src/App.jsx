@@ -512,8 +512,11 @@ const DISPLAY_UPPER_TEXT_COLS=new Set(["orderNo","sampleFit","family","colour","
 const displayTextValue=(col,val)=>{ if(val==null||val==="") return ""; const t=String(val); return DISPLAY_UPPER_TEXT_COLS.has(col)?t.toUpperCase():t; };
 const isEditableCol=(col)=> col==="__style"||col==="qty"||col==="ordRec"||col==="delivery"||TEXT_COLS.includes(col)||STAGE_KEYS.includes(col);
 const isDateCol=(col)=> col==="ordRec"||col==="delivery"||STAGE_KEYS.includes(col);
-const BRANCH_STAGES={ fit:["fitSend","fitAppr"], print:["artwork","artAppr","strikeOff","soAppr"], fabric:["labDip","labAppr","fabricIH"], pp:["ppSample","ppAppr"], prod:["prodFile"] };
-const BRANCH_LABEL={ fit:"Fit", print:"Print", fabric:"Fabric", pp:"PP", prod:"Production" };
+// Techpack is its own actionable start branch. Keeping it in the same canonical
+// frontier map as every other activity makes Tracker filtering, the Pre-Fit
+// dashboard drill, To-Do, pending-cell colour and exports agree.
+const BRANCH_STAGES={ start:["techpack"], fit:["fitSend","fitAppr"], print:["artwork","artAppr","strikeOff","soAppr"], fabric:["labDip","labAppr","fabricIH"], pp:["ppSample","ppAppr"], prod:["prodFile"] };
+const BRANCH_LABEL={ start:"Pre-Fit", fit:"Fit", print:"Print", fabric:"Fabric", pp:"PP", prod:"Production" };
 const BRANCH_OF={}; Object.entries(BRANCH_STAGES).forEach(([b,ks])=>ks.forEach(k=>{ BRANCH_OF[k]=BRANCH_LABEL[b]; }));
 function branchTarget(s,c,branch){ const keys=BRANCH_STAGES[branch].filter(k=>{ const st=STAGES.find(x=>x.key===k); return st.flag===null||s[st.flag]; }); for(const k of keys){ if(!c.stages.find(r=>r.key===k)?.done) return k; } return keys[keys.length-1]; }
 
@@ -3045,6 +3048,60 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
     { "Comparison":"Actual vs Revised Plan", "Records":dashboardRevisedVsActual.length, "Late/Missed Records":dashboardRevisedVsActual.filter(row=>(Number(row["Actual vs Revised Days"])||0)>0).length, "Avg Net Days":avgArr(dashboardRevisedVsActual,"Actual vs Revised Days"), "Avg Late/Missed Days":lateAvgArr(dashboardRevisedVsActual,"Actual vs Revised Days"), "Worst Late Days":dashboardRevisedVsActual.reduce((m,row)=>Math.max(m,Number(row["Actual vs Revised Days"])||0),0) }
   ];
   const dashboardOpenRows=dashboardStageDetail.filter(r=>r["Actionable Frontier?"]==="YES");
+  // Export-ready blocker report: one row per currently actionable style/activity,
+  // already sorted so styles sit directly under their stuck category and activity.
+  // "Last Planned Date" is the active commitment used by the tracker: revised date
+  // when entered, otherwise the original auto/system plan.
+  const stuckDetailRows=[];
+  const stuckSummaryMap={};
+  fc.forEach(({s,c})=>{
+    const frontier=c.frontier?[...c.frontier]:[];
+    frontier.forEach(key=>{
+      const r=(c.stages||[]).find(x=>x.key===key);
+      if(!r||r.done) return;
+      const due=r.rev||r.plan||null;
+      const days=due?netWorkdays(TODAY,due):null;
+      const summaryKey=`${phaseOfKey(key)}::${key}`;
+      const summary=stuckSummaryMap[summaryKey]||(stuckSummaryMap[summaryKey]={ category:phaseOfKey(key), activity:stageReviewLabel(s,r), stageKey:key, styles:new Set(), orders:new Set(), chase:new Set(), overdue:0, plans:[] });
+      summary.styles.add(String(s.id||`${s.orderNo||""}:${s.styleNo||""}:${s.colour||""}`));
+      if(s.orderNo) summary.orders.add(String(s.orderNo));
+      if(r.owner) summary.chase.add(String(r.owner));
+      if(days!=null&&days<0) summary.overdue++;
+      if(due) summary.plans.push(due);
+      stuckDetailRows.push({
+        "Activity Category":phaseOfKey(key),
+        "Activity":stageReviewLabel(s,r),
+        "Stage Key":key,
+        "Order No":s.orderNo||"",
+        "Style No":s.styleNo||"",
+        "Colour":s.colour||"",
+        "Family":s.family||"",
+        "Buyer / Brand":s.buyer||s.brand||"",
+        "Junior":s.owner||"",
+        "Chase Label":r.owner||"",
+        "Original Planned Date":r.plan?fmt(r.plan):"",
+        "Revised Planned Date":r.rev?fmt(r.rev):"",
+        "Last Planned Date":due?fmt(due):"",
+        "Due Position":days==null?"No plan":(days<0?`Overdue ${Math.abs(days)}wd`:(days===0?"Due today":`${days}wd left`)),
+        "Last Completed Activity":c.lastActualKey?stageLabelFromKeyGlobal(c.lastActualKey):"",
+        "Last Completed Actual Date":c.lastActual?fmt(c.lastActual):"",
+        "Delivery":s.delivery||"",
+        "Overall Status":c.status||""
+      });
+    });
+  });
+  const phaseOrder={"Pre-Fit":1,"Fit / Print":2,"Lab Dip":3,"Fabric IH":4,"PP / Prod":5};
+  stuckDetailRows.sort((a,b)=>(phaseOrder[a["Activity Category"]]||99)-(phaseOrder[b["Activity Category"]]||99) || stageOrderOf(a["Stage Key"])-stageOrderOf(b["Stage Key"]) || String(a["Order No"]).localeCompare(String(b["Order No"]),undefined,{numeric:true,sensitivity:"base"}) || String(a["Style No"]).localeCompare(String(b["Style No"]),undefined,{numeric:true,sensitivity:"base"}));
+  const stuckSummaryRows=Object.values(stuckSummaryMap).sort((a,b)=>(phaseOrder[a.category]||99)-(phaseOrder[b.category]||99) || stageOrderOf(a.stageKey)-stageOrderOf(b.stageKey)).map(x=>({
+    "Activity Category":x.category,
+    "Activity":x.activity,
+    "Orders":[...x.orders].join(", "),
+    "Styles":x.styles.size,
+    "Overdue Styles":x.overdue,
+    "Chase Label":[...x.chase].join(", "),
+    "Earliest Last Planned Date":x.plans.length?fmt(new Date(Math.min(...x.plans.map(d=>d.getTime())))):"",
+    "Latest Last Planned Date":x.plans.length?fmt(new Date(Math.max(...x.plans.map(d=>d.getTime())))):""
+  }));
   const ownerRows=Object.entries(dashboardOpenRows.reduce((m,r)=>{ const k=r["Chase Label"]||"(blank)"; m[k]=(m[k]||0)+1; return m; },{})).sort((a,b)=>b[1]-a[1]).map(([owner,count])=>({ "Chase Label":owner, "Open Items":count }));
   const activityRows=Object.entries(dashboardOpenRows.reduce((m,r)=>{ const k=r["Stage"]||"(blank)"; const x=m[k]=m[k]||{n:0,over:0,key:""}; x.n++; if(r["Due Status"]==="Overdue") x.over++; x.key=r["Stage Key"]||x.key; return m; },{})).sort((a,b)=>b[1].n-a[1].n).map(([activity,v])=>({ "Activity":activity, "Open Count":v.n, "Overdue Count":v.over, "Stage Key":v.key }));
   const phaseRows=Object.entries(phase).map(([phaseName,count])=>({ "Phase":phaseName, "Styles":count }));
@@ -3062,7 +3119,7 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
       { label:"Logic Checks", data:dashboardLogicChecks, modes:["summary","detailed"] },
       { label:"Who to Chase", data:ownerRows, detailData:dashboardOpenRows, modes:["summary","detailed"] },
       { label:"Open Activities", data:activityRows, detailData:dashboardOpenRows, modes:["summary","detailed"] },
-      { label:"Stuck Phases", data:phaseRows, detailData:dashboardBreakup, modes:["summary","detailed"] },
+      { label:"Where Things Are Stuck", data:stuckSummaryRows, detailData:stuckDetailRows, modes:["summary","detailed"] },
       { label:"Styles in Slice", data:dashboardStyleRows, detailData:dashboardStageDetail, modes:["detailed"] },
       { label:"Dashboard Breakup", data:dashboardBreakup, modes:["detailed"] },
       { label:"Style Stage Detail", data:dashboardStageDetail, modes:["detailed"] },
@@ -3129,13 +3186,14 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
         <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8 }}>Click to open in {target==="tracker"?"Tracker":"To-Do"}. Red = overdue.</div>
       </div>
       <div style={{ flex:1, minWidth:320, background:"var(--surface)", border:"1px solid var(--ink)", padding:16 }}>
-        <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>WHERE STYLES ARE STUCK</div>
+        <div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:13, marginBottom:12 }}>WHERE THINGS ARE STUCK</div>
         {Object.entries(phase).map(([p,n])=>(
           <button key={p} onClick={()=>goPhase(p)} title="Open matching phase in To-Do" style={{ display:"flex", alignItems:"center", gap:8, padding:"4px 0", width:"100%", border:"none", background:"transparent", cursor:"pointer", fontFamily:"inherit" }}>
             <span style={{ width:80, fontSize:10, fontWeight:700, color:"var(--muted-4)", textAlign:"left" }}>{p}</span>
             <span style={{ flex:1, height:16, background:"#f0ece3", position:"relative" }}><span style={{ position:"absolute", left:0, top:0, bottom:0, width:`${(n/maxPhase)*100}%`, background:p==="Fabric IH"?"var(--danger)":"var(--accent)" }}/></span>
             <span style={{ width:28, textAlign:"right", fontSize:11, fontWeight:700 }}>{n}</span>
           </button>))}
+        <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:8 }}>Select an Order above, then Export → Detailed → Where Things Are Stuck for category/activity summary plus style rows and each blocker’s last planned date.</div>
       </div>
     </div>
   </div>);
@@ -3233,7 +3291,7 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
       const delayPlan=(r.plan&&r.actual)?netWorkdays(r.plan,r.actual):null; const delayRevised=(r.rev&&r.actual)?netWorkdays(r.rev,r.actual):null;
       delayRecords.push({ style:s.styleNo, order:s.orderNo, buyer:s.buyer||s.brand||"", owner:s.owner||"", stage:stageReviewLabel(s,r), stageKey:r.key, dept:r.owner, delay, delayPlan, delayRevised, duration, actual:r.actual, due, plan:r.plan, revised:r.rev, start });
       const perfExtra={ delayPlan, delayRevised };
-      addPerf(stagePerf,r.key,stageLabelOf(r.key)||stageReviewLabel(s,r),delay,duration,{ owner:r.owner, ...perfExtra });
+      addPerf(stagePerf,r.key,stageLabelFromKeyGlobal(r.key)||stageReviewLabel(s,r),delay,duration,{ owner:r.owner, ...perfExtra });
       addPerf(deptPerf,r.owner,r.owner,delay,duration,perfExtra);
       if(r.owner==="Buyer") addPerf(buyerPerf,s.buyer||s.brand||"(No buyer)",s.buyer||s.brand||"(No buyer)",delay,duration,perfExtra);
       addPerf(chaseDelay,r.owner||"(No chase label)",r.owner||"(No chase label)",delay,duration,perfExtra);
