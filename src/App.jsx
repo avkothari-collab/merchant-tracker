@@ -2234,7 +2234,7 @@ function MerchTracker({ me, onSignOut }){
       </div>
 
       <div className="mt-main-tabs" style={{ display:"flex", gap:6, padding:"0 22px", background:"var(--ink)", borderBottom:"1px solid #3a362e", position:"relative", zIndex:155, pointerEvents:"auto" }}>
-        {[["tracker","Tracker"],["dashboard","Dashboard"],["management","Management"],["escalation","Escalation"],["todo","To-Do"],["review","Review"],["entrylog","Entry Log"],["settings","Settings"],["help","Help"]].map(([k,lab])=>(<button key={k} onClick={(e)=>{ e.stopPropagation(); setTab(k); if(k==="entrylog"||k==="review") loadAuditRows(); }} style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:12, letterSpacing:0.3, padding:"10px 16px", cursor:"pointer", border:"1px solid "+(tab===k?"var(--accent)":"transparent"), borderBottom:tab===k?"3px solid var(--accent)":"3px solid transparent", background:tab===k?"rgba(255,255,255,0.08)":"transparent", color:tab===k?"var(--bg)":"#b8afa3" }}>{lab}{k==="todo"&&todoItems.length?` · ${todoItems.length}`:k==="review"?(" · "+((errorLog&&errorLog.length)||0)):k==="entrylog"&&errorLog.length?` · ${errorLog.length}`:""}</button>))}
+        {[["tracker","Tracker"],["dashboard","Dashboard"],["management","Management"],["escalation","Escalation"],["todo","To-Do"],["discipline","Discipline"],["review","Review"],["entrylog","Entry Log"],["settings","Settings"],["help","Help"]].filter(([k])=>k!=="discipline"||MERCH_ROLES.includes(role)).map(([k,lab])=>(<button key={k} onClick={(e)=>{ e.stopPropagation(); setTab(k); if(k==="entrylog"||k==="review") loadAuditRows(); }} style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:12, letterSpacing:0.3, padding:"10px 16px", cursor:"pointer", border:"1px solid "+(tab===k?"var(--accent)":"transparent"), borderBottom:tab===k?"3px solid var(--accent)":"3px solid transparent", background:tab===k?"rgba(255,255,255,0.08)":"transparent", color:tab===k?"var(--bg)":"#b8afa3" }}>{lab}{k==="todo"&&todoItems.length?` · ${todoItems.length}`:k==="review"?(" · "+((errorLog&&errorLog.length)||0)):k==="entrylog"&&errorLog.length?` · ${errorLog.length}`:""}</button>))}
       </div>
 
       {tab==="help" && (<div style={{ padding:"18px 22px 36px" }}>
@@ -2652,9 +2652,10 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
       </>)}
 
       {tab==="dashboard" && <OperationalDashboardView computed={activeComputed} todoItems={todoItems} cfg={cfg} applyDrill={applyDrill} drillTodo={(obj)=>{ setTodoFilter(todoDrillFilterFromSlice({}, canonicalDrillSpec(obj||{}))); setTab("todo"); }}/>}
-      {tab==="management" && <ManagementDashboardView computed={activeComputed} todoItems={todoItems} cfg={cfg} applyDrill={applyDrill} drillTodo={(obj)=>{ setTodoFilter(todoDrillFilterFromSlice({}, canonicalDrillSpec(obj||{}))); setTab("todo"); }}/>}
+      {tab==="management" && <ManagementDashboardView computed={activeComputed} todoItems={todoItems} cfg={cfg} stageEvents={stageEvents} role={role} me={me} applyDrill={applyDrill} drillTodo={(obj)=>{ setTodoFilter(todoDrillFilterFromSlice({}, canonicalDrillSpec(obj||{}))); setTab("todo"); }}/>} 
       {tab==="escalation" && <EscalationMatrixView computed={activeComputed} cfg={cfg} applyDrill={applyDrill} />}
-      {tab==="todo" && <TodoView items={todoItems} cfg={cfg} setCfg={setCfg} canEditSettings={canAdmin(role)} filter={todoFilter} setFilter={setTodoFilter} onJump={(id,key)=>{ snapCurrent(); resetFilters(); setTab("tracker"); requestAnimationFrame(()=>setTimeout(()=>jumpToEnter(id,key),60)); }}/>}
+      {tab==="todo" && <TodoView items={todoItems} cfg={cfg} setCfg={setCfg} canEditSettings={canAdmin(role)} filter={todoFilter} setFilter={setTodoFilter} onJump={(id,key)=>{ snapCurrent(); resetFilters(); setTab("tracker"); requestAnimationFrame(()=>setTimeout(()=>jumpToEnter(id,key),60)); }}/>} 
+      {tab==="discipline" && <ManagementDashboardView computed={activeComputed} todoItems={todoItems} cfg={cfg} stageEvents={stageEvents} role={role} me={me} disciplineOnly applyDrill={applyDrill} drillTodo={(obj)=>{ setTodoFilter(todoDrillFilterFromSlice({}, canonicalDrillSpec(obj||{}))); setTab("todo"); }}/>} 
       {tab==="review" && <ReviewTabView computed={activeComputed} todoItems={todoItems} auditRows={auditRows} auditBusy={auditBusy} loadAuditRows={loadAuditRows} errorLog={errorLog} comments={comments} inbox={inbox} me={me} colLabelOf={colLabelOf} onJump={(id,col)=>{ setTab("tracker"); setTimeout(()=>{ setSel({id:Number(id),col:col||"__style"}); setFocus(null); scrollToCell(Number(id),col||"__style"); },60); }}/>}
       {tab==="entrylog" && <EntryLogView auditRows={auditRows} auditBusy={auditBusy} loadAuditRows={loadAuditRows} errorLog={errorLog} clearErrorLog={()=>setErrorLog([])} colLabelOf={colLabelOf} onJump={(id,col)=>{ setTab("tracker"); setTimeout(()=>{ setSel({id:Number(id),col}); setFocus(null); scrollToCell(Number(id),col); },60); }}/>}
       {tab==="settings" && <SettingsView cfg={cfg} setCfg={setCfg} canEdit={canAdmin(role)}/>}
@@ -2894,20 +2895,21 @@ function EntryLogView({ auditRows, auditBusy, loadAuditRows, errorLog, clearErro
 }
 
 function Th({ col, label, sort, onSort, sticky, left, z, width, onResize, onAutoFit, scale, letter, selected, filterActive, filterOpen, filterValues, filterAllowed, onToggleFilter, onSetFilter, onCloseFilter }){
+  const filterButtonRef=useRef(null);
   const active=sort.col===col;
   const startDrag=(e)=>{ e.preventDefault(); e.stopPropagation(); const sx=e.clientX, sw=width||80; const sc=scale||1; const move=(ev)=>onResize&&onResize(col, sw+(ev.clientX-sx)/sc); const up=()=>{ window.removeEventListener("mousemove",move); window.removeEventListener("mouseup",up); }; window.addEventListener("mousemove",move); window.addEventListener("mouseup",up); };
   return (<th role="columnheader" aria-sort={active?(sort.dir>0?"ascending":"descending"):"none"} style={{ position:"sticky", top:0, left:sticky?left:undefined, zIndex:sticky?(z||5):3, background:selected?"#dbeafe":(active?"var(--accent)":"var(--ink)"), color:selected?"#0f172a":(active?"var(--ink)":"var(--bg)"), boxShadow:selected?"inset 0 -4px 0 var(--info)":undefined, padding:"8px 9px", textAlign:"left", fontWeight:600, fontSize:9.5, letterSpacing:0.4, textTransform:"uppercase", whiteSpace:"nowrap", overflow:"visible", border:"1px solid #3a362e", userSelect:"none", width:width||80, minWidth:width||80, maxWidth:width||80, boxSizing:"border-box", backgroundClip:"padding-box", transform:sticky?"translateZ(0)":undefined }}>
     <span style={{ display:"flex", alignItems:"center", gap:3 }}>
       <span onClick={(e)=>{ e.stopPropagation(); onSort(col); }} title="click to sort" style={{ display:"inline-flex", alignItems:"center", gap:3, cursor:"pointer", flex:1, overflow:"hidden", textOverflow:"ellipsis" }}>{letter && <span style={{ fontSize:8, fontWeight:700, opacity:0.5, marginRight:4 }}>{letter}</span>}{label}{active?(sort.dir>0?<ChevronUp size={11}/>:<ChevronDown size={11}/>):null}</span>
-      <span onClick={(e)=>{ e.stopPropagation(); onToggleFilter&&onToggleFilter(); }} title={filterActive?"filter ON — click to edit/clear":"filter"} style={{ cursor:"pointer", display:"inline-flex", padding:"0 1px", color: filterActive?(active?"var(--ink)":"#f4b942"):(active?"#7a4a08":"var(--on-dark)") }}><Filter size={filterActive?12:10} fill={filterActive?"currentColor":"none"}/></span>
+      <span ref={filterButtonRef} onClick={(e)=>{ e.stopPropagation(); onToggleFilter&&onToggleFilter(); }} title={filterActive?"filter ON — click to edit/clear":"filter"} style={{ cursor:"pointer", display:"inline-flex", padding:"0 1px", color: filterActive?(active?"var(--ink)":"#f4b942"):(active?"#7a4a08":"var(--on-dark)") }}><Filter size={filterActive?12:10} fill={filterActive?"currentColor":"none"}/></span>
     </span>
-    {filterOpen && <FilterMenu values={filterValues||[]} allowed={filterAllowed} onSet={onSetFilter} onClose={onCloseFilter}/>}
+    {filterOpen && <FilterMenu anchorRef={filterButtonRef} values={filterValues||[]} allowed={filterAllowed} onSet={onSetFilter} onClose={onCloseFilter}/>} 
     <span onMouseDown={startDrag} onDoubleClick={(e)=>{ e.stopPropagation(); onAutoFit&&onAutoFit(col); }} onClick={(e)=>e.stopPropagation()} title="drag to resize · double-click to auto-fit" style={{ position:"absolute", top:0, right:-2, bottom:0, width:10, cursor:"col-resize", zIndex:6 }}/>
   </th>);
 }
-function FilterMenu({ values, allowed, onSet, onClose }){
+function FilterMenu({ anchorRef, values, allowed, onSet, onClose }){
   const [q,setQ]=useState("");
-  const anchorRef=useRef(null); const [pos,setPos]=useState(null);
+  const menuRef=useRef(null); const [pos,setPos]=useState(null);
   const norm=(v)=>String(v==null?"":v).replace(/\s+/g," ").trim();
   const liveNorm=(v)=>String(v==null?"":v).replace(/\s+/g," ").trim().toLowerCase();
   // Freeze the option list when the popup opens so live filtering never makes the menu flash/turn white.
@@ -2945,10 +2947,33 @@ function FilterMenu({ values, allowed, onSet, onClose }){
   const clearShown=()=>{ setManualMode(true); setPending(cur=>{ const n=new Set(cur); shown.forEach(v=>n.delete(v)); sendFilter(n); return n; }); };
   const clearFilter=()=>{ setQ(""); setManualMode(false); setPending(new Set(allValues)); onSet(null); };
   const none=()=>{ setManualMode(true); const n=new Set(); setPending(n); onSet([FILTER_NONE]); };
-  useEffect(()=>{ const a=anchorRef.current; if(!a) return; const r=a.getBoundingClientRect(); const W=260,H=350; let left=r.left-220; if(left+W>window.innerWidth-8) left=window.innerWidth-8-W; if(left<8) left=8; let top=r.bottom+4; if(top+H>window.innerHeight-8) top=Math.max(8,window.innerHeight-8-H); setPos({top,left}); },[]);
+  const updatePosition=()=>{
+    const a=anchorRef&&anchorRef.current; if(!a) return;
+    const r=a.getBoundingClientRect(); const W=260; const gap=6; const edge=8;
+    const measured=Math.max(220,Math.min(430,menuRef.current?.scrollHeight||350));
+    const below=Math.max(0,window.innerHeight-r.bottom-gap-edge);
+    const above=Math.max(0,r.top-gap-edge);
+    const openBelow=below>=Math.min(280,measured) || below>=above;
+    const available=Math.max(170,openBelow?below:above);
+    const maxHeight=Math.min(measured,available,Math.max(170,window.innerHeight-edge*2));
+    let left=r.right-W;
+    if(left+W>window.innerWidth-edge) left=window.innerWidth-edge-W;
+    if(left<edge) left=edge;
+    const top=openBelow?r.bottom+gap:Math.max(edge,r.top-gap-maxHeight);
+    setPos({top,left,maxHeight});
+  };
+  useEffect(()=>{
+    updatePosition(); const raf=requestAnimationFrame(updatePosition);
+    const onWindowChange=()=>updatePosition();
+    const onPointerDown=(e)=>{ if(menuRef.current?.contains(e.target)||anchorRef?.current?.contains(e.target)) return; onClose&&onClose(); };
+    const onKey=(e)=>{ if(e.key==="Escape") onClose&&onClose(); };
+    window.addEventListener("resize",onWindowChange); window.addEventListener("scroll",onWindowChange,true);
+    document.addEventListener("mousedown",onPointerDown,true); document.addEventListener("keydown",onKey);
+    return ()=>{ cancelAnimationFrame(raf); window.removeEventListener("resize",onWindowChange); window.removeEventListener("scroll",onWindowChange,true); document.removeEventListener("mousedown",onPointerDown,true); document.removeEventListener("keydown",onKey); };
+  },[]);
   const btn={ fontFamily:"'JetBrains Mono', monospace", fontSize:9, fontWeight:900, padding:"5px 7px", border:"1px solid #1f1f1d", background:"#fffdf8", color:"#1f1f1d", cursor:"pointer" };
   const menu=(
-    <div onClick={e=>e.stopPropagation()} style={{ position:"fixed", top:pos?pos.top:-9999, left:pos?pos.left:-9999, zIndex:9999, background:"#fffdf8", color:"#1f1f1d", border:"1px solid #1f1f1d", boxShadow:"4px 4px 0 rgba(31,31,29,.28)", padding:9, width:260, textTransform:"none", letterSpacing:0, fontWeight:400, maxHeight:"82vh", overflowY:"auto" }}>
+    <div ref={menuRef} onClick={e=>e.stopPropagation()} style={{ position:"fixed", top:pos?pos.top:-9999, left:pos?pos.left:-9999, zIndex:10000, background:"#fffdf8", color:"#1f1f1d", border:"1px solid #1f1f1d", boxShadow:"4px 4px 0 rgba(31,31,29,.28)", padding:9, width:260, boxSizing:"border-box", textTransform:"none", letterSpacing:0, fontWeight:400, maxHeight:pos?pos.maxHeight:350, overflow:"hidden", display:"flex", flexDirection:"column" }}>
       <div style={{ fontSize:10, fontWeight:950, marginBottom:6, display:"flex", justifyContent:"space-between", gap:8 }}><span>Column filter</span><button onClick={onClose} style={{...btn,padding:"2px 7px"}}>×</button></div>
       <input autoFocus value={q} onClick={e=>e.stopPropagation()} onKeyDown={e=>e.stopPropagation()} onChange={e=>liveSearch(e.target.value)} placeholder="type to filter live…" style={{ width:"100%", fontFamily:"inherit", fontSize:11, padding:"5px 7px", border:"1px solid #8f8577", outline:"none", marginBottom:7, boxSizing:"border-box", background:"#ffffff", color:"#1f1f1d" }}/>
       <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginBottom:7 }}>
@@ -2959,7 +2984,7 @@ function FilterMenu({ values, allowed, onSet, onClose }){
         <button onClick={none} style={{ ...btn, gridColumn:"1 / span 2", background:"#fff2f0", color:"#b82117" }}>Show zero rows</button>
       </div>
       <div style={{ fontSize:9, color:"#6f6a61", marginBottom:5 }}>{selectedCount} of {allValues.length} selected{q?` · ${shown.length} match search · live ${manualMode?"checked values":"search matches"}`:""} · typing filters live</div>
-      <div style={{ maxHeight:190, overflowY:"auto", borderTop:"1px solid #e7dcc2" }}>
+      <div style={{ flex:"1 1 auto", minHeight:70, overflowY:"auto", overscrollBehavior:"contain", WebkitOverflowScrolling:"touch", borderTop:"1px solid #e7dcc2" }}>
         {shown.map(v=>(<label key={v} style={{ display:"flex", alignItems:"center", gap:7, fontSize:10, padding:"4px 0", borderBottom:"1px solid #eee4d2", cursor:"pointer", color:"#1f1f1d" }}>
           <input type="checkbox" checked={pending.has(v)} onChange={()=>toggle(v)} style={{ cursor:"pointer" }}/>
           <span style={{ flex:1, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{v}</span>
@@ -2973,7 +2998,7 @@ function FilterMenu({ values, allowed, onSet, onClose }){
       </div>
     </div>
   );
-  return (<><span ref={anchorRef} style={{ position:"absolute", width:0, height:0 }}/>{createPortal(menu, document.body)}</>);
+  return createPortal(menu, document.body);
 }
 
 function FillPanel({ count, role, activeCol, onApply, onClose }){
@@ -2998,6 +3023,7 @@ const ndInput=(w)=>({ border:"none", outline:"none", background:"transparent", f
 function MultiSelectDropdown({ label, value, options, onChange, rounded=false }){
   const [open,setOpen]=useState(false);
   const btnRef=useRef(null);
+  const menuRef=useRef(null);
   const [pos,setPos]=useState(null);
   const vals=Array.isArray(value)?value:(value?[value]:[]);
   const opts=Array.from(new Set((options||[]).filter(v=>v!=null && String(v).trim()!=="").map(v=>String(v)))).sort((a,b)=>a.localeCompare(b,undefined,{numeric:true,sensitivity:"base"}));
@@ -3006,19 +3032,26 @@ function MultiSelectDropdown({ label, value, options, onChange, rounded=false })
   const updatePos=()=>{
     const r=btnRef.current?.getBoundingClientRect?.();
     if(!r) return;
+    const edge=8, gap=6;
     const width=Math.max(220, Math.min(360, Math.max(r.width, 230)));
-    const left=Math.min(Math.max(8,r.left), Math.max(8, window.innerWidth-width-8));
-    const top=Math.min(r.bottom+6, Math.max(8, window.innerHeight-320));
-    setPos({ top, left, width });
+    const left=Math.min(Math.max(edge,r.left), Math.max(edge,window.innerWidth-width-edge));
+    const measured=Math.max(170,Math.min(430,menuRef.current?.scrollHeight||Math.min(430,96+(opts.length*31))));
+    const below=Math.max(0,window.innerHeight-r.bottom-gap-edge);
+    const above=Math.max(0,r.top-gap-edge);
+    const openBelow=below>=Math.min(260,measured) || below>=above;
+    const available=Math.max(150,openBelow?below:above);
+    const maxHeight=Math.min(measured,available,Math.max(150,window.innerHeight-edge*2));
+    const top=openBelow?r.bottom+gap:Math.max(edge,r.top-gap-maxHeight);
+    setPos({ top, left, width, maxHeight });
   };
-  useEffect(()=>{ if(!open) return; updatePos(); const onDoc=(e)=>{ if(btnRef.current && btnRef.current.contains(e.target)) return; const menu=document.getElementById(`msd-${label}`); if(menu && menu.contains(e.target)) return; setOpen(false); }; const onWin=()=>updatePos(); document.addEventListener('mousedown',onDoc,true); window.addEventListener('resize',onWin); window.addEventListener('scroll',onWin,true); return ()=>{ document.removeEventListener('mousedown',onDoc,true); window.removeEventListener('resize',onWin); window.removeEventListener('scroll',onWin,true); }; },[open,label]);
+  useEffect(()=>{ if(!open) return; updatePos(); const raf=requestAnimationFrame(updatePos); const onDoc=(e)=>{ if(btnRef.current?.contains(e.target)||menuRef.current?.contains(e.target)) return; setOpen(false); }; const onKey=(e)=>{ if(e.key==="Escape") setOpen(false); }; const onWin=()=>updatePos(); document.addEventListener('mousedown',onDoc,true); document.addEventListener('keydown',onKey); window.addEventListener('resize',onWin); window.addEventListener('scroll',onWin,true); return ()=>{ cancelAnimationFrame(raf); document.removeEventListener('mousedown',onDoc,true); document.removeEventListener('keydown',onKey); window.removeEventListener('resize',onWin); window.removeEventListener('scroll',onWin,true); }; },[open,label,opts.length]);
   const toggle=(opt)=>{
     const s=new Set(selected);
     if(s.has(opt)) s.delete(opt); else s.add(opt);
     onChange([...s]);
   };
   const menu=open && pos ? createPortal(
-    <div id={`msd-${label}`} onClick={e=>e.stopPropagation()} style={{ position:'fixed', top:pos.top, left:pos.left, width:pos.width, maxHeight:300, overflow:'auto', zIndex:9000, background:'var(--surface)', border:'1px solid var(--ink)', borderRadius:rounded?10:2, boxShadow:'4px 4px 0 rgba(31,31,29,.22)', padding:8, fontFamily:"'JetBrains Mono', monospace" }}>
+    <div ref={menuRef} onClick={e=>e.stopPropagation()} style={{ position:'fixed', top:pos.top, left:pos.left, width:pos.width, maxHeight:pos.maxHeight, overflow:'hidden', zIndex:10000, background:'var(--surface)', border:'1px solid var(--ink)', borderRadius:rounded?10:2, boxShadow:'4px 4px 0 rgba(31,31,29,.22)', padding:8, boxSizing:'border-box', fontFamily:"'JetBrains Mono', monospace", display:'flex', flexDirection:'column' }}>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginBottom:6 }}>
         <div style={{ fontSize:10, fontWeight:900, textTransform:'uppercase', color:'var(--muted-3)' }}>{label}</div>
         <button className="mt-popup-close" onClick={()=>setOpen(false)} style={{ border:'1px solid var(--line-2)', background:'var(--surface)', cursor:'pointer', padding:'5px 8px', fontFamily:'inherit', fontSize:13, fontWeight:900 }}>×</button>
@@ -3028,12 +3061,14 @@ function MultiSelectDropdown({ label, value, options, onChange, rounded=false })
         <button onClick={()=>onChange(opts)} disabled={!opts.length} style={{ flex:1, border:'1px solid var(--line-2)', background:'var(--surface)', cursor:opts.length?'pointer':'not-allowed', padding:'5px 7px', fontFamily:'inherit', fontSize:10, fontWeight:800, opacity:opts.length?1:.5 }}>Select all</button>
         <button onClick={()=>onChange([])} style={{ flex:1, border:'1px solid var(--line-2)', background:'var(--surface)', cursor:'pointer', padding:'5px 7px', fontFamily:'inherit', fontSize:10, fontWeight:800 }}>Clear</button>
       </div>
-      {opts.length===0 ? <div style={{ fontSize:10, color:'var(--muted-2)', padding:8 }}>No values.</div> : opts.map(opt=>(
-        <label key={opt} style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 5px', cursor:'pointer', borderBottom:'1px solid var(--line-3)', fontSize:10 }}>
-          <input type="checkbox" checked={selected.has(opt)} onChange={()=>toggle(opt)} />
-          <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{opt}</span>
-        </label>
-      ))}
+      <div style={{ flex:'1 1 auto', minHeight:48, overflowY:'auto', overscrollBehavior:'contain', WebkitOverflowScrolling:'touch' }}>
+        {opts.length===0 ? <div style={{ fontSize:10, color:'var(--muted-2)', padding:8 }}>No values.</div> : opts.map(opt=>(
+          <label key={opt} style={{ display:'flex', alignItems:'center', gap:8, padding:'6px 5px', cursor:'pointer', borderBottom:'1px solid var(--line-3)', fontSize:10 }}>
+            <input type="checkbox" checked={selected.has(opt)} onChange={()=>toggle(opt)} />
+            <span style={{ flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{opt}</span>
+          </label>
+        ))}
+      </div>
     </div>, document.body) : null;
   return <>
     <button ref={btnRef} type="button" onClick={(e)=>{ e.stopPropagation(); setOpen(o=>!o); }} style={{ fontFamily:'inherit', fontSize:10, fontWeight:800, padding:rounded?'8px 12px':'7px 11px', cursor:'pointer', border:'1px solid var(--line-2)', borderRadius:rounded?8:0, background:vals.length?'var(--accent-tint)':'var(--surface)', color:'var(--ink)', maxWidth:220, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }} title={labelText}>{labelText} ▾</button>
@@ -3279,7 +3314,7 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
 
 
 /* ========================= MANAGEMENT ANALYTICS ========================= */
-function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTodo }){
+function ManagementDashboardView({ computed, todoItems, cfg, stageEvents, role, me, disciplineOnly=false, applyDrill, drillTodo }){
   const [target,setTarget]=useState("tracker"); // where bar/owner/activity drills go: Tracker or To-Do only. Escalation cards route to To-Do with Type=Escalation.
   const [isPerfPending,startPerfTransition]=useTransition();
   const [df,setDf]=useState(()=>{ try{ return JSON.parse(localStorage.getItem("mt_management_filter")||localStorage.getItem("mt_dashfilter")||"{}"); }catch(e){ return {}; } });
@@ -3289,6 +3324,10 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const [perfView,setPerfView]=useState(()=>{ try{ return localStorage.getItem("mt_mgmt_perf_view")||"chase"; }catch(e){ return "chase"; } }); // chase | stage
   const [perfMode,setPerfMode]=useState(()=>{ try{ return localStorage.getItem("mt_mgmt_perf_mode")||"summary"; }catch(e){ return "summary"; } }); // summary | revised | noRevised
   const [perfScope,setPerfScope]=useState(()=>{ try{ return localStorage.getItem("mt_mgmt_perf_scope")||"all"; }catch(e){ return "all"; } }); // all | late
+  const DISCIPLINE_BASELINE=parse("2026-08-13");
+  const disciplineWeekRange=()=>{ const d=new Date(TODAY.getFullYear(),TODAY.getMonth(),TODAY.getDate()); const shift=d.getDay()===0?6:d.getDay()-1; const monday=new Date(d.getTime()-shift*ONE_DAY); const saturday=new Date(monday.getTime()+5*ONE_DAY); const start=monday<DISCIPLINE_BASELINE?DISCIPLINE_BASELINE:monday; return { from:iso(start), to:iso(saturday) }; };
+  const [disciplineFrom,setDisciplineFrom]=useState(()=>disciplineWeekRange().from);
+  const [disciplineTo,setDisciplineTo]=useState(()=>disciplineWeekRange().to);
   const validPerfMode=["summary","revised","noRevised"].includes(perfMode)?perfMode:"summary";
   const validPerfScope=["all","late"].includes(perfScope)?perfScope:"all";
   useEffect(()=>{ if(validPerfMode!==perfMode) setPerfMode(validPerfMode); if(validPerfScope!==perfScope) setPerfScope(validPerfScope); },[validPerfMode,perfMode,validPerfScope,perfScope]);
@@ -3308,6 +3347,69 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const orders=distinctC("order",s=>[s.orderNo]); const fits=distinctC("fit",s=>[s.sampleFit]); const juniors=distinctC("junior",s=>[s.owner]); const families=distinctC("family",s=>[s.family]); const brands=distinctC("brand",s=>[s.brand]); const fabrics=distinctC("fabric",s=>[s.fabricType]);
   const colours=distinctC("colour",s=>splitColoursAll(s.colour));
   const fc=useMemo(()=>computed.filter(({s})=> hasSel("order",s.orderNo) && hasSel("fit",s.sampleFit) && hasSel("junior",s.owner) && hasSel("family",s.family) && hasSel("brand",s.brand) && hasSel("fabric",s.fabricType) && hasColourSel(s) ),[computed,df]);
+
+  // Tracker Discipline starts from the clean live-status baseline. It measures data-entry timeliness,
+  // not whether the underlying TNA commitment was achieved. One working day after the effective date
+  // is allowed; Sunday is excluded through the shared working-day helpers.
+  const disciplineNorm=(v)=>String(v||"").toLowerCase().replace(/[^a-z0-9]+/g,"");
+  const disciplineMeKeys=[disciplineNorm(me&&me.name),disciplineNorm(me&&me.email),disciplineNorm(String(me&&me.email||"").split("@")[0])].filter(Boolean);
+  const disciplineOwnStyle=(s)=>{ if(role!=="junior") return true; const o=disciplineNorm(s&&s.owner); return !!o && disciplineMeKeys.some(k=>k===o || (k.length>=4&&(k.includes(o)||o.includes(k)))); };
+  const disciplineJuniors=[...new Set((computed||[]).map(({s})=>String(s&&s.owner||"").trim()).filter(Boolean))].sort();
+  const disciplineBase=disciplineOnly?(computed||[]).filter(({s})=>hasSel("junior",s.owner)):fc;
+  const disciplineFc=disciplineBase.filter(({s})=>disciplineOwnStyle(s));
+  const disciplineFromDate=parse(disciplineFrom), disciplineToDate=parse(disciplineTo);
+  const disciplineRangeValid=!!(disciplineFromDate&&disciplineToDate&&disciplineFromDate<=disciplineToDate);
+  const disciplineInRange=(d)=>disciplineRangeValid&&d&&d>=disciplineFromDate&&d<=disciplineToDate;
+  const disciplineStyleMap=new Map(disciplineFc.map(x=>[String(x.s.id),x]));
+  const disciplineOwnerOf=(s)=>String(s&&s.owner||"(Unassigned)").trim()||"(Unassigned)";
+  const disciplineEvents=[]; const disciplineEventSeen=new Set();
+  (stageEvents||[]).forEach(e=>{
+    const type=String(e&&e.event_type||"").toLowerCase();
+    if(!["actual","resend_actual","revised"].includes(type)) return;
+    const pair=disciplineStyleMap.get(String(e.style_id)); if(!pair) return;
+    const createdRaw=e.created_at?new Date(e.created_at):null;
+    if(!createdRaw||isNaN(createdRaw)) return;
+    const created=new Date(createdRaw.getFullYear(),createdRaw.getMonth(),createdRaw.getDate());
+    if(created<DISCIPLINE_BASELINE) return;
+    const eventDate=parse(e.event_date||e.new_value);
+    const row=(pair.c.stages||[]).find(r=>String(r.key)===String(e.stage_key));
+    const priorDue=type==="revised"?(parse(e.old_value)||(row&&row.plan)||null):eventDate;
+    if(!disciplineInRange(priorDue)) return;
+    const sig=[e.style_id,e.stage_key,type,e.round_no||0,e.event_date||e.new_value||"",e.old_value||"",String(e.created_at||"").slice(0,19)].join("::");
+    if(disciplineEventSeen.has(sig)) return; disciplineEventSeen.add(sig);
+    const lag=priorDue?netWorkdays(priorDue,created):null;
+    const onTime=lag==null||lag<=1;
+    disciplineEvents.push({ kind:type==="revised"?"Revised":"Actual", owner:disciplineOwnerOf(pair.s), styleId:pair.s.id, styleNo:pair.s.styleNo||"", orderNo:pair.s.orderNo||"", stageKey:e.stage_key, stage:stageLabelFromKeyGlobal(e.stage_key)||e.stage_key, due:priorDue, entered:created, enteredValue:eventDate, lag, onTime, delay:lag==null?0:Math.max(0,lag-1) });
+  });
+  const disciplineOpen=[];
+  disciplineFc.forEach(({s,c})=>{
+    if(c.released) return;
+    (c.frontier?[...c.frontier]:[]).forEach(k=>{
+      const r=(c.stages||[]).find(x=>x.key===k); if(!r||r.done||r.skipped||r.autoClosed) return;
+      const due=r.rev||r.plan; if(!due||due<DISCIPLINE_BASELINE||!disciplineRangeValid||due>disciplineToDate) return;
+      const currentRange=disciplineToDate>=TODAY;
+      if(!disciplineInRange(due) && !(currentRange&&due<disciplineFromDate)) return;
+      const graceEnd=addWorkdays(due,1);
+      const status=TODAY>graceEnd?"Missing":(TODAY>due?"Grace":"Not due");
+      if(status==="Not due") return;
+      disciplineOpen.push({ kind:"Open", owner:disciplineOwnerOf(s), styleId:s.id, styleNo:s.styleNo||"", orderNo:s.orderNo||"", stageKey:k, stage:stageReviewLabel(s,r), due, graceEnd, status, delay:status==="Missing"?Math.max(1,(netWorkdays(graceEnd,TODAY)||0)):0, revised:!!r.rev });
+    });
+  });
+  const disciplineAgg={};
+  const ensureDisciplineOwner=(owner)=>disciplineAgg[owner]||(disciplineAgg[owner]={ owner, styles:new Set(), onTime:0, late:0, missing:0, grace:0, actual:0, revised:0 });
+  disciplineFc.forEach(({s})=>{ const o=ensureDisciplineOwner(disciplineOwnerOf(s)); o.styles.add(String(s.id)); });
+  disciplineEvents.forEach(e=>{ const o=ensureDisciplineOwner(e.owner); o.styles.add(String(e.styleId)); if(e.kind==="Actual") o.actual++; else o.revised++; if(e.onTime) o.onTime++; else o.late++; });
+  disciplineOpen.forEach(e=>{ const o=ensureDisciplineOwner(e.owner); o.styles.add(String(e.styleId)); if(e.status==="Missing") o.missing++; else if(e.status==="Grace") o.grace++; });
+  const disciplineRows=Object.values(disciplineAgg).map(o=>{ const required=o.onTime+o.late+o.missing; const compliance=required?Math.round((o.onTime/required)*100):null; return {...o, styleCount:o.styles.size, required, compliance}; }).sort((a,b)=>(a.compliance==null?999:a.compliance)-(b.compliance==null?999:b.compliance)||b.missing-a.missing||String(a.owner).localeCompare(String(b.owner)));
+  const disciplineTeam=disciplineRows.reduce((m,r)=>{ m.styles+=r.styleCount; m.onTime+=r.onTime; m.late+=r.late; m.missing+=r.missing; m.grace+=r.grace; m.actual+=r.actual; m.revised+=r.revised; return m; },{styles:0,onTime:0,late:0,missing:0,grace:0,actual:0,revised:0});
+  disciplineTeam.required=disciplineTeam.onTime+disciplineTeam.late+disciplineTeam.missing;
+  disciplineTeam.compliance=disciplineTeam.required?Math.round((disciplineTeam.onTime/disciplineTeam.required)*100):null;
+  const disciplineExceptions=[
+    ...disciplineEvents.filter(e=>!e.onTime).map(e=>({...e,status:`Late ${e.kind.toLowerCase()} entry`})),
+    ...disciplineOpen.filter(e=>e.status==="Missing")
+  ].sort((a,b)=>(Number(b.delay)||0)-(Number(a.delay)||0)||String(a.owner).localeCompare(String(b.owner)));
+  const disciplineSummaryData=disciplineRows.map(r=>({"Merchant":r.owner,"Assigned Styles":r.styleCount,"Required Updates":r.required,"Updated On Time":r.onTime,"Late Updates":r.late,"Missing Updates":r.missing,"In Grace Period":r.grace,"Actual Entries":r.actual,"Revised Entries":r.revised,"Compliance %":r.compliance==null?"N/A":r.compliance,"From":disciplineFrom,"To":disciplineTo,"Rule":"Actual or Revised may be entered by end of next working day; Sunday excluded"}));
+  const disciplineExceptionData=disciplineExceptions.map(e=>({"Merchant":e.owner,"Order No":e.orderNo||"","Style No":e.styleNo||"","Activity":e.stage||"","Problem":e.status||"","Effective Date":e.due?iso(e.due):"","Entry Date":e.entered?iso(e.entered):"","Entered Value":e.enteredValue?iso(e.enteredValue):"","Working Days Beyond Allowance":e.delay||0,"Current Basis":e.revised?"Revised":"Auto/Actual"}));
 
   const total=fc.length;
   const onTrack=fc.filter(({c})=>c.tone==="ok").length;
@@ -3608,6 +3710,48 @@ function ManagementDashboardView({ computed, todoItems, cfg, applyDrill, drillTo
   const rowBtn=(key,label,right,color,onClick,sub)=>(<button key={key} onClick={onClick} disabled={!onClick} style={{ width:"100%", display:"grid", gridTemplateColumns:"minmax(120px,1fr) 96px", alignItems:"center", gap:10, border:"none", borderBottom:"1px solid var(--line-3)", background:"transparent", cursor:onClick?"pointer":"default", fontFamily:"inherit", padding:"8px 0", textAlign:"left" }}><span style={{ minWidth:0 }}><span style={{ display:"block", fontSize:11, fontWeight:800, color:color||"var(--ink)", overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{label}</span>{sub&&<span style={{ display:"block", fontSize:9, color:"var(--muted-2)", marginTop:2, overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{sub}</span>}</span><span style={{ fontSize:11, fontWeight:800, color:color||"var(--ink)", whiteSpace:"nowrap", textAlign:"right" }}>{right}</span></button>);
   const barLine=(key,label,n,max,color,onClick,right)=>(<button key={key} onClick={onClick} disabled={!onClick} style={{ display:"flex", alignItems:"center", gap:8, width:"100%", border:"none", background:"transparent", cursor:onClick?"pointer":"default", fontFamily:"inherit", padding:"5px 0" }}><span style={{ width:90, fontSize:10, fontWeight:800, color:"var(--muted-4)", textAlign:"left", overflow:"hidden", whiteSpace:"nowrap", textOverflow:"ellipsis" }}>{label}</span><span style={{ flex:1, height:14, background:"#f0ece3", borderRadius:999, overflow:"hidden" }}><span style={{ display:"block", height:"100%", width:`${(n/Math.max(1,max))*100}%`, background:color, borderRadius:999 }}/></span><span style={{ width:58, textAlign:"right", fontSize:10, fontWeight:800 }}>{right||n}</span></button>);
   const toggleBtn=(active,label,onClick)=><button onClick={onClick} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"5px 9px", cursor:"pointer", border:"1px solid var(--line-2)", borderRadius:8, background:active?"var(--ink)":"var(--surface)", color:active?"var(--bg)":"var(--ink)" }}>{label}</button>;
+  const resetDisciplineWeek=()=>{ const r=disciplineWeekRange(); setDisciplineFrom(r.from); setDisciplineTo(r.to); };
+  const disciplinePctTone=(n)=>n==null?"var(--muted-2)":n>=95?"var(--success)":n>=90?"#b45309":"var(--danger)";
+  const disciplinePanel=(<>
+    <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", margin:"4px 0 10px" }}>
+      <label style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:10, fontWeight:800 }}>From <input type="date" min="2026-08-13" value={disciplineFrom} onChange={e=>setDisciplineFrom(e.target.value)} style={{ fontFamily:"inherit", fontSize:10, padding:"5px 7px", border:"1px solid var(--line-2)", borderRadius:7, background:"var(--surface)" }}/></label>
+      <label style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:10, fontWeight:800 }}>To <input type="date" min="2026-08-13" value={disciplineTo} onChange={e=>setDisciplineTo(e.target.value)} style={{ fontFamily:"inherit", fontSize:10, padding:"5px 7px", border:"1px solid var(--line-2)", borderRadius:7, background:"var(--surface)" }}/></label>
+      <button onClick={resetDisciplineWeek} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"6px 10px", cursor:"pointer", border:"1px solid var(--ink)", borderRadius:8, background:"var(--surface)" }}>Current week</button>
+      {role!=="junior"&&sel("Junior",df.junior,disciplineJuniors,v=>setDf(d=>({...d,junior:v})))}
+      <span style={{ fontSize:9.5, color:"var(--muted-2)" }}>Automatic Monday–Saturday range · first period begins 13 Aug 2026 · dates remain editable</span>
+    </div>
+    {!disciplineRangeValid?<div style={{ padding:"9px 10px", border:"1px solid var(--danger)", background:"var(--tint-late)", color:"var(--danger)", fontSize:10, fontWeight:800 }}>Choose a valid From and To range.</div>:<>
+      <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:10 }}>
+        {card("Required updates",disciplineTeam.required,"var(--ink)",null,"on-time + late + currently missing")}
+        {card("Updated on time",disciplineTeam.onTime,"var(--success)",null,"same day or next working day")}
+        {card("Late updates",disciplineTeam.late,disciplineTeam.late?"var(--danger)":"var(--success)",null,"entered after allowance")}
+        {card("Missing updates",disciplineTeam.missing,disciplineTeam.missing?"var(--danger)":"var(--success)",null,"allowance expired")}
+        {card("In grace",disciplineTeam.grace,"#b45309",null,"not scored until grace expires")}
+        {card("Compliance",disciplineTeam.compliance==null?"N/A":disciplineTeam.compliance+"%",disciplinePctTone(disciplineTeam.compliance),null,"green ≥95 · amber 90–94")}
+      </div>
+      <div style={{ overflowX:"auto", border:"1px solid var(--line-3)", borderRadius:9 }}>
+        <table style={{ width:"100%", minWidth:800, borderCollapse:"collapse", fontSize:10 }}><thead><tr style={{ background:"var(--toolbar-subtle)" }}>{["Merchant","Assigned styles","Required","On time","Late","Missing","Grace","Compliance"].map((h,i)=><th key={h} style={{ padding:"8px 9px", borderBottom:"1px solid var(--line-2)", textAlign:i===0?"left":"right", color:"var(--muted-3)", textTransform:"uppercase", whiteSpace:"nowrap" }}>{h}</th>)}</tr></thead><tbody>
+          {disciplineRows.length?disciplineRows.map(r=><tr key={r.owner} style={{ borderBottom:"1px solid var(--line-3)" }}><td style={{ padding:"8px 9px", fontWeight:900 }}>{r.owner}</td><td style={{ padding:"8px 9px", textAlign:"right" }}>{r.styleCount}</td><td style={{ padding:"8px 9px", textAlign:"right", fontWeight:800 }}>{r.required}</td><td style={{ padding:"8px 9px", textAlign:"right", color:"var(--success)", fontWeight:800 }}>{r.onTime}</td><td style={{ padding:"8px 9px", textAlign:"right", color:r.late?"var(--danger)":"var(--muted-2)", fontWeight:800 }}>{r.late}</td><td style={{ padding:"8px 9px", textAlign:"right", color:r.missing?"var(--danger)":"var(--muted-2)", fontWeight:900 }}>{r.missing}</td><td style={{ padding:"8px 9px", textAlign:"right", color:r.grace?"#b45309":"var(--muted-2)", fontWeight:800 }}>{r.grace}</td><td style={{ padding:"8px 9px", textAlign:"right", color:disciplinePctTone(r.compliance), fontWeight:950 }}>{r.compliance==null?"N/A":r.compliance+"%"}</td></tr>):<tr><td colSpan={8} style={{ padding:14, textAlign:"center", color:"var(--muted-2)" }}>{role==="junior"?"No styles match your profile name and Junior / Style Owner assignment in this slice.":"No assigned merchant styles in this slice."}</td></tr>}
+        </tbody></table>
+      </div>
+      <div style={{ marginTop:12, fontSize:10, fontWeight:900, color:"var(--muted-3)", textTransform:"uppercase" }}>Missing / late update exceptions · {disciplineExceptions.length}</div>
+      {disciplineExceptions.length?<div style={{ overflowX:"auto", marginTop:6, border:"1px solid var(--line-3)", borderRadius:9 }}><table style={{ width:"100%", minWidth:860, borderCollapse:"collapse", fontSize:10 }}><thead><tr style={{ background:"#fff4e3" }}>{["Merchant","Style / Order","Activity","Effective date","Entry date","Problem","Beyond allowance"].map(h=><th key={h} style={{ padding:"7px 9px", borderBottom:"1px solid var(--line-2)", textAlign:"left", color:"var(--muted-3)", textTransform:"uppercase", whiteSpace:"nowrap" }}>{h}</th>)}</tr></thead><tbody>{disciplineExceptions.slice(0,100).map((e,i)=><tr key={`${e.styleId}:${e.stageKey}:${e.status}:${i}`} style={{ borderBottom:"1px solid var(--line-3)" }}><td style={{ padding:"7px 9px", fontWeight:800 }}>{e.owner}</td><td style={{ padding:"7px 9px" }}><b>{e.styleNo||"—"}</b><div style={{ fontSize:8.5, color:"var(--muted-2)" }}>{e.orderNo||""}</div></td><td style={{ padding:"7px 9px" }}>{e.stage}</td><td style={{ padding:"7px 9px", whiteSpace:"nowrap" }}>{e.due?fmt(e.due):"—"}</td><td style={{ padding:"7px 9px", whiteSpace:"nowrap" }}>{e.entered?fmt(e.entered):"—"}</td><td style={{ padding:"7px 9px", color:"var(--danger)", fontWeight:900 }}>{e.status}</td><td style={{ padding:"7px 9px", color:"var(--danger)", fontWeight:900 }}>{e.delay||0} working day{Number(e.delay)===1?"":"s"}</td></tr>)}</tbody></table></div>:<div style={{ padding:"10px 0", fontSize:10, color:"var(--success)", fontWeight:800 }}>No missing or late update exceptions for this period.</div>}
+      <div style={{ fontSize:9, color:"var(--muted-2)", marginTop:9, lineHeight:1.5 }}>{role==="junior"?"Junior view is restricted to styles whose Junior / Style Owner matches the signed-in profile. ":"Senior/management view shows the selected team slice. "}Actual or Revised entry is on time through the end of the next working day; Sunday is excluded. Grace rows are visible but do not reduce compliance until the allowance expires. Detailed edit history stays in Entry Log and is not repeated here.</div>
+    </>}
+  </>);
+  if(disciplineOnly){
+    const disciplineSheets=[
+      { label:"Merchant Summary", data:disciplineSummaryData.length?disciplineSummaryData:[{"Merchant":role==="junior"?((me&&me.name)||"My work"):"Team","Required Updates":0,"Compliance %":"N/A","From":disciplineFrom,"To":disciplineTo}], detailData:disciplineExceptionData, modes:["summary","detailed"] },
+      { label:"Exceptions", data:disciplineExceptionData, modes:["detailed"] }
+    ];
+    return <div style={{ padding:"16px 22px", maxWidth:1400 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:16, marginBottom:14, flexWrap:"wrap" }}>
+        <div><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:23 }}>Tracker Discipline</div><div style={{ fontSize:11.5, color:"var(--muted-2)", marginTop:4, maxWidth:780, lineHeight:1.45 }}>Checks whether merchants entered Actual or Revised status on time. This measures tracker updating discipline, not whether the TNA target itself was achieved.</div></div>
+        <ReportExportMenu title="Tracker Discipline" prefix="tracker-discipline" sheets={disciplineSheets} defaultMode="detailed" />
+      </div>
+      <div style={{ background:"var(--surface)", border:"1px solid var(--line-2)", borderRadius:14, padding:"12px 16px 16px", boxShadow:"var(--card-shadow)" }}>{disciplinePanel}</div>
+    </div>;
+  }
   const performanceRows = getPerformanceRows(validPerfMode,perfView,validPerfScope);
   const performanceHeaders = validPerfMode==="revised"
     ? [perfView==="stage"?"Stage":"Chase Label",validPerfScope==="late"?"Late Revised Items":"Revised Items","Missed Revised","Revised Miss %","Avg Missed Revised","Still Off Original TNA","Worst Revised Miss","Problem Styles"]
@@ -3773,7 +3917,25 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
       originalActivity: stageLabel
     };
   };
-  const rawDisplayItems=useMemo(()=>{ const esc=includeEsc?baseItems.filter(t=>t.overdue&&t.escalationOwner).map(t=>canonicalTodoRow({ ...t, owner:t.owner },"Escalation")) : []; return [...baseItems.map(t=>canonicalTodoRow(t,"Activity")), ...esc]; },[items,includeEsc]);
+  // One visible task must have one stable identity. Type is part of that identity because the optional
+  // Escalation row intentionally sits beside its Activity row; omitting it creates duplicate React keys.
+  const todoRowIdentity=(t,kindOverride)=>[
+    kindOverride||t?.todoType||"Activity",
+    t?.isColour?"colour":"style",
+    String(t?.id??t?.styleNo??""),
+    stageKeyFromAny(t?._stageKey||t?.activityKey||t?.key)||String(t?._stageKey||t?.activityKey||t?.key||""),
+    String(t?.orderNo||""),
+    String(t?.isColour?t?.colour||t?.styleNo||"":""),
+    String(t?.branch||"")
+  ].join("::");
+  const dedupeTodoRows=(rows)=>{
+    const byId=new Map();
+    (rows||[]).forEach(t=>{ const id=todoRowIdentity(t); const old=byId.get(id); if(!old || (Number(t?.priorityScore)||0)>(Number(old?.priorityScore)||0)) byId.set(id,t); });
+    return [...byId.values()];
+  };
+  const canonicalActivityItems=useMemo(()=>dedupeTodoRows(baseItems.map(t=>canonicalTodoRow(t,"Activity"))),[items]);
+  const sourceDuplicateCount=Math.max(0,baseItems.length-canonicalActivityItems.length);
+  const rawDisplayItems=useMemo(()=>{ const esc=includeEsc?canonicalActivityItems.filter(t=>t.overdue&&t.escalationOwner).map(t=>canonicalTodoRow({ ...t, owner:t.owner },"Escalation")) : []; return dedupeTodoRows([...canonicalActivityItems, ...esc]); },[canonicalActivityItems,includeEsc]);
   const escalationRows=useMemo(()=>rawDisplayItems.filter(t=>t.todoType==="Escalation"),[rawDisplayItems]);
   const itemGroup=(t)=> (t.isColour || ["fabricIH","labDip","labAppr"].includes(t._stageKey||t.key)) ? "fabricLab" : "activity";
   const displayItems=useMemo(()=>rawDisplayItems.filter(t=> todoMode==="all" || itemGroup(t)===todoMode),[rawDisplayItems,todoMode]);
@@ -3846,7 +4008,7 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
     const orders=distinct("orderNo"), juniors=distinct("junior"), activities=distinct("activity"), branches=distinct("branch"), owners=distinct("owner"), escOwners=distinct("escalationOwner"), types=distinct("todoType"), priorities=distinct("priority"), risks=distinct("risk"), stylesList=distinct("style"), planDates=distinct("planDate"), dayBuckets=distinct("days"), driftBuckets=distinct("drift"), revRejects=distinct("revReject"), scoreBuckets=distinct("score");
     const activityScopedDisplayItems=hasActivityGate?displayItems.filter(activityPass):displayItems;
     const shownPre=activityScopedDisplayItems.filter(pass);
-    const shown=shownPre.filter(activityPass);
+    const shown=dedupeTodoRows(shownPre.filter(activityPass));
     const filterViolations=shown.filter(t=>!exactStylePass(t) || !activityPass(t) || !pass(t));
     const overdue=shown.filter(t=>t.overdue), upcoming=shown.filter(t=>!t.overdue), critical=shown.filter(t=>t.overdue && (Number(t.daysLate)||0)>5);
     return { orders, juniors, activities, branches, owners, escOwners, types, priorities, risks, stylesList, planDates, dayBuckets, driftBuckets, revRejects, scoreBuckets, shownPre, shown, filterViolations, overdue, upcoming, critical };
@@ -3905,7 +4067,7 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
     <div style={{ padding:"6px 8px", fontSize:9, fontWeight:900, textTransform:"uppercase", color:"#8a857a" }}>Actions</div>
   </div>;
   const data=shown.map(t=>({ "Due Priority":t.overdue?"Overdue":"Upcoming", "Risk Bucket":t.priorityBucket||"Daily Chase", "Priority Score":Number(t.priorityScore)||0, "Priority Reason":t.priorityReason||"", "To-Do Section":itemGroup(t)==="fabricLab"?"Fabric / Lab Dip":"Activities", "Type":t.todoType||"Activity", "Order No":t.orderNo||"", "Style / Colour":t.isColour?String(t.colour||""):t.styleNo, "Grouped Count":t.isColour?(t.count||0):"", "Junior":t.junior||"", "Activity":t._activityLabel||t.activity||"", "Branch":t.branch||"", "Chase Label":t.owner||"", "Escalation Owner":t.escalationOwner||"", "Escalation Level":t.escalationLevel||"", "Escalation Action":t.escalationAction||"", "Original Plan":t.originalPlan?fmt(t.originalPlan):"", "Due Used":t.dueUsed?fmt(t.dueUsed):(t.exp?fmt(t.exp):""), "Days Late / Left":t.overdue?Math.abs(t.du):t.du, "Drift vs Original Days":Number(t.driftOriginal)||0, "Revision Count":Number(t.revisionCount)||0, "Rejection Round":Number(t.rejectionRound)||0, "Style ID":t.id, "Stage Key":t.key, "Activity Key":t.activityKey||t.key, "Fit":t.fit||"", "Family":t.family||"", "Brand":t.brand||"", "Fabric":t.fabric||"", "Buyer":t.buyer||"" }));
-  const summary=[{ "Report Type":"To-Do", "Section":todoMode==="all"?"All":(todoMode==="activity"?"Activities":"Fabric / Lab Dip"), "Shown Items":shown.length, "Base Activity Items":baseItems.length, "Escalation Rows Included":includeEsc?escalationRows.length:0, "Total Display Items":displayItems.length, "Overdue":overdue.length, "Upcoming":upcoming.length, "Critical / Hidden Risk":critical.length, "Hidden Risk Items":shown.filter(t=>String(t.priorityBucket||"")==="Hidden Risk").length }];
+  const summary=[{ "Report Type":"To-Do", "Section":todoMode==="all"?"All":(todoMode==="activity"?"Activities":"Fabric / Lab Dip"), "Shown Items":shown.length, "Base Activity Items":canonicalActivityItems.length, "Duplicate Source Rows Removed":sourceDuplicateCount, "Escalation Rows Included":includeEsc?escalationRows.length:0, "Total Display Items":displayItems.length, "Overdue":overdue.length, "Upcoming":upcoming.length, "Critical / Hidden Risk":critical.length, "Hidden Risk Items":shown.filter(t=>String(t.priorityBucket||"")==="Hidden Risk").length }];
   const byOwner={}; const byActivity={};
   shown.forEach(t=>{ byOwner[t.owner||"(blank)"]=(byOwner[t.owner||"(blank)"]||0)+1; byActivity[(t._activityLabel||t.activity)||"(blank)"]=(byActivity[(t._activityLabel||t.activity)||"(blank)"]||0)+1; });
   const ownerRows=Object.entries(byOwner).map(([k,v])=>({"Chase Label":k,"Items":v}));
@@ -3916,7 +4078,8 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
       { Check:"Filter violations", Rule:"Rendered rows must pass canonical filter engine", Value:filterViolations.length, Expected:"0", Result:filterViolations.length===0?"OK":"CHECK" },
       { Check:"Order filter grouping", Rule:"Fabric/Lab colour rows are grouped by order + colour so order filters do not show mixed-order rows", Value:"order+colour grouping", Expected:"no mixed order row", Result:"OK" },
       { Check:"Escalation toggle", Rule:"Escalation rows added only when toggle is ON", Value:includeEsc?escalationRows.length:0, Expected:includeEsc?"overdue rows with escalation owner":"0", Result:(!includeEsc&&escalationRows.length===0)||(includeEsc&&escalationRows.every(t=>t.overdue&&t.escalationOwner))?"OK":"CHECK" },
-      { Check:"Base activity rows", Rule:"Base activity rows remain even when escalation rows are ON", Value:baseItems.length, Expected:"unchanged source To-Do items", Result:"OK" },
+      { Check:"Unique task identity", Rule:"Exact duplicate source tasks are collapsed before cards, table and export", Value:sourceDuplicateCount, Expected:"0 duplicate rows rendered", Result:"OK" },
+      { Check:"Base activity rows", Rule:"Base activity rows remain even when escalation rows are ON", Value:canonicalActivityItems.length, Expected:"canonical source To-Do items", Result:"OK" },
       { Check:"Overdue/upcoming split", Rule:"Overdue + Upcoming equals shown rows", Value:overdue.length+upcoming.length, Expected:shown.length, Result:(overdue.length+upcoming.length)===shown.length?"OK":"CHECK" }
   ];
   const todoSheets=[
@@ -3928,7 +4091,7 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
       { label:"To-Do Items", data:data, modes:["detailed"] },
   ];
   const copyPlainText=async(txt)=>{ const v=String(txt||""); if(!v) return; try{ await navigator.clipboard.writeText(v); }catch(e){ try{ const ta=document.createElement("textarea"); ta.value=v; ta.setAttribute("readonly",""); ta.style.position="fixed"; ta.style.left="-9999px"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta); }catch(err){} } };
-  const row=(t)=><div key={(t.isColour?"col-":"")+t.id+t._stageKey+(t.colour||"")+(t.orderNo||"")} title="Text is selectable/copyable. Use Copy style to copy only the style number; use Open to jump to Tracker." style={{ minWidth:minTableWidth, display:"grid", gridTemplateColumns:GRID, alignItems:"center", borderLeft:`4px solid ${t.overdue?"var(--danger)":"var(--accent)"}`, borderBottom:"1px solid #eee7da", background:t.isColour?"#fbf8f1":"var(--surface)", cursor:"default", fontFamily:"inherit", minHeight:46, userSelect:"text", WebkitUserSelect:"text" }}>
+  const row=(t,rowIndex)=><div key={todoRowIdentity(t)+"::"+rowIndex} title="Text is selectable/copyable. Use Copy style to copy only the style number; use Open to jump to Tracker." style={{ minWidth:minTableWidth, display:"grid", gridTemplateColumns:GRID, alignItems:"center", borderLeft:`4px solid ${t.overdue?"var(--danger)":"var(--accent)"}`, borderBottom:"1px solid #eee7da", background:t.isColour?"#fbf8f1":"var(--surface)", cursor:"default", fontFamily:"inherit", minHeight:46, userSelect:"text", WebkitUserSelect:"text" }}>
     <div style={{ padding:"7px 8px", fontSize:10, fontWeight:800, display:"flex", alignItems:"center", gap:7, color:t.overdue?"var(--danger)":"#7a560f" }}><span style={{ width:8, height:8, borderRadius:"50%", background:t.overdue?"var(--danger)":"var(--accent)", flexShrink:0 }}/>{t.overdue?"Overdue":"Upcoming"}</div>
     <div title={t.priorityReason||""} style={{ padding:"7px 8px", fontSize:10, fontWeight:900, color:String(t.priorityBucket||"").includes("Critical")?"var(--danger)":String(t.priorityBucket||"").includes("Hidden")?"#b45309":"var(--ink)", lineHeight:1.15 }}>{t.priorityBucket||"Daily Chase"}<div style={{ fontSize:8, fontWeight:700, color:"var(--muted-2)", marginTop:2, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{t.priorityReason||""}</div></div>
     <div style={{ padding:"7px 8px", fontSize:9, fontWeight:800, color:t.todoType==="Escalation"?"var(--danger)":"var(--muted-3)" }}>{t.todoType||"Activity"}</div>
@@ -3986,7 +4149,9 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
     <div style={{ border:"1px solid var(--line-2)", borderRadius:12, background:"var(--surface)", boxShadow:"var(--card-shadow)", padding:12, marginBottom:10 }}><div style={{ fontSize:11, fontWeight:950, color:"var(--muted-3)", textTransform:"uppercase", marginBottom:8, letterSpacing:.35 }}>Activity summary</div><div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(230px,1fr))", gap:9 }}>{activitySummary.map(a=><button key={a.activity} onClick={()=>applyTodoActivity(a.activity,a.activityKey)} style={{ border:"1px solid var(--line-3)", background:"var(--bg)", textAlign:"left", padding:"10px 11px", cursor:"pointer", fontFamily:"inherit", borderRadius:10 }}><div style={{ fontSize:12, fontWeight:950, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", marginBottom:7 }}>{a.activity}</div><div style={{ display:"flex", gap:7, flexWrap:"wrap" }}><span style={{ display:"inline-flex", alignItems:"center", gap:4, background:"#fff4d8", color:"#8a5200", border:"1px solid #d58a13", borderRadius:999, padding:"3px 7px", fontSize:11, fontWeight:950 }}>U <b style={{ fontSize:15 }}>{a.upcoming}</b></span><span style={{ display:"inline-flex", alignItems:"center", gap:4, background:"#ffe4dc", color:"#b82117", border:"1px solid #c5251a", borderRadius:999, padding:"3px 7px", fontSize:11, fontWeight:950 }}>O <b style={{ fontSize:15 }}>{a.overdue}</b></span><span style={{ display:"inline-flex", alignItems:"center", gap:4, background:"#ffd4cc", color:"#9f1712", border:"1px solid #9f1712", borderRadius:999, padding:"3px 7px", fontSize:11, fontWeight:950 }}>Critical <b style={{ fontSize:15 }}>{a.critical}</b></span></div></button>)}</div></div>
     <div style={{ overflowX:"auto", border:"1px solid var(--line-3)", borderRadius:10, background:"var(--surface)" }}>
       {head}
-      {shown.length?shown.map(row):<div style={{ fontSize:11, color:"var(--muted-1)", padding:"12px" }}>Nothing due or coming up. 👍</div>}
+      <div key={`todo-rows:${todoMode}:${tfSig}`} data-todo-row-count={shown.length}>
+        {shown.length?shown.map(row):<div style={{ fontSize:11, color:"var(--muted-1)", padding:"12px" }}>Nothing due or coming up. 👍</div>}
+      </div>
     </div>
     <div style={{ fontSize:9, color:"var(--muted-7)", marginTop:14 }}>Separate views: Activities and Fabric / Lab Dip. Multiple filters are supported. Fabric/Lab Dip items are colour-grouped by order + colour, so order filters stay clean. Critical = overdue by more than 5 working days.</div>
   </div>);
