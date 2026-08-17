@@ -113,6 +113,30 @@ const stageLabelFromKeyGlobal=(k)=>((STAGES||[]).find(x=>x.key===k)||{}).label||
 const arrClean=(v)=>Array.isArray(v)?v.filter(x=>x!=null&&String(x).trim()!==""):(v!=null&&String(v).trim()!==""?[v]:[]);
 // v31dg: one-table-truth safety pass; shared colour splitter used by Tracker/To-Do/Dashboard/Management filters.
 const splitColoursAll=(txt)=>{ const raw=String(txt||"").trim(); if(!raw) return ["(no colour)"]; const parts=raw.split(/[,;|\/+]+/).map(x=>x.replace(/\s+/g," ").trim()).filter(Boolean); return parts.length?parts:[raw.replace(/\s+/g," ").trim()]; };
+// Fabric In-House can happen on different dates for different colours within the same style row.
+// Keep the main stage_dates row for backwards compatibility and persist colour-specific dates as
+// virtual stage keys in the same table, so this works without a database/schema migration.
+const FABRIC_COLOUR_STAGE_PREFIX="fabricIH::colour::";
+const fabricColourToken=(colour)=>String(colour||"").replace(/\s+/g," ").trim().toLowerCase();
+const fabricColourStageKey=(colour)=>FABRIC_COLOUR_STAGE_PREFIX+encodeURIComponent(fabricColourToken(colour));
+const parseFabricColourStageKey=(stage)=>{ const raw=String(stage||""); if(!raw.startsWith(FABRIC_COLOUR_STAGE_PREFIX)) return ""; try{ return decodeURIComponent(raw.slice(FABRIC_COLOUR_STAGE_PREFIX.length)); }catch(_e){ return raw.slice(FABRIC_COLOUR_STAGE_PREFIX.length); } };
+const fabricColourMapOf=(style)=>style&&style.colourFabricIH&&typeof style.colourFabricIH==="object"?style.colourFabricIH:{};
+const fabricColourRecord=(style,colour)=>fabricColourMapOf(style)[fabricColourToken(colour)]||null;
+const hasSpecificFabricColours=(style)=>Object.keys(fabricColourMapOf(style)).length>0;
+const fabricColourRows=(style,autoPlan=null)=>{
+  const colours=splitColoursAll(style&&style.colour).filter(Boolean);
+  const specific=hasSpecificFabricColours(style);
+  const legacyActual=style&&style.actuals&&style.actuals.fabricIH||"";
+  const legacyRevised=style&&style.revs&&style.revs.fabricIH||"";
+  return colours.map(colour=>{
+    const token=fabricColourToken(colour); const rec=fabricColourRecord(style,colour)||{};
+    const actual=rec.actual||(!specific?legacyActual:"");
+    const revised=rec.revised||(!specific?legacyRevised:"");
+    return { colour, token, actual, revised, due:parse(revised)||autoPlan||null, done:!!actual };
+  });
+};
+const aggregateFabricActual=(style)=>{ const rows=fabricColourRows(style); if(!rows.length||rows.some(r=>!r.actual)) return null; const ds=rows.map(r=>parse(r.actual)).filter(Boolean); return ds.length?new Date(Math.max(...ds.map(d=>d.getTime()))):null; };
+const aggregateFabricRevised=(style)=>{ const ds=fabricColourRows(style).map(r=>parse(r.revised)).filter(Boolean); return ds.length?new Date(Math.max(...ds.map(d=>d.getTime()))):null; };
 const todoDrillFilterFromSlice=(base={},df={})=>{
   const out={...(base||{})};
   // IDEMPOTENT by design. A dashboard/management drill is processed twice:
@@ -253,7 +277,7 @@ const perfNow=()=> (typeof performance!=="undefined"&&performance.now)?performan
 const lc=(v)=>String(v==null?"":v).toLowerCase();
 
 const styleComputeSignature=(s)=> JSON.stringify({
-  id:s.id, orderNo:s.orderNo||"", styleNo:s.styleNo||"", sampleFit:s.sampleFit||"", family:s.family||"", colour:s.colour||"", brand:s.brand||"", buyer:s.buyer||"", fabricType:s.fabricType||"", owner:s.owner||"", setId:s.setId||"", setRole:s.setRole||"", age:s.age||"", qty:Number(s.qty)||0, ordRec:s.ordRec||"", delivery:s.delivery||"", fitReq:!!s.fitReq, printReq:!!s.printReq, soReq:!!s.soReq, ppBypass:!!s.ppBypass, labDipReq:!!s.labDipReq, ppNeeded:!!s.ppNeeded, archived:!!s.archived, remarks:s.remarks||"", actuals:s.actuals||{}, revs:s.revs||{}, rejects:s.rejects||{}, skips:s.skips||{}
+  id:s.id, orderNo:s.orderNo||"", styleNo:s.styleNo||"", sampleFit:s.sampleFit||"", family:s.family||"", colour:s.colour||"", brand:s.brand||"", buyer:s.buyer||"", fabricType:s.fabricType||"", owner:s.owner||"", setId:s.setId||"", setRole:s.setRole||"", age:s.age||"", qty:Number(s.qty)||0, ordRec:s.ordRec||"", delivery:s.delivery||"", fitReq:!!s.fitReq, printReq:!!s.printReq, soReq:!!s.soReq, ppBypass:!!s.ppBypass, labDipReq:!!s.labDipReq, ppNeeded:!!s.ppNeeded, archived:!!s.archived, remarks:s.remarks||"", actuals:s.actuals||{}, revs:s.revs||{}, rejects:s.rejects||{}, skips:s.skips||{}, colourFabricIH:fabricColourMapOf(s)
 });
 
 const buildSearchIndex=(s,c)=>{
@@ -345,12 +369,27 @@ function computeStyle(s, cfg, resendMap={}){
   const fabricCutoffRef=delivery?addWorkdays(delivery,-CUTD):null;
   const eff={}, plan={};
   const applies=(k)=>{ const st=STAGES.find(x=>x.key===k); return stageApplies(s,st); };
-  const actualOf=(k)=>parse(s.actuals[k]); const revOf=(k)=>parse(s.revs?.[k]); const rejOf=(k)=>parse(s.rejects?.[k]); const skipOf=(k)=>parse(s.skips?.[k]);
+  // Fabric IH is complete for the style only after every listed colour is in-house.
+  // The aggregate completion date is the latest colour actual, which correctly gates PP / Prod File.
+  const actualOf=(k)=>k==="fabricIH"?(hasSpecificFabricColours(s)?aggregateFabricActual(s):parse(s.actuals[k])):parse(s.actuals[k]);
+  const revOf=(k)=>k==="fabricIH"?(hasSpecificFabricColours(s)?aggregateFabricRevised(s):parse(s.revs?.[k])):parse(s.revs?.[k]);
+  const rejOf=(k)=>parse(s.rejects?.[k]); const skipOf=(k)=>parse(s.skips?.[k]);
   const validResendActual=(sendK,apprK)=> latestTrackedResendDate(s,sendK,rejOf(apprK),resendMap);
   STAGES.forEach(st=>{
     let p;
     if(st.key==="fabricIH"){ const base=s.labDipReq?eff["labAppr"]:ordRec; p=addWorkdays(base||ordRec,leadOf(st)); }
     else { let predEff; if(st.key==="prodFile") predEff = (s.ppBypass || !s.ppNeeded) ? eff["fabricIH"] : eff["ppAppr"]; else predEff = st.pred==="__ord"?ordRec:eff[st.pred]; if((st.key==="ppSample"||st.key==="prodFile") && s.fitReq && eff["fitAppr"]) predEff = new Date(Math.max((predEff&&predEff.getTime())||0, eff["fitAppr"].getTime())); p=addWorkdays(predEff||ordRec, leadOf(st)); }
+    if(st.key==="fabricIH"&&hasSpecificFabricColours(s)){
+      plan[st.key]=p;
+      const colourRows=fabricColourRows(s,p);
+      const allActual=colourRows.length>0&&colourRows.every(x=>x.actual);
+      const effectiveDates=colourRows.map(x=>parse(x.actual)||parse(x.revised)||p).filter(Boolean);
+      // Downstream starts from the latest colour date: latest actual when all are complete,
+      // otherwise latest colour commitment/auto plan while any colour is still pending.
+      eff[st.key]=effectiveDates.length?new Date(Math.max(...effectiveDates.map(d=>d.getTime()))):p;
+      if(allActual) eff[st.key]=aggregateFabricActual(s)||eff[st.key];
+      return;
+    }
     const apprK=APPR_OF_SEND[st.key]; const rejAppr = !!(apprK && rejOf(apprK) && !actualOf(apprK) && !skipOf(apprK));
     const selfRej = REJECTABLE.includes(st.key) && rejOf(st.key) && !actualOf(st.key) && !skipOf(st.key);
     if(rejAppr){ const rjd=rejOf(apprK); const auto=addWorkdays(rjd, rwOf(st)); const a=validResendActual(st.key,apprK); const rv=revOf(st.key); plan[st.key]=auto;
@@ -710,7 +749,7 @@ const colorFor=(id)=>{ let h=0; const s=String(id); for(let i=0;i<s.length;i++) 
 const initials=(n)=>String(n||"?").trim().split(/\s+/).map(w=>w[0]||"").slice(0,2).join("").toUpperCase()||"?";
 function PeerTag({ who }){ if(!who||!who.length) return null; const anyEdit=who.some(w=>w.editing); const lead=who.find(w=>w.editing)||who[0]; const names=who.map(w=>w.name).join(", "); const label=who.length>1?(who.length+" · "+names):lead.name; return (<span style={{ position:"absolute", inset:0, border:(anyEdit?"2px dashed ":"2px solid ")+lead.color, pointerEvents:"none", zIndex:4, boxSizing:"border-box" }}><span title={names} style={{ position:"absolute", bottom:0, left:0, background:lead.color, color:"var(--surface)", fontSize:8, fontWeight:700, padding:"0 4px", whiteSpace:"nowrap", lineHeight:"12px", maxWidth:"100%", overflow:"hidden", textOverflow:"ellipsis" }}>{anyEdit?"✎ ":""}{label}</span></span>); }
 function MerchTracker({ me, onSignOut }){
-  const APP_BUILD_LABEL="v31dm Build 13 Max Pavitra buyer TNA";
+  const APP_BUILD_LABEL="v31dn Build 14 Colour Fabric IH Chase";
   const [styles,setStyles]=useState([]); // loaded from Supabase on mount
   const role=(me&&me.role)||"junior";
   const [usersOpen,setUsersOpen]=useState(false);
@@ -808,6 +847,7 @@ function MerchTracker({ me, onSignOut }){
   },[threadCell]);
   const [cfg,setCfg]=useState(DEFAULT_CFG); // editable calculation numbers (Settings tab)
   const [tab,setTab]=useState(PF.tab==="timeline"?"tracker":(PF.tab||"tracker"));
+  const [fabricColourFocus,setFabricColourFocus]=useState(null); // {orderNo,colour,ts} from colour To-Do drilldown
   const [colFilters,setColFilters]=useState(PF.colFilters||{});
   const [filterCol,setFilterCol]=useState(null); // which header filter is open
   const [past,setPast]=useState([]); const [future,setFuture]=useState([]);
@@ -825,7 +865,7 @@ function MerchTracker({ me, onSignOut }){
   const clearedRef=useRef(new Set()); // cells the USER explicitly cleared this session — ONLY these may blank a saved date (anti-clobber)
   const S2C={ orderNo:"order_no", styleNo:"style_no", sampleFit:"sample_fit", family:"family", colour:"colour", brand:"brand", fabricType:"fabric_type", owner:"owner", setId:"set_id", setRole:"set_role", age:"age", qty:"qty", ordRec:"order_date", delivery:"delivery_date", fitReq:"fit_req", printReq:"print_req", soReq:"so_req", ppBypass:"pp_bypass", labDipReq:"lab_dip_req", ppNeeded:"pp_needed", remarks:"remarks", buyer:"buyer", extra1:"extra1", extra2:"extra2" };
   const styleToRow=(s)=>{ const r={ id:s.id }; Object.entries(S2C).forEach(([k,col])=>{ r[col]= k==="qty"?(Number(s[k])||0):(s[k]||null); }); r.archived=!!s.archived; return r; };
-  const rowToStyle=(row,byId)=>({ id:row.id, orderNo:row.order_no||"", sampleFit:row.sample_fit||"", family:row.family||"", styleNo:row.style_no||"", colour:row.colour||"", brand:row.brand||"", fabricType:row.fabric_type||"", owner:row.owner||"", setId:row.set_id||"", setRole:row.set_role||"", age:row.age||"", qty:row.qty||0, ordRec:row.order_date||"", delivery:row.delivery_date||"", fitReq:!!row.fit_req, printReq:!!row.print_req, soReq:!!row.so_req, ppBypass:!!row.pp_bypass, labDipReq:!!row.lab_dip_req, ppNeeded:!!row.pp_needed, remarks:row.remarks||"", buyer:row.buyer||"", extra1:row.extra1||"", extra2:row.extra2||"", actuals:(byId[row.id]&&byId[row.id].actuals)||{}, revs:(byId[row.id]&&byId[row.id].revs)||{}, rejects:(byId[row.id]&&byId[row.id].rejects)||{}, skips:(byId[row.id]&&byId[row.id].skips)||{}, archived:!!row.archived });
+  const rowToStyle=(row,byId)=>({ id:row.id, orderNo:row.order_no||"", sampleFit:row.sample_fit||"", family:row.family||"", styleNo:row.style_no||"", colour:row.colour||"", brand:row.brand||"", fabricType:row.fabric_type||"", owner:row.owner||"", setId:row.set_id||"", setRole:row.set_role||"", age:row.age||"", qty:row.qty||0, ordRec:row.order_date||"", delivery:row.delivery_date||"", fitReq:!!row.fit_req, printReq:!!row.print_req, soReq:!!row.so_req, ppBypass:!!row.pp_bypass, labDipReq:!!row.lab_dip_req, ppNeeded:!!row.pp_needed, remarks:row.remarks||"", buyer:row.buyer||"", extra1:row.extra1||"", extra2:row.extra2||"", actuals:(byId[row.id]&&byId[row.id].actuals)||{}, revs:(byId[row.id]&&byId[row.id].revs)||{}, rejects:(byId[row.id]&&byId[row.id].rejects)||{}, skips:(byId[row.id]&&byId[row.id].skips)||{}, colourFabricIH:(byId[row.id]&&byId[row.id].colourFabricIH)||{}, archived:!!row.archived });
   // LOAD everything from Supabase (also used by the Sync button). A small local cache makes the app usable faster on weak internet, then Supabase refreshes it.
   const hydrateOfflineCache=()=>{ try{ const raw=localStorage.getItem("mt_offline_snapshot_v1"); if(!raw) return; const snap=JSON.parse(raw); if(!snap||!Array.isArray(snap.styles)||!snap.styles.length) return; setStyles(snap.styles); if(snap.cfg) setCfg(normalizeCfg(snap.cfg)); if(snap.fills) setFills(snap.fills); if(snap.notes) setNotes(snap.notes); logAppError("offline cache",`showing cached tracker while Supabase refreshes · ${snap.styles.length} styles`); }catch(e){} };
   const writeOfflineCache=(payload)=>{ try{ localStorage.setItem("mt_offline_snapshot_v1", JSON.stringify({ ...payload, at:new Date().toISOString() })); }catch(e){} };
@@ -839,11 +879,11 @@ function MerchTracker({ me, onSignOut }){
     const cmData = await fetchAll("cell_meta");
     const seData = await fetchAll("stage_events");
     setStageEvents((seData||[]).sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0)));
-    const byId={}; sdData.forEach(r=>{ const e=(byId[r.style_id]=byId[r.style_id]||{actuals:{},revs:{},rejects:{},skips:{}}); if(r.actual_date) e.actuals[r.stage]=r.actual_date; if(r.revised_date) e.revs[r.stage]=r.revised_date; if(r.reject_date) e.rejects[r.stage]=r.reject_date; if(r.skip_date) e.skips[r.stage]=r.skip_date; });
+    const byId={}; sdData.forEach(r=>{ const e=(byId[r.style_id]=byId[r.style_id]||{actuals:{},revs:{},rejects:{},skips:{},colourFabricIH:{}}); const colourToken=parseFabricColourStageKey(r.stage); if(colourToken){ e.colourFabricIH[colourToken]={ actual:r.actual_date||"", revised:r.revised_date||"" }; return; } if(r.actual_date) e.actuals[r.stage]=r.actual_date; if(r.revised_date) e.revs[r.stage]=r.revised_date; if(r.reject_date) e.rejects[r.stage]=r.reject_date; if(r.skip_date) e.skips[r.stage]=r.skip_date; });
     const appStyles=styData.map(row=>rowToStyle(row,byId));
     setStyles(appStyles);
     const SR={ sty:{}, stg:{}, meta:{} };
-    appStyles.forEach(s=>{ SR.sty[s.id]=JSON.stringify(styleToRow(s)); STAGE_KEYS.forEach(k=>{ SR.stg[s.id+":"+k]=JSON.stringify({ style_id:s.id, stage:k, revised_date:(s.revs&&s.revs[k])||null, actual_date:s.actuals[k]||null, reject_date:(s.rejects&&s.rejects[k])||null, skip_date:(s.skips&&s.skips[k])||null }); }); });
+    appStyles.forEach(s=>{ SR.sty[s.id]=JSON.stringify(styleToRow(s)); STAGE_KEYS.forEach(k=>{ SR.stg[s.id+":"+k]=JSON.stringify({ style_id:s.id, stage:k, revised_date:(s.revs&&s.revs[k])||null, actual_date:s.actuals[k]||null, reject_date:(s.rejects&&s.rejects[k])||null, skip_date:(s.skips&&s.skips[k])||null }); }); Object.entries(fabricColourMapOf(s)).forEach(([token,rec])=>{ const stage=FABRIC_COLOUR_STAGE_PREFIX+encodeURIComponent(token); SR.stg[s.id+":"+stage]=JSON.stringify({ style_id:s.id, stage, revised_date:(rec&&rec.revised)||null, actual_date:(rec&&rec.actual)||null, reject_date:null, skip_date:null }); }); });
     cmData.forEach(r=>{ if(r.fill||r.note) SR.meta[r.style_id+":"+r.col]=JSON.stringify({ style_id:r.style_id, col:r.col, fill:r.fill||null, note:r.note||null }); });
     savedRef.current=SR;
     try{ const cfgRes=await supabase.from("app_settings").select("data").eq("id","global").maybeSingle(); if(cfgRes&&cfgRes.data&&cfgRes.data.data){ setCfg(normalizeCfg(cfgRes.data.data)); } }catch(e){ /* settings table optional */ }
@@ -882,8 +922,8 @@ function MerchTracker({ me, onSignOut }){
   const cellLabel=(id,col)=>{ const s=styles.find(x=>x.id===id); const sn=s?(s.styleNo||("#"+id)):("#"+id); const cl= col==="__style"?"Style No":((INFO_COLS.find(c=>c.key===col)||{}).label||(STAGES.find(x=>x.key===col)||{}).label||col); return sn+" · "+cl; };
   useEffect(()=>{ if(!me) return; const ch=supabase.channel("merch-notifs").on("postgres_changes",{ event:"*", schema:"public", table:"notifications", filter:"user_id=eq."+me.id },(p)=>{ const n=(p.new&&p.new.id)?p.new:p.old; if(!n) return; setInbox(prev=>{ let arr=prev.filter(x=>x.id!==n.id); if(p.eventType!=="DELETE") arr=[p.new,...arr]; arr.sort((a,b)=>new Date(b.created_at)-new Date(a.created_at)); return arr; }); }).subscribe(); return ()=>{ try{ supabase.removeChannel(ch); }catch(e){} }; },[me]);
   useEffect(()=>{ const ch=supabase.channel("merch-live")
-    .on("postgres_changes",{ event:"*", schema:"public", table:"stage_dates" },(p)=>{ const del=p.eventType==="DELETE"; const n=(p.new&&Object.keys(p.new).length)?p.new:p.old; if(!n||!n.style_id){ setRemoteChanged(true); return; } const sid=n.style_id, stg=n.stage, key=sid+":"+stg; const row=JSON.stringify({ style_id:sid, stage:stg, revised_date:n.revised_date||null, actual_date:n.actual_date||null, reject_date:n.reject_date||null, skip_date:n.skip_date||null }); if(!del && savedRef.current.stg[key]===row) return; const ed=editingRef.current; if(ed&&ed.id===sid&&ed.col===stg){ setRemoteChanged(true); return; } if(del) delete savedRef.current.stg[key]; else savedRef.current.stg[key]=row; remotePatchRef.current=true; setStyles(prev=>{ let found=false; const next=prev.map(s=>{ if(s.id!==sid) return s; found=true; const ns={...s, actuals:{...s.actuals}, revs:{...(s.revs||{})}, rejects:{...(s.rejects||{})}, skips:{...(s.skips||{})} }; if(del){ delete ns.actuals[stg]; delete ns.revs[stg]; delete ns.rejects[stg]; delete ns.skips[stg]; } else { if(n.actual_date) ns.actuals[stg]=n.actual_date; else delete ns.actuals[stg]; if(n.revised_date) ns.revs[stg]=n.revised_date; else delete ns.revs[stg]; if(n.reject_date) ns.rejects[stg]=n.reject_date; else delete ns.rejects[stg]; if(n.skip_date) ns.skips[stg]=n.skip_date; else delete ns.skips[stg]; } return ns; }); if(!found){ setRemoteChanged(true); return prev; } return next; }); setTimeout(()=>{ remotePatchRef.current=false; },0); })
-    .on("postgres_changes",{ event:"*", schema:"public", table:"styles" },(p)=>{ const del=p.eventType==="DELETE"; const n=(p.new&&p.new.id)?p.new:p.old; if(!n||!n.id){ setRemoteChanged(true); return; } const sid=n.id; if(del){ delete savedRef.current.sty[sid]; remotePatchRef.current=true; setStyles(prev=>prev.filter(s=>s.id!==sid)); setTimeout(()=>{ remotePatchRef.current=false; },0); return; } if(savedRef.current.sty[sid]===JSON.stringify(n)) return; const ed=editingRef.current; if(ed&&ed.id===sid){ setRemoteChanged(true); return; } savedRef.current.sty[sid]=JSON.stringify(n); remotePatchRef.current=true; setStyles(prev=>{ const idx=prev.findIndex(s=>s.id===sid); if(idx===-1) return [...prev, rowToStyle(n,{})]; const cur=prev[idx]; const merged={ ...rowToStyle(n,{}), actuals:cur.actuals, revs:cur.revs, rejects:cur.rejects, skips:cur.skips }; const copy=prev.slice(); copy[idx]=merged; return copy; }); setTimeout(()=>{ remotePatchRef.current=false; },0); })
+    .on("postgres_changes",{ event:"*", schema:"public", table:"stage_dates" },(p)=>{ const del=p.eventType==="DELETE"; const n=(p.new&&Object.keys(p.new).length)?p.new:p.old; if(!n||!n.style_id){ setRemoteChanged(true); return; } const sid=n.style_id, stg=n.stage, key=sid+":"+stg; const row=JSON.stringify({ style_id:sid, stage:stg, revised_date:n.revised_date||null, actual_date:n.actual_date||null, reject_date:n.reject_date||null, skip_date:n.skip_date||null }); if(!del && savedRef.current.stg[key]===row) return; const ed=editingRef.current; if(ed&&ed.id===sid&&ed.col===stg){ setRemoteChanged(true); return; } if(del) delete savedRef.current.stg[key]; else savedRef.current.stg[key]=row; remotePatchRef.current=true; setStyles(prev=>{ let found=false; const next=prev.map(s=>{ if(s.id!==sid) return s; found=true; const colourToken=parseFabricColourStageKey(stg); const ns={...s, actuals:{...s.actuals}, revs:{...(s.revs||{})}, rejects:{...(s.rejects||{})}, skips:{...(s.skips||{})}, colourFabricIH:{...fabricColourMapOf(s)} }; if(colourToken){ if(del) delete ns.colourFabricIH[colourToken]; else ns.colourFabricIH[colourToken]={ actual:n.actual_date||"", revised:n.revised_date||"" }; return ns; } if(del){ delete ns.actuals[stg]; delete ns.revs[stg]; delete ns.rejects[stg]; delete ns.skips[stg]; } else { if(n.actual_date) ns.actuals[stg]=n.actual_date; else delete ns.actuals[stg]; if(n.revised_date) ns.revs[stg]=n.revised_date; else delete ns.revs[stg]; if(n.reject_date) ns.rejects[stg]=n.reject_date; else delete ns.rejects[stg]; if(n.skip_date) ns.skips[stg]=n.skip_date; else delete ns.skips[stg]; } return ns; }); if(!found){ setRemoteChanged(true); return prev; } return next; }); setTimeout(()=>{ remotePatchRef.current=false; },0); })
+    .on("postgres_changes",{ event:"*", schema:"public", table:"styles" },(p)=>{ const del=p.eventType==="DELETE"; const n=(p.new&&p.new.id)?p.new:p.old; if(!n||!n.id){ setRemoteChanged(true); return; } const sid=n.id; if(del){ delete savedRef.current.sty[sid]; remotePatchRef.current=true; setStyles(prev=>prev.filter(s=>s.id!==sid)); setTimeout(()=>{ remotePatchRef.current=false; },0); return; } if(savedRef.current.sty[sid]===JSON.stringify(n)) return; const ed=editingRef.current; if(ed&&ed.id===sid){ setRemoteChanged(true); return; } savedRef.current.sty[sid]=JSON.stringify(n); remotePatchRef.current=true; setStyles(prev=>{ const idx=prev.findIndex(s=>s.id===sid); if(idx===-1) return [...prev, rowToStyle(n,{})]; const cur=prev[idx]; const merged={ ...rowToStyle(n,{}), actuals:cur.actuals, revs:cur.revs, rejects:cur.rejects, skips:cur.skips, colourFabricIH:fabricColourMapOf(cur) }; const copy=prev.slice(); copy[idx]=merged; return copy; }); setTimeout(()=>{ remotePatchRef.current=false; },0); })
     .on("postgres_changes",{ event:"*", schema:"public", table:"cell_meta" },(p)=>{ const del=p.eventType==="DELETE"; const n=(p.new&&Object.keys(p.new).length)?p.new:p.old; if(!n||!n.style_id||!n.col){ setRemoteChanged(true); return; } const key=n.style_id+":"+n.col; const row={ style_id:n.style_id, col:n.col, fill:(!del&&n.fill)?n.fill:null, note:(!del&&n.note)?n.note:null }; const j=JSON.stringify(row); if(!del && savedRef.current.meta[key]===j) return; if(del) delete savedRef.current.meta[key]; else savedRef.current.meta[key]=j; remotePatchRef.current=true; setFills(prev=>{ const nx={...prev}; if(!del&&n.fill) nx[key]=n.fill; else delete nx[key]; return nx; }); setNotes(prev=>{ const nx={...prev}; if(!del&&n.note) nx[key]=n.note; else delete nx[key]; return nx; }); setTimeout(()=>{ remotePatchRef.current=false; },0); })
     .on("postgres_changes",{ event:"*", schema:"public", table:"stage_events" },(p)=>{ const del=p.eventType==="DELETE"; const n=(p.new&&p.new.id)?p.new:p.old; if(!n||!n.id) return; setStageEvents(prev=>{ const nn=p.new||{}; const sameLocal=(x)=> String(x&&x.id||"").startsWith("local-") && String(x.style_id)===String(nn.style_id) && String(x.stage_key)===String(nn.stage_key) && String(x.event_type)===String(nn.event_type) && Number(x.round_no||0)===Number(nn.round_no||0) && String(x.new_value==null?"":x.new_value)===String(nn.new_value==null?"":nn.new_value) && String(x.event_date||"")===String(nn.event_date||""); let arr=(prev||[]).filter(x=>x.id!==n.id && !(!del && sameLocal(x))); if(!del) arr=[p.new,...arr]; arr.sort((a,b)=>new Date(b.created_at||0)-new Date(a.created_at||0)); return arr.slice(0,5000); }); })
     .subscribe();
@@ -894,7 +934,7 @@ function MerchTracker({ me, onSignOut }){
     // ---- only upsert rows that actually changed since last save: protects other users' concurrent edits ----
     const styRows=styles.map(styleToRow); const styChanged=styRows.filter(r=>SR.sty[r.id]!==JSON.stringify(r));
     if(styChanged.length){ const up1=await supabase.from("styles").upsert(styChanged); if(up1.error) throw up1.error; logStyleAudit(styChanged,SR); }
-    const stgChanged=[]; styles.forEach(s=> STAGE_KEYS.forEach(k=>{ const row={ style_id:s.id, stage:k, revised_date:(s.revs&&s.revs[k])||null, actual_date:s.actuals[k]||null, reject_date:(s.rejects&&s.rejects[k])||null, skip_date:(s.skips&&s.skips[k])||null }; const key=s.id+":"+k; const j=JSON.stringify(row); if(SR.stg[key]!==j) stgChanged.push({row,key,j}); }));
+    const stgChanged=[]; styles.forEach(s=>{ STAGE_KEYS.forEach(k=>{ const row={ style_id:s.id, stage:k, revised_date:(s.revs&&s.revs[k])||null, actual_date:s.actuals[k]||null, reject_date:(s.rejects&&s.rejects[k])||null, skip_date:(s.skips&&s.skips[k])||null }; const key=s.id+":"+k; const j=JSON.stringify(row); if(SR.stg[key]!==j) stgChanged.push({row,key,j}); }); Object.entries(fabricColourMapOf(s)).forEach(([token,rec])=>{ const stage=FABRIC_COLOUR_STAGE_PREFIX+encodeURIComponent(token); const row={ style_id:s.id, stage, revised_date:(rec&&rec.revised)||null, actual_date:(rec&&rec.actual)||null, reject_date:null, skip_date:null }; const key=s.id+":"+stage; const j=JSON.stringify(row); if(SR.stg[key]!==j) stgChanged.push({row,key,j}); }); });
     if(stgChanged.length){ const up2=await supabase.from("stage_dates").upsert(stgChanged.map(x=>x.row),{ onConflict:"style_id,stage" }); if(up2.error) throw up2.error; logStageAudit(stgChanged,SR); notifyFollowers(stgChanged); }
     const keys=new Set([...Object.keys(SR.meta||{}),...Object.keys(fills),...Object.keys(notes)]); const metaChanged=[]; keys.forEach(key=>{ const i=key.indexOf(":"); const row={ style_id:Number(key.slice(0,i)), col:key.slice(i+1), fill:fills[key]||null, note:notes[key]||null }; const j=JSON.stringify(row); if(SR.meta[key]!==j) metaChanged.push({row,key,j}); });
     if(metaChanged.length){ const up3=await supabase.from("cell_meta").upsert(metaChanged.map(x=>x.row),{ onConflict:"style_id,col" }); if(up3.error) throw up3.error; logMetaAudit(metaChanged,SR); }
@@ -923,6 +963,11 @@ function MerchTracker({ me, onSignOut }){
         for(const k of STAGE_KEYS){
           const row={ style_id:s.id, stage:k, revised_date:(s.revs&&s.revs[k])||null, actual_date:(s.actuals&&s.actuals[k])||null, reject_date:(s.rejects&&s.rejects[k])||null, skip_date:(s.skips&&s.skips[k])||null };
           if((SR.stg||{})[s.id+":"+k]!==JSON.stringify(row)) return true;
+        }
+        for(const [token,rec] of Object.entries(fabricColourMapOf(s))){
+          const stage=FABRIC_COLOUR_STAGE_PREFIX+encodeURIComponent(token);
+          const row={ style_id:s.id, stage, revised_date:(rec&&rec.revised)||null, actual_date:(rec&&rec.actual)||null, reject_date:null, skip_date:null };
+          if((SR.stg||{})[s.id+":"+stage]!==JSON.stringify(row)) return true;
         }
       }
       const fs=fillsRef.current||{}, ns=notesRef.current||{};
@@ -1262,6 +1307,28 @@ function MerchTracker({ me, onSignOut }){
     recordRevisionHistory(curStyle,key,val,"single");
     logRevisedEvent(curStyle,key,val);
     pushHistory(); const ck=id+":"+key+":revised"; if(val) clearedRef.current.delete(ck); else clearedRef.current.add(ck); setStyles(prev=>prev.map(s=> s.id===id?{...s,revs:{...(s.revs||{}),[key]:val||undefined}}:s)); flash(); };
+  const setFabricColourDate=(id,colour,field,val)=>{
+    if(!["actual","revised"].includes(field)) return;
+    const curStyle=styles.find(x=>String(x.id)===String(id));
+    if(!curStyle) return;
+    const oldRec=fabricColourRecord(curStyle,colour)||{};
+    const oldVal=oldRec[field]||(!hasSpecificFabricColours(curStyle)?(field==="actual"?(curStyle.actuals&&curStyle.actuals.fabricIH):(curStyle.revs&&curStyle.revs.fabricIH)):"")||"";
+    if(String(oldVal||"")===String(val||"")) return;
+    pushHistory();
+    setStyles(prev=>prev.map(s=>{
+      if(String(s.id)!==String(id)) return s;
+      const existing=fabricColourMapOf(s); const next={};
+      // The first colour edit migrates a legacy one-date style safely: seed every colour with the old
+      // common values, then change only the chosen colour. No existing completion is lost.
+      if(!Object.keys(existing).length){
+        splitColoursAll(s.colour).forEach(col=>{ next[fabricColourToken(col)]={ colour:col, actual:(s.actuals&&s.actuals.fabricIH)||"", revised:(s.revs&&s.revs.fabricIH)||"" }; });
+      } else Object.entries(existing).forEach(([k,v])=>{ next[k]={...(v||{})}; });
+      const token=fabricColourToken(colour); next[token]={...(next[token]||{}),colour, [field]:val||""};
+      return {...s,colourFabricIH:next};
+    }));
+    try{ supabase.from("audit_log").insert({ style_id:id, style_no:curStyle.styleNo||"", col:"Fabric IH · "+colour, field:field==="actual"?"actual":"revised", old_val:oldVal||null, new_val:val||null, actor_id:me.id, actor_name:me.name||me.email }).then(()=>{}).catch(()=>{}); }catch(_e){}
+    flash();
+  };
   const setReject=(id,key,val)=>{
     const curStyle=styles.find(x=>x.id===id);
     if(curStyle&&STAGE_KEYS.includes(key)){
@@ -1551,7 +1618,7 @@ function MerchTracker({ me, onSignOut }){
     const eventTimeMs=(e)=>{ try{ return new Date(e&&e.created_at||0).getTime()||0; }catch(_e){ return 0; } };
     const revisionCountFor=(style,key)=>{
       const sid=String(style&&style.id);
-      const direct=style&&style.revs&&style.revs[key]?1:0;
+      const direct=key==="fabricIH"&&Object.values(fabricColourMapOf(style)).some(x=>x&&x.revised)?1:(style&&style.revs&&style.revs[key]?1:0);
       const ev=(stageEvents||[]).filter(e=>String(e&&e.style_id)===sid && String(e&&e.stage_key)===String(key) && String(e&&e.event_type||"").toLowerCase()==="revised");
       return Math.max(direct, ev.length);
     };
@@ -1591,34 +1658,49 @@ function MerchTracker({ me, onSignOut }){
       front.forEach(key=>{
         const r=(c.stages||[]).find(x=>x.key===key);
         if(!r||r.done) return;
+        const win=(cfg.upcoming&&cfg.upcoming[key]!=null)?cfg.upcoming[key]:null;
+        const branch=BRANCH_OF[key]||"";
+        const addColourTodo=(col,exp,du,overdue,m)=>{
+          // Keep colour grouping useful without mixing orders. Group by activity + order + colour,
+          // while retaining every underlying style id for a correct "Open styles" drilldown.
+          const ordKey=String(s.orderNo||"(blank order)").trim().toLowerCase();
+          const gkey=key+"::"+ordKey+"::"+col.toLowerCase();
+          let cur=colourGroups[gkey];
+          if(!cur){ cur=colourGroups[gkey]={ colour:col, key, activityKey:key, label:stageReviewLabel(s,r), activityLabel:stageReviewLabel(s,r), owner:r.owner, branch, exp, du, overdue, anyStyle:s.id, orderNo:s.orderNo||"", orders:new Set(), styleIds:new Set(), juniors:new Set(), styles:new Set(), fits:new Set(), families:new Set(), brands:new Set(), fabrics:new Set(), buyers:new Set(), colours:new Set(), count:0, priorityScore:0, priorityBucket:m.priorityBucket, priorityReason:m.priorityReason, originalPlan:m.originalPlan, dueUsed:m.dueUsed, driftOriginal:m.driftOriginal, delayDue:m.delayDue, revisionCount:m.revisionCount, rejectionRound:m.rejectionRound, criticality:m.criticality }; }
+          cur.count++; cur.orders.add(s.orderNo||""); cur.styleIds.add(String(s.id)); cur.juniors.add(s.owner||""); cur.styles.add(s.styleNo||""); cur.fits.add(s.sampleFit||""); cur.families.add(s.family||""); cur.brands.add(s.brand||""); cur.fabrics.add(s.fabricType||""); cur.buyers.add(s.buyer||""); cur.colours.add(col||s.colour||"");
+          if(m.priorityScore>cur.priorityScore){ cur.priorityScore=m.priorityScore; cur.priorityBucket=m.priorityBucket; cur.priorityReason=m.priorityReason; cur.originalPlan=m.originalPlan; cur.dueUsed=m.dueUsed; cur.driftOriginal=m.driftOriginal; cur.delayDue=m.delayDue; cur.revisionCount=m.revisionCount; cur.rejectionRound=m.rejectionRound; cur.criticality=m.criticality; }
+          if(exp<cur.exp){ cur.exp=exp; cur.du=du; cur.overdue=overdue; cur.anyStyle=s.id; }
+        };
+        if(key==="fabricIH"){
+          // One independent chase row per unfinished colour. A style leaves Fabric IH To-Do only
+          // after every colour has an actual date; the main tracker then uses the latest actual.
+          fabricColourRows(s,r.plan).forEach(fr=>{
+            if(fr.done||!fr.due) return;
+            const exp=fr.due, du=netWorkdays(TODAY,exp), overdue=TODAY>exp;
+            const colourStage={...r,rev:parse(fr.revised)||null};
+            const m=todoMetrics(s,key,colourStage,exp,du,overdue);
+            const include=overdue||(win!=null&&du<=win)||(m.driftOriginal>=3)||(m.revisionCount>=2)||(m.rejectionRound>=1);
+            if(include) addColourTodo(fr.colour,exp,du,overdue,m);
+          });
+          return;
+        }
         const exp=r.rev||r.plan; if(!exp) return;
         const du=netWorkdays(TODAY,exp);
         const overdue=TODAY>exp;
-        const win=(cfg.upcoming&&cfg.upcoming[key]!=null)?cfg.upcoming[key]:null;
         const m=todoMetrics(s,key,r,exp,du,overdue);
         // Include normal due items, plus hidden-risk items where revised dates have pushed the activity away from original TNA.
         const include = overdue || (win!=null && du<=win) || (m.driftOriginal>=3) || (m.revisionCount>=2) || (m.rejectionRound>=1);
         if(!include) return;
-        const branch=BRANCH_OF[key]||"";
         if(["fabricIH","labDip","labAppr"].includes(key)){
           splitColoursForTodo(s.colour).forEach(col=>{
-            // Keep colour grouping useful without mixing orders. Earlier grouping only by colour caused
-            // an Order filter like F2 to still show rows visually belonging to T2 because the row contained
-            // multiple orders. Group by activity + order + colour so To-Do filters and display tally cleanly.
-            const ordKey=String(s.orderNo||"(blank order)").trim().toLowerCase();
-            const gkey=key+"::"+ordKey+"::"+col.toLowerCase();
-            let cur=colourGroups[gkey];
-            if(!cur){ cur=colourGroups[gkey]={ colour:col, key, activityKey:key, label:stageReviewLabel(s,r), activityLabel:stageReviewLabel(s,r), owner:r.owner, branch, exp, du, overdue, anyStyle:s.id, orderNo:s.orderNo||"", orders:new Set(), juniors:new Set(), styles:new Set(), fits:new Set(), families:new Set(), brands:new Set(), fabrics:new Set(), buyers:new Set(), colours:new Set(), count:0, priorityScore:0, priorityBucket:m.priorityBucket, priorityReason:m.priorityReason, originalPlan:m.originalPlan, dueUsed:m.dueUsed, driftOriginal:m.driftOriginal, delayDue:m.delayDue, revisionCount:m.revisionCount, rejectionRound:m.rejectionRound, criticality:m.criticality }; }
-            cur.count++; cur.orders.add(s.orderNo||""); cur.juniors.add(s.owner||""); cur.styles.add(s.styleNo||""); cur.fits.add(s.sampleFit||""); cur.families.add(s.family||""); cur.brands.add(s.brand||""); cur.fabrics.add(s.fabricType||""); cur.buyers.add(s.buyer||""); cur.colours.add(col||s.colour||"");
-            if(m.priorityScore>cur.priorityScore){ cur.priorityScore=m.priorityScore; cur.priorityBucket=m.priorityBucket; cur.priorityReason=m.priorityReason; cur.originalPlan=m.originalPlan; cur.dueUsed=m.dueUsed; cur.driftOriginal=m.driftOriginal; cur.delayDue=m.delayDue; cur.revisionCount=m.revisionCount; cur.rejectionRound=m.rejectionRound; cur.criticality=m.criticality; }
-            if(exp<cur.exp){ cur.exp=exp; cur.du=du; cur.overdue=overdue; cur.anyStyle=s.id; }
+            addColourTodo(col,exp,du,overdue,m);
           });
         } else {
           out.push(enrich({ id:s.id, orderNo:s.orderNo, orderNos:[s.orderNo].filter(Boolean), styleNo:s.styleNo, junior:s.owner, juniors:[s.owner].filter(Boolean), colour:s.colour, colours:splitColoursForTodo(s.colour), fit:s.sampleFit, family:s.family, brand:s.brand, buyer:s.buyer, fabric:s.fabricType, key, activityKey:key, activity:stageReviewLabel(s,r), activityLabel:stageReviewLabel(s,r), branch, owner:r.owner, exp, du, overdue, ...m }));
         }
       });
     });
-    Object.values(colourGroups).forEach(f=>{ const orders=[...f.orders].filter(Boolean); const juniors=[...f.juniors].filter(Boolean); const styles=[...f.styles].filter(Boolean); const fits=[...f.fits].filter(Boolean); const families=[...f.families].filter(Boolean); const brands=[...f.brands].filter(Boolean); const fabrics=[...f.fabrics].filter(Boolean); const buyers=[...f.buyers].filter(Boolean); const colours=[...f.colours].filter(Boolean); out.push(enrich({ id:f.anyStyle, orderNo:f.orderNo||orders[0]||"", orderNos:orders, styleNo:f.colour, junior:juniors.length===1?juniors[0]:(juniors.length?"Multiple":""), juniors, colour:f.colour, colours, fit:fits.length===1?fits[0]:(fits.length?"Multiple":""), fits, family:families.length===1?families[0]:(families.length?"Multiple":""), families, brand:brands.length===1?brands[0]:(brands.length?"Multiple":""), brands, buyer:buyers.length===1?buyers[0]:(buyers.length?"Multiple":""), buyers, fabric:fabrics.length===1?fabrics[0]:(fabrics.length?"Multiple":""), fabrics, key:f.key, activityKey:f.key, activity:f.label, activityLabel:f.label, branch:f.branch, owner:f.owner, exp:f.exp, du:f.du, overdue:f.overdue, isColour:true, count:f.count, styleCount:styles.length, styleNos:styles, priorityScore:f.priorityScore, priorityBucket:f.priorityBucket, priorityReason:f.priorityReason, originalPlan:f.originalPlan, dueUsed:f.dueUsed, driftOriginal:f.driftOriginal, delayDue:f.delayDue, revisionCount:f.revisionCount, rejectionRound:f.rejectionRound, criticality:f.criticality })); });
+    Object.values(colourGroups).forEach(f=>{ const orders=[...f.orders].filter(Boolean); const styleIds=[...f.styleIds].filter(Boolean); const juniors=[...f.juniors].filter(Boolean); const styles=[...f.styles].filter(Boolean); const fits=[...f.fits].filter(Boolean); const families=[...f.families].filter(Boolean); const brands=[...f.brands].filter(Boolean); const fabrics=[...f.fabrics].filter(Boolean); const buyers=[...f.buyers].filter(Boolean); const colours=[...f.colours].filter(Boolean); out.push(enrich({ id:f.anyStyle, styleIds, orderNo:f.orderNo||orders[0]||"", orderNos:orders, styleNo:f.colour, junior:juniors.length===1?juniors[0]:(juniors.length?"Multiple":""), juniors, colour:f.colour, colours, fit:fits.length===1?fits[0]:(fits.length?"Multiple":""), fits, family:families.length===1?families[0]:(families.length?"Multiple":""), families, brand:brands.length===1?brands[0]:(brands.length?"Multiple":""), brands, buyer:buyers.length===1?buyers[0]:(buyers.length?"Multiple":""), buyers, fabric:fabrics.length===1?fabrics[0]:(fabrics.length?"Multiple":""), fabrics, key:f.key, activityKey:f.key, activity:f.label, activityLabel:f.label, branch:f.branch, owner:f.owner, exp:f.exp, du:f.du, overdue:f.overdue, isColour:true, count:f.count, styleCount:styles.length, styleNos:styles, priorityScore:f.priorityScore, priorityBucket:f.priorityBucket, priorityReason:f.priorityReason, originalPlan:f.originalPlan, dueUsed:f.dueUsed, driftOriginal:f.driftOriginal, delayDue:f.delayDue, revisionCount:f.revisionCount, rejectionRound:f.rejectionRound, criticality:f.criticality })); });
     out.sort((a,b)=> (Number(b.priorityScore)||0)-(Number(a.priorityScore)||0) || (a.overdue!==b.overdue?(a.overdue?-1:1):0) || ((a.exp&&b.exp)?(a.exp-b.exp):0));
     return out;
   },[shouldBuildTodo,activeComputed,cfg,stageEvents]);
@@ -2234,7 +2316,7 @@ function MerchTracker({ me, onSignOut }){
       </div>
 
       <div className="mt-main-tabs" style={{ display:"flex", gap:6, padding:"0 22px", background:"var(--ink)", borderBottom:"1px solid #3a362e", position:"relative", zIndex:155, pointerEvents:"auto" }}>
-        {[["tracker","Tracker"],["dashboard","Dashboard"],["management","Management"],["escalation","Escalation"],["todo","To-Do"],["discipline","Discipline"],["review","Review"],["entrylog","Entry Log"],["settings","Settings"],["help","Help"]].filter(([k])=>k!=="discipline"||MERCH_ROLES.includes(role)).map(([k,lab])=>(<button key={k} onClick={(e)=>{ e.stopPropagation(); setTab(k); if(k==="entrylog"||k==="review") loadAuditRows(); }} style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:12, letterSpacing:0.3, padding:"10px 16px", cursor:"pointer", border:"1px solid "+(tab===k?"var(--accent)":"transparent"), borderBottom:tab===k?"3px solid var(--accent)":"3px solid transparent", background:tab===k?"rgba(255,255,255,0.08)":"transparent", color:tab===k?"var(--bg)":"#b8afa3" }}>{lab}{k==="todo"&&todoItems.length?` · ${todoItems.length}`:k==="review"?(" · "+((errorLog&&errorLog.length)||0)):k==="entrylog"&&errorLog.length?` · ${errorLog.length}`:""}</button>))}
+        {[["tracker","Tracker"],["dashboard","Dashboard"],["management","Management"],["escalation","Escalation"],["todo","To-Do"],["fabriccolours","Fabric IH Colours"],["discipline","Today & Behind"],["review","Review"],["entrylog","Entry Log"],["settings","Settings"],["help","Help"]].filter(([k])=>k!=="discipline"||MERCH_ROLES.includes(role)).map(([k,lab])=>(<button key={k} onClick={(e)=>{ e.stopPropagation(); setTab(k); if(k==="entrylog"||k==="review") loadAuditRows(); }} style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:12, letterSpacing:0.3, padding:"10px 16px", cursor:"pointer", border:"1px solid "+(tab===k?"var(--accent)":"transparent"), borderBottom:tab===k?"3px solid var(--accent)":"3px solid transparent", background:tab===k?"rgba(255,255,255,0.08)":"transparent", color:tab===k?"var(--bg)":"#b8afa3" }}>{lab}{k==="todo"&&todoItems.length?` · ${todoItems.length}`:k==="review"?(" · "+((errorLog&&errorLog.length)||0)):k==="entrylog"&&errorLog.length?` · ${errorLog.length}`:""}</button>))}
       </div>
 
       {tab==="help" && (<div style={{ padding:"18px 22px 36px" }}>
@@ -2568,7 +2650,8 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
                   const applies=stageApplies(s,st);
                   const cs=c.stages.find(x=>x.key===st.key);
                   const isNext=applies && c.frontier && c.frontier.has(st.key);
-                  const editable=applies&&canEdit(role,st.key,"actual"); const canRev=applies&&canEditRev(role); const canRej=applies&&canEditReject(role,st.key); const canSkp=applies&&MERCH_ROLES.includes(role);
+                  const colourFabricSplit=st.key==="fabricIH"&&splitColoursAll(s.colour).length>1;
+                  const editable=applies&&canEdit(role,st.key,"actual")&&!colourFabricSplit; const canRev=applies&&canEditRev(role)&&!colourFabricSplit; const canRej=applies&&canEditReject(role,st.key); const canSkp=applies&&MERCH_ROLES.includes(role);
                   const k=cellKey(s.id,st.key);
                   if(!applies){ const bg=bgFor(s.id,st.key,"#f3f1ec"); return <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} style={{ border:"1px solid var(--line-1)", background:bg, color:"var(--line-2)", textAlign:"center", padding:"6px 9px", height:rowH, boxShadow:ringFor(s.id,st.key), position:"relative", overflow:"hidden", ...activeCellStyle(s.id,st.key) }}>—<NoteTri k={k}/></td>; }
                   const hasRev=cs&&cs.rev&&!cs.done;
@@ -2580,6 +2663,7 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
                     <td key={st.key} id={`cell-${s.id}-${st.key}`} onClick={(e)=>onCellClick(e,s.id,st.key)} onDoubleClick={(e)=>{ e.stopPropagation(); if(editable) beginDate(s.id,st.key,"actual",undefined,shouldForceRoundActualEntry(s.id,st.key)); }}
                       style={{ border:"1px solid var(--line-1)", padding:0, position:"relative", overflow:(editing&&editing.id===s.id&&editing.col===st.key)?"visible":"hidden", background:bg, boxShadow:ringFor(s.id,st.key)||(isNext?"inset 0 0 0 2px var(--accent)":null), cursor:editable?"cell":"default", ...activeCellStyle(s.id,st.key) }}>
                       <div className="mt-stage-cell-body" style={{ minHeight:Math.max(34,rowH-4), padding:"12px 30px 11px 30px", fontSize:11.2, color:cs.actual?"var(--ink)":"var(--muted-6)" }}>
+                        {colourFabricSplit&&(()=>{ const fr=fabricColourRows(s,cs.plan); const done=fr.filter(x=>x.actual).length; return <button onClick={(e)=>{e.stopPropagation();setTab("fabriccolours");}} title={fr.map(x=>`${x.colour}: ${x.actual?fmt(parse(x.actual)):(x.revised?`rev ${fmt(parse(x.revised))}`:"pending")}`).join(" · ")+" · Click to edit colour-wise dates"} style={{display:"block",border:"none",background:"transparent",padding:0,fontFamily:"inherit",fontSize:8.5,fontWeight:900,color:done===fr.length?"var(--success)":done?"#8a5200":"var(--info)",marginBottom:3,whiteSpace:"nowrap",cursor:"pointer",textDecoration:"underline dotted",textUnderlineOffset:2}}>{done}/{fr.length} colours in{done===fr.length&&cs.actual?` · later ${fmt(cs.actual)}`:""} →</button>; })()}
                         {showAux && cs.plan && <span style={{ display:"block", fontSize:8, color:"#bcb6a8", lineHeight:1.3 }}>auto {fmt(cs.plan)}{cs.rev?` · rev ${fmt(cs.rev)}`:""}</span>}
                         {cs.autoClosed ? (
                           <span style={{ color:"var(--line-2)", fontSize:11 }}>—</span>
@@ -2654,7 +2738,23 @@ Other existing dates in this column will be overwritten.`:`Fill this date into a
       {tab==="dashboard" && <OperationalDashboardView computed={activeComputed} todoItems={todoItems} cfg={cfg} applyDrill={applyDrill} drillTodo={(obj)=>{ setTodoFilter(todoDrillFilterFromSlice({}, canonicalDrillSpec(obj||{}))); setTab("todo"); }}/>}
       {tab==="management" && <ManagementDashboardView computed={activeComputed} todoItems={todoItems} cfg={cfg} stageEvents={stageEvents} role={role} me={me} applyDrill={applyDrill} drillTodo={(obj)=>{ setTodoFilter(todoDrillFilterFromSlice({}, canonicalDrillSpec(obj||{}))); setTab("todo"); }}/>} 
       {tab==="escalation" && <EscalationMatrixView computed={activeComputed} cfg={cfg} applyDrill={applyDrill} />}
-      {tab==="todo" && <TodoView items={todoItems} cfg={cfg} setCfg={setCfg} canEditSettings={canAdmin(role)} filter={todoFilter} setFilter={setTodoFilter} onJump={(id,key)=>{ snapCurrent(); resetFilters(); setTab("tracker"); requestAnimationFrame(()=>setTimeout(()=>jumpToEnter(id,key),60)); }}/>} 
+      {tab==="fabriccolours" && <FabricColourInhouseView
+        computed={activeComputed}
+        focus={fabricColourFocus}
+        canEditActual={canEditCol(role,"fabricIH")}
+        canEditRevised={canEditRev(role)}
+        onSetDate={setFabricColourDate}
+        onOpenStyles={(r)=>{ snapCurrent(); resetFilters(); setStatusFilter("All"); setSearch(r.styleNo||r.colour||""); setSearchCol(r.styleNo?"styleNo":"colour"); setTrackerActivityFilter(["fabricIH"]); setTab("tracker"); requestAnimationFrame(()=>setTimeout(()=>scrollToCell(Number(r.id),"fabricIH"),80)); }}
+      />}
+      {tab==="todo" && <TodoView
+        items={todoItems}
+        cfg={cfg}
+        setCfg={setCfg}
+        canEditSettings={canAdmin(role)}
+        filter={todoFilter}
+        setFilter={setTodoFilter}
+        onJump={(task)=>{ const t=task||{}; const key=stageKeyFromAnyGlobal(t._stageKey||t.activityKey||t.key); snapCurrent(); resetFilters(); if(t.isColour&&key==="fabricIH"){ setFabricColourFocus({orderNo:t.orderNo||"",colour:t.colour||"",ts:Date.now()}); setTab("fabriccolours"); return; } if(t.isColour){ setStatusFilter("All"); setOwnerFilter("All"); setSearch(t.colour||""); setSearchCol("colour"); setColFilters(t.orderNo?{orderNo:[t.orderNo]}:{}); setTrackerActivityFilter(key?[key]:[]); setTab("tracker"); requestAnimationFrame(()=>setTimeout(()=>{ const firstId=(t.styleIds&&t.styleIds[0])||t.id; if(firstId) scrollToCell(Number(firstId),key||"labDip"); },80)); return; } setTab("tracker"); requestAnimationFrame(()=>setTimeout(()=>jumpToEnter(t.id,key),60)); }}
+      />}
       {tab==="discipline" && <ManagementDashboardView computed={activeComputed} todoItems={todoItems} cfg={cfg} stageEvents={stageEvents} role={role} me={me} disciplineOnly applyDrill={applyDrill} onDisciplineJump={(id,key)=>{ snapCurrent(); resetFilters(); setTab("tracker"); requestAnimationFrame(()=>setTimeout(()=>jumpToEnter(Number(id),key),60)); }} drillTodo={(obj)=>{ setTodoFilter(todoDrillFilterFromSlice({}, canonicalDrillSpec(obj||{}))); setTab("todo"); }}/>} 
       {tab==="review" && <ReviewTabView computed={activeComputed} todoItems={todoItems} auditRows={auditRows} auditBusy={auditBusy} loadAuditRows={loadAuditRows} errorLog={errorLog} comments={comments} inbox={inbox} me={me} colLabelOf={colLabelOf} onJump={(id,col)=>{ setTab("tracker"); setTimeout(()=>{ setSel({id:Number(id),col:col||"__style"}); setFocus(null); scrollToCell(Number(id),col||"__style"); },60); }}/>}
       {tab==="entrylog" && <EntryLogView auditRows={auditRows} auditBusy={auditBusy} loadAuditRows={loadAuditRows} errorLog={errorLog} clearErrorLog={()=>setErrorLog([])} colLabelOf={colLabelOf} onJump={(id,col)=>{ setTab("tracker"); setTimeout(()=>{ setSel({id:Number(id),col}); setFocus(null); scrollToCell(Number(id),col); },60); }}/>}
@@ -3310,6 +3410,59 @@ function OperationalDashboardView({ computed, todoItems, cfg, applyDrill, drillT
   </div>);
 }
 
+/* ========================= FABRIC IH BY COLOUR ========================= */
+function FabricColourInhouseView({ computed, focus, canEditActual, canEditRevised, onSetDate, onOpenStyles }){
+  const [q,setQ]=useState("");
+  const [status,setStatus]=useState("pending");
+  const [owner,setOwner]=useState("All");
+  const [orderFilter,setOrderFilter]=useState("All");
+  const [colourFilter,setColourFilter]=useState("All");
+  useEffect(()=>{ if(!focus) return; setQ(""); setOwner("All"); setOrderFilter(focus.orderNo||"All"); setColourFilter(focus.colour||"All"); setStatus("pending"); },[focus&&focus.ts]);
+  const baseRows=useMemo(()=>{
+    const out=[];
+    (computed||[]).forEach(({s,c})=>{
+      const stage=(c.stages||[]).find(r=>r.key==="fabricIH");
+      if(!stage) return;
+      const colourRows=fabricColourRows(s,stage.plan);
+      const styleLatest=aggregateFabricActual(s);
+      colourRows.forEach(fr=>{
+        const actual=parse(fr.actual), revised=parse(fr.revised), due=revised||stage.plan||null;
+        const days=due?netWorkdays(TODAY,due):null;
+        const rowStatus=actual?"Complete":(due&&TODAY>due?"Overdue":(days!=null&&days<=7?"Due soon":"Planned"));
+        const action=actual?"No chase — colour fabric received":rowStatus==="Overdue"?`Chase ${s.owner||"merchant"} / Store now; enter actual or a firm revised date`:rowStatus==="Due soon"?"Confirm mill dispatch and expected receipt date today":"Monitor; confirm before the 7-day chase window";
+        out.push({ id:s.id, orderNo:s.orderNo||"", styleNo:s.styleNo||"", owner:s.owner||"", buyer:s.buyer||"", brand:s.brand||"", fabric:s.fabricType||"", colour:fr.colour, actual:fr.actual||"", revised:fr.revised||"", plan:stage.plan, due, days, status:rowStatus, action, styleLatest, colourCount:colourRows.length, completeCount:colourRows.filter(x=>x.actual).length });
+      });
+    });
+    return out.sort((a,b)=>{ const rank=x=>x.status==="Overdue"?0:x.status==="Due soon"?1:x.status==="Planned"?2:3; return rank(a)-rank(b)||(a.due&&b.due?a.due-b.due:0)||String(a.owner).localeCompare(String(b.owner))||String(a.styleNo).localeCompare(String(b.styleNo)); });
+  },[computed]);
+  const owners=useMemo(()=>["All",...new Set(baseRows.map(r=>r.owner).filter(Boolean))],[baseRows]);
+  const orders=useMemo(()=>["All",...new Set(baseRows.map(r=>r.orderNo).filter(Boolean))],[baseRows]);
+  const colours=useMemo(()=>["All",...new Set(baseRows.map(r=>r.colour).filter(Boolean))],[baseRows]);
+  const filtered=useMemo(()=>baseRows.filter(r=>{
+    if(status==="pending"&&r.status==="Complete") return false;
+    if(status==="overdue"&&r.status!=="Overdue") return false;
+    if(status==="dueSoon"&&r.status!=="Due soon") return false;
+    if(status==="complete"&&r.status!=="Complete") return false;
+    if(owner!=="All"&&r.owner!==owner) return false;
+    if(orderFilter!=="All"&&r.orderNo!==orderFilter) return false;
+    if(colourFilter!=="All"&&r.colour!==colourFilter) return false;
+    const hay=[r.orderNo,r.styleNo,r.owner,r.buyer,r.brand,r.fabric,r.colour].join(" ").toLowerCase();
+    return !q||hay.includes(q.toLowerCase());
+  }),[baseRows,status,owner,orderFilter,colourFilter,q]);
+  const counts=baseRows.reduce((m,r)=>{ m.total++; if(r.status==="Complete")m.complete++; else m.pending++; if(r.status==="Overdue")m.overdue++; if(r.status==="Due soon")m.dueSoon++; return m; },{total:0,pending:0,complete:0,overdue:0,dueSoon:0});
+  const colourSummary=useMemo(()=>Object.values(baseRows.filter(r=>r.status!=="Complete").reduce((m,r)=>{ const key=String(r.orderNo||"(blank order)")+"::"+fabricColourToken(r.colour); const x=m[key]||(m[key]={key,orderNo:r.orderNo||"(blank order)",colour:r.colour,styles:new Set(),qty:0,overdue:0,dueSoon:0,earliest:null,owners:new Set(),fabrics:new Set()}); x.styles.add(String(r.id)); x.qty++; x.owners.add(r.owner); x.fabrics.add(r.fabric); if(r.status==="Overdue")x.overdue++; if(r.status==="Due soon")x.dueSoon++; if(r.due&&(!x.earliest||r.due<x.earliest))x.earliest=r.due; return m; },{})).map(x=>({...x,styleCount:x.styles.size,owners:[...x.owners].filter(Boolean),fabrics:[...x.fabrics].filter(Boolean)})).sort((a,b)=>b.overdue-a.overdue||b.dueSoon-a.dueSoon||b.styleCount-a.styleCount||String(a.orderNo).localeCompare(String(b.orderNo))),[baseRows]);
+  const exportRows=filtered.map(r=>({"Order No":r.orderNo,"Style No":r.styleNo,"Junior / Merchant":r.owner,"Buyer / Brand":[r.buyer,r.brand].filter(Boolean).join(" / "),"Fabric":r.fabric,"Colour":r.colour,"Auto Plan":r.plan?iso(r.plan):"","Revised Fabric IH":r.revised||"","Actual Fabric IH":r.actual||"","Active Due":r.due?iso(r.due):"","Status":r.status,"Working Days":r.days==null?"":r.days,"Next Chase":r.action,"Colours Complete":`${r.completeCount}/${r.colourCount}`,"Main Tracker Fabric IH (later date)":r.styleLatest?iso(r.styleLatest):""}));
+  const statusBtn=(key,label,n,color)=><button onClick={()=>setStatus(key)} style={{ flex:"1 1 150px", minWidth:150, border:`2px solid ${status===key?color:"var(--line-2)"}`, borderRadius:12, background:status===key?"var(--accent-tint)":"var(--surface)", padding:"10px 12px", textAlign:"left", cursor:"pointer", fontFamily:"inherit" }}><div style={{ fontSize:9.5, fontWeight:950, textTransform:"uppercase", color }}>{label}</div><div style={{ fontSize:28, fontWeight:950, color, lineHeight:1.05 }}>{n}</div></button>;
+  return <div style={{padding:"16px 22px",maxWidth:"none"}}>
+    <div style={{display:"flex",justifyContent:"space-between",gap:16,alignItems:"flex-start",flexWrap:"wrap",marginBottom:12}}><div><div style={{fontFamily:"'Archivo',sans-serif",fontWeight:850,fontSize:23}}>Fabric In‑House by Colour</div><div style={{fontSize:11,color:"var(--muted-2)",marginTop:4,maxWidth:900,lineHeight:1.5}}>Enter Actual or Revised Fabric In‑House separately for every colour. The main Tracker uses the <b>later/latest actual date</b> only after all colours are complete, so PP and Production File do not move early.</div></div><ReportExportMenu title="Fabric In-House by Colour" prefix="fabric-ih-by-colour" sheets={[{label:"Current View",data:exportRows,modes:["detailed"]}]} defaultMode="detailed"/></div>
+    <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>{statusBtn("pending","Pending colours",counts.pending,"var(--ink)")}{statusBtn("overdue","Overdue",counts.overdue,"var(--danger)")}{statusBtn("dueSoon","Due ≤7 days",counts.dueSoon,"#8a5200")}{statusBtn("complete","Complete",counts.complete,"var(--success)")}{statusBtn("all","All colours",counts.total,"var(--info)")}</div>
+    <div style={{border:"1px solid var(--line-2)",borderRadius:12,background:"var(--surface)",padding:12,marginBottom:10}}><div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"baseline",flexWrap:"wrap",marginBottom:8}}><div style={{fontSize:11,fontWeight:950,textTransform:"uppercase",color:"var(--muted-3)"}}>Order + colour chase summary</div><div style={{fontSize:9,color:"var(--muted-2)"}}>Same colour name under different orders remains a separate fabric chase.</div></div><div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:8}}>{colourSummary.slice(0,24).map(x=><button key={x.key} onClick={()=>{setOrderFilter(x.orderNo);setColourFilter(x.colour);setStatus("pending");}} style={{border:"1px solid "+(x.overdue?"var(--danger)":"var(--line-3)"),borderRadius:10,background:x.overdue?"#fff3f0":"var(--bg)",padding:"9px 10px",textAlign:"left",cursor:"pointer",fontFamily:"inherit"}}><div style={{fontSize:9,fontWeight:850,color:"var(--muted-2)",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{x.orderNo}</div><div style={{fontSize:12,fontWeight:950,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginTop:2}}>{x.colour}</div><div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6}}><span style={{fontSize:9,fontWeight:900}}>Styles {x.styleCount}</span>{x.overdue?<span style={{fontSize:9,fontWeight:950,color:"var(--danger)"}}>Overdue {x.overdue}</span>:null}{x.dueSoon?<span style={{fontSize:9,fontWeight:900,color:"#8a5200"}}>Due soon {x.dueSoon}</span>:null}</div><div style={{fontSize:8.5,color:"var(--muted-2)",marginTop:5}}>Next due {x.earliest?fmt(x.earliest):"—"} · {x.owners.join(", ")||"Unassigned"}</div></button>)}</div>{!colourSummary.length&&<div style={{fontSize:10,color:"var(--success)",fontWeight:900}}>All order-colour Fabric IH entries are complete.</div>}</div>
+    <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:10}}><input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search order / style / colour / fabric" style={{fontFamily:"inherit",fontSize:10,padding:"7px 9px",minWidth:260,border:"1px solid var(--line-2)",borderRadius:8}}/><select value={owner} onChange={e=>setOwner(e.target.value)} style={{fontFamily:"inherit",fontSize:10,padding:"7px 9px",border:"1px solid var(--line-2)",borderRadius:8}}>{owners.map(x=><option key={x}>{x}</option>)}</select><select value={orderFilter} onChange={e=>setOrderFilter(e.target.value)} style={{fontFamily:"inherit",fontSize:10,padding:"7px 9px",border:"1px solid var(--line-2)",borderRadius:8}}>{orders.map(x=><option key={x}>{x}</option>)}</select><select value={colourFilter} onChange={e=>setColourFilter(e.target.value)} style={{fontFamily:"inherit",fontSize:10,padding:"7px 9px",border:"1px solid var(--line-2)",borderRadius:8}}>{colours.map(x=><option key={x}>{x}</option>)}</select><button onClick={()=>{setQ("");setOwner("All");setOrderFilter("All");setColourFilter("All");setStatus("pending");}} style={{fontFamily:"inherit",fontSize:10,fontWeight:800,padding:"7px 10px",border:"1px solid var(--ink)",borderRadius:8,background:"var(--surface)",cursor:"pointer"}}>Clear</button><span style={{fontSize:10,color:"var(--muted-2)"}}>Showing {filtered.length} colour rows</span></div>
+    <div style={{overflowX:"auto",border:"1px solid var(--line-3)",borderRadius:10,background:"var(--surface)"}}><table style={{width:"100%",minWidth:1450,borderCollapse:"collapse",fontSize:10}}><thead><tr style={{background:"var(--ink)",color:"var(--bg)"}}>{["Status","Order / Style","Junior / Merchant","Fabric","Colour","Auto Plan","Revised Fabric IH","Actual Fabric IH","Style completion","Main Tracker date","Next chase","Action"].map(h=><th key={h} style={{padding:"8px 9px",textAlign:"left",whiteSpace:"nowrap",fontWeight:850}}>{h}</th>)}</tr></thead><tbody>{filtered.map(r=><tr key={`${r.id}:${fabricColourToken(r.colour)}`} style={{borderBottom:"1px solid var(--line-3)",background:r.status==="Overdue"?"#fff6f3":"transparent"}}><td style={{padding:"8px 9px",fontWeight:950,color:r.status==="Complete"?"var(--success)":r.status==="Overdue"?"var(--danger)":r.status==="Due soon"?"#8a5200":"var(--muted-3)"}}>{r.status}{r.status==="Overdue"?<div style={{fontSize:8.5}}>+{Math.abs(Number(r.days)||0)} wd</div>:null}</td><td style={{padding:"8px 9px"}}><b>{r.styleNo}</b><div style={{fontSize:8.5,color:"var(--muted-2)"}}>{r.orderNo} · {r.buyer||r.brand}</div></td><td style={{padding:"8px 9px",fontWeight:800}}>{r.owner||"—"}</td><td style={{padding:"8px 9px"}}>{r.fabric||"—"}</td><td style={{padding:"8px 9px",fontWeight:950}}>{r.colour}</td><td style={{padding:"8px 9px",whiteSpace:"nowrap"}}>{r.plan?fmt(r.plan):"—"}</td><td style={{padding:"6px 8px"}}><input type="date" disabled={!canEditRevised} value={r.revised||""} onChange={e=>onSetDate(r.id,r.colour,"revised",e.target.value)} title={canEditRevised?"Editable revised commitment for this colour":"Revised date is locked for this role"} style={{fontFamily:"inherit",fontSize:10,padding:"5px 6px",border:"1px solid var(--revised)",borderRadius:7,background:canEditRevised?"var(--surface)":"var(--toolbar-subtle)",color:"var(--revised)"}}/></td><td style={{padding:"6px 8px"}}><input type="date" disabled={!canEditActual} value={r.actual||""} onChange={e=>onSetDate(r.id,r.colour,"actual",e.target.value)} title={canEditActual?"Editable actual Fabric In-House for this colour":"Actual date is locked for this role"} style={{fontFamily:"inherit",fontSize:10,padding:"5px 6px",border:"1px solid var(--success)",borderRadius:7,background:canEditActual?"var(--surface)":"var(--toolbar-subtle)"}}/></td><td style={{padding:"8px 9px",fontWeight:850}}>{r.completeCount}/{r.colourCount} colours</td><td style={{padding:"8px 9px",fontWeight:900,color:r.styleLatest?"var(--success)":"var(--muted-2)"}}>{r.styleLatest?fmt(r.styleLatest):"Wait for all colours"}</td><td style={{padding:"8px 9px",minWidth:220,color:r.status==="Overdue"?"var(--danger)":"var(--muted-3)",fontWeight:r.status==="Overdue"?850:650}}>{r.action}</td><td style={{padding:"8px 9px"}}><button onClick={()=>onOpenStyles(r)} style={{fontFamily:"inherit",fontSize:9.5,fontWeight:900,padding:"5px 8px",cursor:"pointer",border:"1px solid var(--ink)",borderRadius:7,background:"var(--surface)"}}>Open style →</button></td></tr>)}{!filtered.length&&<tr><td colSpan={12} style={{padding:18,textAlign:"center",color:"var(--muted-2)"}}>No colour rows match this view.</td></tr>}</tbody></table></div>
+    <div style={{fontSize:9,color:"var(--muted-2)",marginTop:10,lineHeight:1.5}}>For a one-colour style this behaves like the existing Fabric IH date. For two or more colours, completion is colour-wise and the main Tracker date is the latest actual only after every colour is entered. Older common dates are carried into every colour automatically the first time one colour is edited.</div>
+  </div>;
+}
+
 /* ========================= TO-DO ========================= */
 
 
@@ -3357,6 +3510,20 @@ function ManagementDashboardView({ computed, todoItems, cfg, stageEvents, role, 
   const disciplineJuniors=[...new Set((computed||[]).map(({s})=>String(s&&s.owner||"").trim()).filter(Boolean))].sort();
   const disciplineBase=disciplineOnly?(computed||[]).filter(({s})=>hasSel("junior",s.owner)):fc;
   const disciplineFc=disciplineBase.filter(({s})=>disciplineOwnStyle(s));
+  const selectedDisciplineJuniors=arrOf(df.junior).map(v=>String(v));
+  const taskJuniorValues=(t)=>[...(Array.isArray(t&&t.juniors)?t.juniors:[]),t&&t.junior].map(v=>String(v||"").trim()).filter(Boolean);
+  const taskBelongsToDisciplineSlice=(t)=>{
+    const juniorsForTask=taskJuniorValues(t);
+    if(role==="junior"){ const mine=juniorsForTask.some(v=>{ const n=disciplineNorm(v); return disciplineMeKeys.some(k=>k===n||(k.length>=4&&(k.includes(n)||n.includes(k)))); }); if(!mine) return false; }
+    return !selectedDisciplineJuniors.length||juniorsForTask.some(v=>selectedDisciplineJuniors.includes(v));
+  };
+  const todayTaskKey=(t)=>[String(t&&t.id||""),stageKeyFromAnyGlobal(t&&((t._stageKey||t.activityKey||t.key)||"")),String(t&&t.orderNo||""),String(t&&t.isColour?t.colour||"":"")].join("::");
+  const todayTaskMap=new Map();
+  (todoItems||[]).forEach(t=>{ if(!taskBelongsToDisciplineSlice(t)) return; const dueToday=!t.overdue&&Number(t.du)===0; if(!t.overdue&&!dueToday) return; const key=todayTaskKey(t); const old=todayTaskMap.get(key); if(!old||(Number(t.priorityScore)||0)>(Number(old.priorityScore)||0)) todayTaskMap.set(key,t); });
+  const todayWorkItems=[...todayTaskMap.values()].sort((a,b)=>{ const ac=a.overdue&&Math.max(Number(a.daysLate)||0,Math.abs(Number(a.du)||0))>5?2:a.overdue?1:0; const bc=b.overdue&&Math.max(Number(b.daysLate)||0,Math.abs(Number(b.du)||0))>5?2:b.overdue?1:0; return bc-ac||(Math.max(Number(b.daysLate)||0,Math.abs(Number(b.du)||0))-Math.max(Number(a.daysLate)||0,Math.abs(Number(a.du)||0)))||((Number(b.priorityScore)||0)-(Number(a.priorityScore)||0)); });
+  const dueTodayItems=todayWorkItems.filter(t=>!t.overdue&&Number(t.du)===0);
+  const carryForwardItems=todayWorkItems.filter(t=>t.overdue);
+  const criticalTodayItems=todayWorkItems.filter(t=>t.overdue&&Math.max(Number(t.daysLate)||0,Math.abs(Number(t.du)||0))>5);
   const disciplineFromDate=parse(disciplineFrom), disciplineToDate=parse(disciplineTo);
   const disciplineRangeValid=!!(disciplineFromDate&&disciplineToDate&&disciplineFromDate<=disciplineToDate);
   const disciplineInRange=(d)=>disciplineRangeValid&&d&&d>=disciplineFromDate&&d<=disciplineToDate;
@@ -3715,14 +3882,28 @@ function ManagementDashboardView({ computed, todoItems, cfg, stageEvents, role, 
   const disciplineSliceCols=()=>{ const selected=arrOf(df.junior); return selected.length?{owner:selected}:{}; };
   const openDisciplineSlice=()=>applyDrill({ status:"All", colFilters:disciplineSliceCols() });
   const openDisciplineMerchant=(owner)=>applyDrill({ status:"All", colFilters:{owner:[owner]} });
-  const openDisciplineTodo=(items)=>{ const rows=items||[]; const styleId=[...new Set(rows.map(x=>String(x.styleId||"")).filter(Boolean))]; const activityKey=[...new Set(rows.map(x=>stageKeyFromAnyGlobal(x.stageKey)).filter(Boolean))]; if(styleId.length) drillTodo({styleId,activityKey}); };
+  const openDisciplineTodo=(items)=>{ const rows=items||[]; const styleId=[...new Set(rows.map(x=>String(x.styleId||x.id||"")).filter(Boolean))]; const activityKey=[...new Set(rows.map(x=>stageKeyFromAnyGlobal(x.stageKey||x._stageKey||x.activityKey||x.key)).filter(Boolean))]; const days=[...new Set(rows.map(x=>x.overdue?`Late ${Math.abs(Number(x.du)||0)}d`:`Left ${Number(x.du)||0}d`).filter(Boolean))]; if(styleId.length) drillTodo({styleId,activityKey,days}); };
   const openDisciplineException=(e)=>{ if(onDisciplineJump) onDisciplineJump(e.styleId,e.stageKey); else applyDrill({ status:"All", activity:e.stageKey, search:e.styleNo||e.orderNo||"" }); };
+  const todayStatusOf=(t)=>!t.overdue?"Due today":Math.max(Number(t.daysLate)||0,Math.abs(Number(t.du)||0))>5?"Critical":"Older pending";
+  const todayDueOf=(t)=>t&&t.exp instanceof Date?t.exp:parse(t&&t.exp);
+  const openTodayTask=(t)=>{ const key=stageKeyFromAnyGlobal(t._stageKey||t.activityKey||t.key); if(onDisciplineJump) onDisciplineJump(t.id,key); else applyDrill({ status:"All", activity:key, search:t.styleNo||t.orderNo||"" }); };
+  const todayWorkData=todayWorkItems.map(t=>({"Status":todayStatusOf(t),"Junior / Merchant":taskJuniorValues(t).join(", "),"Order No":t.orderNo||"","Style / Colour":t.isColour?(t.colour||""):(t.styleNo||""),"Activity":t._activityLabel||t.activityLabel||t.activity||stageLabelFromKeyGlobal(t._stageKey||t.activityKey||t.key),"Department / Chase":t.owner||"","Due Date":todayDueOf(t)?iso(todayDueOf(t)):"","Days Behind":t.overdue?Math.abs(Number(t.du)||0):0,"Priority Score":Number(t.priorityScore)||0}));
+  const todayWorkPanel=(<>
+    {role!=="junior"&&<div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", marginBottom:10 }}><span style={{ fontSize:10, fontWeight:900, color:"var(--muted-3)", textTransform:"uppercase" }}>Merchant:</span>{sel("Junior",df.junior,disciplineJuniors,v=>setDf(d=>({...d,junior:v})))}<span style={{ fontSize:9.5, color:"var(--muted-2)" }}>Leave as all for the whole merchant team.</span></div>}
+    <div style={{ display:"flex", gap:8, flexWrap:"wrap", marginBottom:10 }}>
+      {card("Action now",todayWorkItems.length,"var(--ink)",todayWorkItems.length?()=>openDisciplineTodo(todayWorkItems):null,"today + all older pending")}
+      {card("Due today",dueTodayItems.length,"#7a560f",dueTodayItems.length?()=>openDisciplineTodo(dueTodayItems):null,"must be updated today")}
+      {card("Older pending",carryForwardItems.length,carryForwardItems.length?"var(--danger)":"var(--success)",carryForwardItems.length?()=>openDisciplineTodo(carryForwardItems):null,"carried forward until closed")}
+      {card("Critical",criticalTodayItems.length,criticalTodayItems.length?"var(--danger)":"var(--success)",criticalTodayItems.length?()=>openDisciplineTodo(criticalTodayItems):null,">5 working days behind")}
+    </div>
+    {todayWorkItems.length?<div style={{ overflowX:"auto", border:"1px solid var(--line-3)", borderRadius:9 }}><table style={{ width:"100%", minWidth:900, borderCollapse:"collapse", fontSize:10 }}><thead><tr style={{ background:"var(--toolbar-subtle)" }}>{["Status","Junior / Merchant","Style / Order","Activity","Due","Department / Chase","Action"].map(h=><th key={h} style={{ padding:"8px 9px", borderBottom:"1px solid var(--line-2)", textAlign:"left", color:"var(--muted-3)", textTransform:"uppercase", whiteSpace:"nowrap" }}>{h}</th>)}</tr></thead><tbody>{todayWorkItems.slice(0,100).map((t,i)=>{ const status=todayStatusOf(t); const danger=status!=="Due today"; const due=todayDueOf(t); return <tr key={todayTaskKey(t)+":"+i} onClick={()=>openTodayTask(t)} title="Open this exact style and activity in Tracker" style={{ borderBottom:"1px solid var(--line-3)", cursor:"pointer", background:status==="Critical"?"#fff3f0":"transparent" }}><td style={{ padding:"8px 9px", color:danger?"var(--danger)":"#7a560f", fontWeight:950 }}>{status}</td><td style={{ padding:"8px 9px", fontWeight:850 }}>{taskJuniorValues(t).join(", ")||"—"}</td><td style={{ padding:"8px 9px" }}><b>{t.isColour?(t.colour||"—"):(t.styleNo||"—")}</b><div style={{ fontSize:8.5, color:"var(--muted-2)" }}>{t.orderNo||""}</div></td><td style={{ padding:"8px 9px", fontWeight:800 }}>{t._activityLabel||t.activityLabel||t.activity||stageLabelFromKeyGlobal(t._stageKey||t.activityKey||t.key)}</td><td style={{ padding:"8px 9px", whiteSpace:"nowrap", color:danger?"var(--danger)":"var(--muted-3)", fontWeight:800 }}>{due?fmt(due):"—"}{t.overdue?<div style={{ fontSize:8.5 }}>+{Math.abs(Number(t.du)||0)}d</div>:null}</td><td style={{ padding:"8px 9px" }}>{t.owner||"—"}</td><td style={{ padding:"8px 9px", color:"var(--info)", fontWeight:950, whiteSpace:"nowrap" }}>Open →</td></tr>; })}</tbody></table></div>:<div style={{ padding:"14px 12px", border:"1px solid var(--success)", background:"var(--tint-ok)", color:"var(--success)", borderRadius:9, fontSize:11, fontWeight:900 }}>Nothing due today and no older work is pending.</div>}
+    <div style={{ fontSize:9, color:"var(--muted-2)", marginTop:8, lineHeight:1.5 }}>Older pending tasks remain here until the Actual or Revised status is entered—they do not disappear the next day. Future upcoming tasks are intentionally excluded from this action list. Backlog dated before 13 Aug 2026 is shown for follow-up, but it is not counted against the update summary.</div>
+  </>);
   const disciplinePanel=(<>
     <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", margin:"4px 0 10px" }}>
       <label style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:10, fontWeight:800 }}>From <input type="date" min="2026-08-13" value={disciplineFrom} onChange={e=>setDisciplineFrom(e.target.value)} style={{ fontFamily:"inherit", fontSize:10, padding:"5px 7px", border:"1px solid var(--line-2)", borderRadius:7, background:"var(--surface)" }}/></label>
       <label style={{ display:"inline-flex", alignItems:"center", gap:5, fontSize:10, fontWeight:800 }}>To <input type="date" min="2026-08-13" value={disciplineTo} onChange={e=>setDisciplineTo(e.target.value)} style={{ fontFamily:"inherit", fontSize:10, padding:"5px 7px", border:"1px solid var(--line-2)", borderRadius:7, background:"var(--surface)" }}/></label>
       <button onClick={resetDisciplineWeek} style={{ fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"6px 10px", cursor:"pointer", border:"1px solid var(--ink)", borderRadius:8, background:"var(--surface)" }}>Current week</button>
-      {role!=="junior"&&sel("Junior",df.junior,disciplineJuniors,v=>setDf(d=>({...d,junior:v})))}
       <span style={{ fontSize:9.5, color:"var(--muted-2)" }}>Automatic Monday–Saturday range · first period begins 13 Aug 2026 · dates remain editable</span>
     </div>
     {!disciplineRangeValid?<div style={{ padding:"9px 10px", border:"1px solid var(--danger)", background:"var(--tint-late)", color:"var(--danger)", fontSize:10, fontWeight:800 }}>Choose a valid From and To range.</div>:<>
@@ -3746,15 +3927,17 @@ function ManagementDashboardView({ computed, todoItems, cfg, stageEvents, role, 
   </>);
   if(disciplineOnly){
     const disciplineSheets=[
-      { label:"Merchant Summary", data:disciplineSummaryData.length?disciplineSummaryData:[{"Merchant":role==="junior"?((me&&me.name)||"My work"):"Team","Required Updates":0,"Compliance %":"N/A","From":disciplineFrom,"To":disciplineTo}], detailData:disciplineExceptionData, modes:["summary","detailed"] },
-      { label:"Exceptions", data:disciplineExceptionData, modes:["detailed"] }
+      { label:"Today's Work", data:todayWorkData, modes:["detailed"] },
+      { label:"Update Summary", data:disciplineSummaryData.length?disciplineSummaryData:[{"Merchant":role==="junior"?((me&&me.name)||"My work"):"Team","Required Updates":0,"Compliance %":"N/A","From":disciplineFrom,"To":disciplineTo}], detailData:disciplineExceptionData, modes:["summary","detailed"] },
+      { label:"Update Exceptions", data:disciplineExceptionData, modes:["detailed"] }
     ];
     return <div style={{ padding:"16px 22px", maxWidth:1400 }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", gap:16, marginBottom:14, flexWrap:"wrap" }}>
-        <div><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:23 }}>Tracker Discipline</div><div style={{ fontSize:11.5, color:"var(--muted-2)", marginTop:4, maxWidth:780, lineHeight:1.45 }}>Checks whether merchants entered Actual or Revised status on time. This measures tracker updating discipline, not whether the TNA target itself was achieved.</div></div>
-        <ReportExportMenu title="Tracker Discipline" prefix="tracker-discipline" sheets={disciplineSheets} defaultMode="detailed" />
+        <div><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:800, fontSize:23 }}>Today's Work &amp; Pending</div><div style={{ fontSize:11.5, color:"var(--muted-2)", marginTop:4, maxWidth:780, lineHeight:1.45 }}>What needs a tracker update now: work due today plus every older item still open. Future upcoming tasks stay in To-Do and are not shown here.</div></div>
+        <ReportExportMenu title="Today's Work & Pending" prefix="todays-work-pending" sheets={disciplineSheets} defaultMode="detailed" />
       </div>
-      <div style={{ background:"var(--surface)", border:"1px solid var(--line-2)", borderRadius:14, padding:"12px 16px 16px", boxShadow:"var(--card-shadow)" }}>{disciplinePanel}</div>
+      <div style={{ background:"var(--surface)", border:"1px solid var(--line-2)", borderRadius:14, padding:"12px 16px 16px", boxShadow:"var(--card-shadow)" }}><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:850, fontSize:14, marginBottom:10 }}>Action now</div>{todayWorkPanel}</div>
+      <div style={{ background:"var(--surface)", border:"1px solid var(--line-2)", borderRadius:14, padding:"12px 16px 16px", boxShadow:"var(--card-shadow)", marginTop:12 }}><div style={{ fontFamily:"'Archivo',sans-serif", fontWeight:850, fontSize:14 }}>Update summary</div><div style={{ fontSize:9.5, color:"var(--muted-2)", margin:"3px 0 8px" }}>Weekly record of whether Actual or Revised updates were entered on time. This is separate from the action list above.</div>{disciplinePanel}</div>
     </div>;
   }
   const performanceRows = getPerformanceRows(validPerfMode,perfView,validPerfScope);
@@ -4158,7 +4341,7 @@ function TodoView({ items, cfg, setCfg, canEditSettings, filter, setFilter, onJu
     <div style={{ padding:"7px 8px", display:"flex", gap:8, justifyContent:"flex-end" }}>
       {!t.isColour && <button onClick={(e)=>{ e.stopPropagation(); copyPlainText(t.styleNo); }} title="Copy only this Style No to clipboard" style={{ flexShrink:0, fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"4px 9px", cursor:"pointer", border:"1px solid var(--line-2)", borderRadius:8, background:"var(--bg)", color:"var(--ink)", userSelect:"none", WebkitUserSelect:"none" }}>Copy style</button>}
       {t.isColour && <button onClick={(e)=>{ e.stopPropagation(); copyPlainText(t.colour); }} title="Copy this colour/group text to clipboard" style={{ flexShrink:0, fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"4px 9px", cursor:"pointer", border:"1px solid var(--line-2)", borderRadius:8, background:"var(--bg)", color:"var(--ink)", userSelect:"none", WebkitUserSelect:"none" }}>Copy</button>}
-      <button onClick={(e)=>{ e.stopPropagation(); onJump(t.id,t._stageKey||t.key); }} title="Open this style/stage in Tracker" style={{ flexShrink:0, fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"4px 9px", cursor:"pointer", border:"1px solid var(--ink)", borderRadius:8, background:"var(--surface)", color:"var(--ink)", userSelect:"none", WebkitUserSelect:"none" }}>Open</button>
+      <button onClick={(e)=>{ e.stopPropagation(); onJump(t); }} title={t.isColour?"Open every matching style for this order and colour in Tracker":"Open this style/stage in Tracker"} style={{ flexShrink:0, fontFamily:"inherit", fontSize:10, fontWeight:800, padding:"4px 9px", cursor:"pointer", border:"1px solid var(--ink)", borderRadius:8, background:"var(--surface)", color:"var(--ink)", userSelect:"none", WebkitUserSelect:"none" }}>{t.isColour?`Open styles${t.styleCount?` (${t.styleCount})`:""}`:"Open"}</button>
     </div>
   </div>; };
   const activitySummary=Object.values(shown.reduce((acc,t)=>{ const stageKey=activityKeyOf(t)||""; const k=stageLabelOf(stageKey)||activityCanonical(t)||"(blank)"; const cur=acc[stageKey||k]||(acc[stageKey||k]={ activity:k, activityKey:stageKey, upcoming:0, overdue:0, critical:0, total:0 }); cur.total++; if(t.overdue){ cur.overdue++; if((Number(t.daysLate)||0)>5) cur.critical++; } else cur.upcoming++; return acc; },{})).sort((a,b)=>b.critical-a.critical||b.overdue-a.overdue||b.total-a.total).slice(0,10);
